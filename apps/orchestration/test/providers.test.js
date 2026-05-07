@@ -8,6 +8,7 @@ const {
   TEXT_PROVIDERS,
   assertMediaModelAllowed,
 } = require('../src/services/providers');
+const { testProviderCredential } = require('../src/services/providerClients');
 
 test('provider registry includes DeepSeek default and GLM text support', () => {
   assert.equal(DEFAULT_APP_TEXT_MODEL, 'deepseek/deepseek-v4-pro');
@@ -25,4 +26,27 @@ test('media allowlist only includes direct image and video models', () => {
 test('assertMediaModelAllowed rejects unsupported media models', () => {
   assert.doesNotThrow(() => assertMediaModelAllowed('z-ai/glm-5v-turbo'));
   assert.throws(() => assertMediaModelAllowed('openai/gpt-5.5'), /does not support direct image and video/);
+});
+
+test('testProviderCredential performs a lightweight provider request', async () => {
+  const calls = [];
+  await testProviderCredential({
+    credential: {
+      provider: 'openrouter',
+      purpose: 'text',
+      model: 'deepseek/deepseek-v4-pro',
+      apiKey: 'sk-test',
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'OK' } }] }),
+      };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(JSON.parse(calls[0].options.body).messages[0].content, 'Reply OK.');
 });

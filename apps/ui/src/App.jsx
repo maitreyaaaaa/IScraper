@@ -51,6 +51,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [session, setSession] = useState(null);
   const [email, setEmail] = useState('');
   const authEnabled = Boolean(supabase);
@@ -115,6 +116,7 @@ function App() {
     event.preventDefault();
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       const { error: signInError } = await supabase.auth.signInWithOtp({ email });
       if (signInError) throw signInError;
@@ -166,6 +168,7 @@ function App() {
 
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       const result = await importInstagramExport({ files, mode, confirmEmail });
       setActiveImport(result.import);
@@ -185,6 +188,7 @@ function App() {
 
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       await processImport(activeImport.id);
       window.setTimeout(() => loadItems().catch((err) => setError(err.message)), 1500);
@@ -199,12 +203,17 @@ function App() {
     event.preventDefault();
     setBusy(true);
     setError('');
+    setNotice('');
+    let saved = null;
     try {
-      await saveProviderCredential(credentialForm);
+      saved = await saveProviderCredential(credentialForm);
+      await testProviderCredential(saved.credential.id);
       setCredentialForm((current) => ({ ...current, apiKey: '' }));
       await loadAccountControls();
+      setNotice(`Connected. Your ${saved.credential.provider} key works end-to-end.`);
     } catch (err) {
-      setError(err.message);
+      setError(saved ? `Key saved, but connection failed: ${err.message}` : err.message);
+      await loadAccountControls().catch(() => {});
     } finally {
       setBusy(false);
     }
@@ -213,6 +222,7 @@ function App() {
   const handleDeleteCredential = async (id) => {
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       await deleteProviderCredential(id);
       await loadAccountControls();
@@ -226,9 +236,10 @@ function App() {
   const handleTestCredential = async (id) => {
     setBusy(true);
     setError('');
+    setNotice('');
     try {
-      await testProviderCredential(id);
-      setError('Credential is stored and readable by the backend.');
+      const result = await testProviderCredential(id);
+      setNotice(`Connected. Your ${result.provider} key works end-to-end.`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -240,6 +251,7 @@ function App() {
     event.preventDefault();
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       if (!query.trim()) {
         await loadItems();
@@ -446,6 +458,12 @@ function App() {
           <div className="error-banner">
             <AlertTriangle size={18} />
             {error}
+          </div>
+        )}
+        {notice && (
+          <div className="notice-banner">
+            <CheckCircle2 size={18} />
+            {notice}
           </div>
         )}
 

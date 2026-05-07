@@ -144,7 +144,8 @@
 }
 
 .risk-box,
-.error-banner {
+.error-banner,
+.notice-banner {
   display: flex;
   gap: 10px;
   background: #2a170f;
@@ -336,6 +337,14 @@ button:disabled {
 .error-banner {
   align-items: center;
   margin-bottom: 18px;
+}
+
+.notice-banner {
+  align-items: center;
+  margin-bottom: 18px;
+  background: #0f2418;
+  border-color: #166534;
+  color: #bbf7d0;
 }
 
 .item-grid {
