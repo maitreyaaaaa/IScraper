@@ -181,11 +181,6 @@ function App() {
   };
 
   const handleProcess = async () => {
-    if (!activeImport) {
-      setError('Import files first, then start processing.');
-      return;
-    }
-
     setBusy(true);
     setError('');
     setNotice('');
@@ -514,8 +509,8 @@ function ItemCard({ item, onOpen }) {
       <h3>{analysis.title || firstLine(item.caption) || 'Untitled saved item'}</h3>
       <p>{analysis.summary || item.caption || 'No caption available.'}</p>
       <div className="tag-row">
-        {tags.map((tag) => (
-          <span key={tag}>{tag}</span>
+        {tags.map((tag, index) => (
+          <span key={`${tag}-${index}`}>{tag}</span>
         ))}
       </div>
     </article>
@@ -568,8 +563,8 @@ function DetailList({ title, values }) {
     <section className="detail-block">
       <h3>{title}</h3>
       <div className="tag-row expanded">
-        {unique.map((value) => (
-          <span key={value}>{value}</span>
+        {unique.map((value, index) => (
+          <span key={`${value}-${index}`}>{value}</span>
         ))}
       </div>
     </section>
