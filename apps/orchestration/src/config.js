@@ -14,6 +14,8 @@ function getConfig() {
     geminiApiKey: process.env.GEMINI_API_KEY,
     openRouterApiKey: process.env.OPENROUTER_API_KEY,
     openRouterModel: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+    openRouterEmbeddingModel: process.env.OPENROUTER_EMBEDDING_MODEL || 'openai/text-embedding-3-small',
+    embeddingDimensions: Number(process.env.EMBEDDING_DIMENSIONS || 1536),
   };
 }
 

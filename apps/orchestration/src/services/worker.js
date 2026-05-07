@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { analyzeMediaWithGemini, analyzeTextMetadata, analyzeTextWithOpenRouter, mergeAnalysis } = require('./analyzer');
+const { buildEmbeddingContent, createOpenRouterEmbedding } = require('./embeddings');
 const { pickNextProcessableJob } = require('./queue');
 const { downloadInstagramMedia } = require('./downloader');
 
@@ -49,6 +50,8 @@ async function processImportJobs({
   geminiApiKey = null,
   openRouterApiKey = null,
   openRouterModel = 'openai/gpt-4o-mini',
+  openRouterEmbeddingModel = 'openai/text-embedding-3-small',
+  embeddingDimensions = 1536,
 }) {
   fs.mkdirSync(videoDir, { recursive: true });
   const processed = [];
@@ -88,6 +91,27 @@ async function processImportJobs({
       await store.updateJob(userId, job.id, { status: 'analyzing', error: null });
       const analysis = await analyzeItem({ item, mediaPaths, geminiApiKey, openRouterApiKey, openRouterModel });
       await store.saveAnalysis(userId, item.id, analysis);
+      if (openRouterApiKey && typeof store.saveEmbedding === 'function') {
+        try {
+          const content = buildEmbeddingContent(item, analysis);
+          const embedding = await createOpenRouterEmbedding({
+            apiKey: openRouterApiKey,
+            model: openRouterEmbeddingModel,
+            input: content,
+            dimensions: embeddingDimensions,
+            inputType: 'search_document',
+          });
+          if (embedding) {
+            await store.saveEmbedding(userId, item.id, {
+              content,
+              embedding,
+              model: openRouterEmbeddingModel,
+            });
+          }
+        } catch (error) {
+          console.warn(`OpenRouter embedding failed for ${item.id}: ${error.message}`);
+        }
+      }
       const done = await store.updateJob(userId, job.id, { status: 'done', error: null });
       processed.push(done);
     } catch (error) {

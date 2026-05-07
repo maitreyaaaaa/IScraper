@@ -3,6 +3,7 @@ const cors = require('cors');
 const multer = require('multer');
 const { parseInstagramExport, validateLoginScrapeConsent } = require('./services/instagramParser');
 const { processImportJobs } = require('./services/worker');
+const { createOpenRouterEmbedding } = require('./services/embeddings');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -95,6 +96,8 @@ function createApp({ store, config = {} }) {
       geminiApiKey: config.geminiApiKey,
       openRouterApiKey: config.openRouterApiKey,
       openRouterModel: config.openRouterModel,
+      openRouterEmbeddingModel: config.openRouterEmbeddingModel,
+      embeddingDimensions: config.embeddingDimensions,
     }).catch((error) => {
       console.error('Background processing failed:', error);
     });
@@ -109,7 +112,23 @@ function createApp({ store, config = {} }) {
   }));
 
   app.post('/api/search', asyncRoute(async (req, res) => {
-    const results = await store.search(req.user.id, req.body.query || '', req.body.filters || {});
+    const query = req.body.query || '';
+    let queryEmbedding = null;
+    if (query && config.openRouterApiKey && store.supportsSemanticSearch) {
+      try {
+        queryEmbedding = await createOpenRouterEmbedding({
+          apiKey: config.openRouterApiKey,
+          model: config.openRouterEmbeddingModel,
+          input: query,
+          dimensions: config.embeddingDimensions,
+          inputType: 'search_query',
+        });
+      } catch (error) {
+        console.warn(`Semantic query embedding failed: ${error.message}`);
+      }
+    }
+
+    const results = await store.search(req.user.id, query, req.body.filters || {}, { queryEmbedding });
     res.json({ results });
   }));
 

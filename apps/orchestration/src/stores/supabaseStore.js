@@ -12,6 +12,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
   return {
     client,
     requiresAuth: true,
+    supportsSemanticSearch: true,
     async getUserFromToken(token) {
       const { data, error } = await client.auth.getUser(token);
       if (error || !data.user) {
@@ -115,13 +116,44 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       await client.from('saved_items').update({ status: 'done' }).eq('user_id', userId).eq('id', itemId).throwOnError();
       return this.getItem(userId, itemId);
     },
+    async saveEmbedding(userId, itemId, { content, embedding, model }) {
+      await client
+        .from('item_embeddings')
+        .upsert(
+          {
+            item_id: itemId,
+            user_id: userId,
+            content,
+            embedding,
+            embedding_model: model,
+          },
+          { onConflict: 'user_id,item_id' },
+        )
+        .throwOnError();
+    },
     async markItemFailed(userId, itemId, error) {
       await client.from('saved_items').update({ status: 'failed', error }).eq('user_id', userId).eq('id', itemId).throwOnError();
     },
-    async search(userId, query, filters = {}) {
+    async search(userId, query, filters = {}, options = {}) {
       const items = await this.getItems(userId);
       const { searchItems } = require('../services/analyzer');
-      return searchItems(items, query, filters);
+      const keywordResults = searchItems(items, query, filters);
+      if (!options.queryEmbedding) return keywordResults;
+
+      const { data, error } = await client.rpc('match_saved_items', {
+        p_user_id: userId,
+        p_query_embedding: options.queryEmbedding,
+        p_match_threshold: filters.semanticThreshold || 0.2,
+        p_match_count: filters.limit || 30,
+      });
+      if (error) throw error;
+
+      return mergeSearchResults({
+        items,
+        keywordResults,
+        semanticMatches: data || [],
+        filters,
+      });
     },
   };
 }
@@ -205,6 +237,33 @@ function toAnalysisRow(analysis) {
     tags: analysis.tags,
     why_useful: analysis.whyUseful,
   };
+}
+
+function matchesFilters(item, filters = {}) {
+  if (filters.contentType && item.contentType !== filters.contentType) return false;
+  return true;
+}
+
+function mergeSearchResults({ items, keywordResults, semanticMatches, filters = {} }) {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const scores = new Map();
+
+  keywordResults.forEach((item, index) => {
+    const score = 1 + (keywordResults.length - index) / Math.max(keywordResults.length, 1);
+    scores.set(item.id, (scores.get(item.id) || 0) + score);
+  });
+
+  semanticMatches.forEach((match) => {
+    const item = byId.get(match.item_id);
+    if (!item || !matchesFilters(item, filters)) return;
+    scores.set(item.id, (scores.get(item.id) || 0) + Number(match.similarity || 0) * 2);
+  });
+
+  return [...scores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([id]) => byId.get(id))
+    .filter(Boolean)
+    .slice(0, filters.limit || 30);
 }
 
 module.exports = {
