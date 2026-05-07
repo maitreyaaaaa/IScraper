@@ -1,4 +1,8 @@
 const { createClient } = require('@supabase/supabase-js');
+const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
+const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/providers');
+
+const FREE_ITEMS_LIMIT = 200;
 
 function createSupabaseStore({ url, serviceRoleKey }) {
   if (!url || !serviceRoleKey) {
@@ -24,6 +28,10 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async ensureUser(userId, email) {
       await client.from('users').upsert({ id: userId, email }, { onConflict: 'id' }).throwOnError();
+      await client
+        .from('user_credit_accounts')
+        .upsert({ user_id: userId, free_items_limit: FREE_ITEMS_LIMIT }, { onConflict: 'user_id' })
+        .throwOnError();
     },
     async createImport({ userId, source, mode = 'export', fileNames = [] }) {
       const { data, error } = await client
@@ -134,6 +142,139 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     async markItemFailed(userId, itemId, error) {
       await client.from('saved_items').update({ status: 'failed', error }).eq('user_id', userId).eq('id', itemId).throwOnError();
     },
+    async setItemStatus(userId, itemId, status, error = null) {
+      await client.from('saved_items').update({ status, error }).eq('user_id', userId).eq('id', itemId).throwOnError();
+    },
+    async getCredits(userId) {
+      await this.ensureCreditAccount(userId);
+      const { data: account, error: accountError } = await client
+        .from('user_credit_accounts')
+        .select('*')
+        .eq('user_id', userId)
+        .single();
+      if (accountError) throw accountError;
+
+      const { count, error: countError } = await client
+        .from('analysis_usage_events')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('source', 'free');
+      if (countError) throw countError;
+
+      const freeItemsLimit = account.free_items_limit ?? FREE_ITEMS_LIMIT;
+      const freeItemsUsed = count || 0;
+      return {
+        userId,
+        freeItemsLimit,
+        freeItemsUsed,
+        freeItemsRemaining: Math.max(freeItemsLimit - freeItemsUsed, 0),
+        paidCredits: account.paid_credits || 0,
+      };
+    },
+    async ensureCreditAccount(userId) {
+      await client
+        .from('user_credit_accounts')
+        .upsert({ user_id: userId, free_items_limit: FREE_ITEMS_LIMIT }, { onConflict: 'user_id' })
+        .throwOnError();
+    },
+    async recordUsage({ userId, itemId, source, provider, model }) {
+      const { error } = await client
+        .from('analysis_usage_events')
+        .upsert({ user_id: userId, item_id: itemId, source, provider, model }, { onConflict: 'user_id,item_id,source' });
+      if (error) throw error;
+      if (source === 'paid') {
+        await this.addCreditTransaction({ userId, amount: -1, reason: 'item_analysis', itemId });
+      }
+    },
+    async addCreditTransaction({ userId, amount, reason = 'manual', itemId = null }) {
+      const credits = await this.getCredits(userId);
+      const nextPaidCredits = credits.paidCredits + Number(amount || 0);
+      if (nextPaidCredits < 0) throw new Error('Not enough paid credits.');
+      await client
+        .from('credit_transactions')
+        .insert({ user_id: userId, amount, reason, item_id: itemId })
+        .throwOnError();
+      await client
+        .from('user_credit_accounts')
+        .update({ paid_credits: nextPaidCredits })
+        .eq('user_id', userId)
+        .throwOnError();
+    },
+    async listProviderCredentials(userId) {
+      const { data, error } = await client
+        .from('user_provider_credentials')
+        .select('*')
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false });
+      if (error) throw error;
+      return data.map(mapCredential).map(publicCredential);
+    },
+    async saveProviderCredential(userId, { provider, purpose, model, apiKey, encryptionKey, status = 'active', isPreferred = true }) {
+      assertProviderPurpose(provider, purpose);
+      if (purpose === 'media' && provider === 'openrouter') assertMediaModelAllowed(model);
+      if (!apiKey) throw new Error('API key is required.');
+
+      if (isPreferred) {
+        await client
+          .from('user_provider_credentials')
+          .update({ is_preferred: false })
+          .eq('user_id', userId)
+          .eq('purpose', purpose)
+          .throwOnError();
+      }
+
+      const row = {
+        user_id: userId,
+        provider,
+        purpose,
+        model,
+        encrypted_key: encryptSecret(apiKey, encryptionKey),
+        key_hint: maskSecret(apiKey),
+        status,
+        is_preferred: isPreferred,
+      };
+      const { data, error } = await client
+        .from('user_provider_credentials')
+        .upsert(row, { onConflict: 'user_id,provider,purpose' })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return publicCredential(mapCredential(data));
+    },
+    async getPreferredProviderCredential(userId, purpose, encryptionKey) {
+      const { data, error } = await client
+        .from('user_provider_credentials')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('purpose', purpose)
+        .eq('status', 'active')
+        .order('is_preferred', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? credentialWithSecret(data, encryptionKey) : null;
+    },
+    async getProviderCredential(userId, id, encryptionKey) {
+      const { data, error } = await client
+        .from('user_provider_credentials')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? credentialWithSecret(data, encryptionKey) : null;
+    },
+    async deleteProviderCredential(userId, id) {
+      const { data, error } = await client
+        .from('user_provider_credentials')
+        .delete()
+        .eq('user_id', userId)
+        .eq('id', id)
+        .select('id');
+      if (error) throw error;
+      return Boolean(data?.length);
+    },
     async search(userId, query, filters = {}, options = {}) {
       const items = await this.getItems(userId);
       const { searchItems } = require('../services/analyzer');
@@ -236,6 +377,30 @@ function toAnalysisRow(analysis) {
     topics: analysis.topics,
     tags: analysis.tags,
     why_useful: analysis.whyUseful,
+  };
+}
+
+function mapCredential(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    provider: row.provider,
+    purpose: row.purpose,
+    model: row.model,
+    encryptedKey: row.encrypted_key,
+    keyHint: row.key_hint,
+    status: row.status,
+    isPreferred: row.is_preferred,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function credentialWithSecret(row, encryptionKey) {
+  const credential = mapCredential(row);
+  return {
+    ...publicCredential(credential),
+    apiKey: decryptSecret(credential.encryptedKey, encryptionKey),
   };
 }
 

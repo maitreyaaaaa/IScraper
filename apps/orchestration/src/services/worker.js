@@ -2,10 +2,12 @@ const path = require('path');
 const fs = require('fs');
 const { analyzeMediaWithGemini, analyzeTextMetadata, analyzeTextWithOpenRouter, mergeAnalysis } = require('./analyzer');
 const { buildEmbeddingContent, createOpenRouterEmbedding } = require('./embeddings');
+const { analyzeMediaWithCredential, analyzeTextWithCredential, buildTextBaseAnalysis, isProviderLimitError } = require('./providerClients');
 const { pickNextProcessableJob } = require('./queue');
 const { downloadInstagramMedia } = require('./downloader');
+const { DEFAULT_APP_MEDIA_MODEL } = require('./providers');
 
-async function analyzeItem({ item, mediaPaths = [], geminiApiKey = null, openRouterApiKey = null, openRouterModel = 'openai/gpt-4o-mini' }) {
+async function analyzeItem({ item, mediaPaths = [], geminiApiKey = null, openRouterApiKey = null, openRouterModel = 'deepseek/deepseek-v4-pro' }) {
   let baseAnalysis = null;
   if (mediaPaths.length && geminiApiKey) {
     try {
@@ -49,9 +51,11 @@ async function processImportJobs({
   shouldDownload = true,
   geminiApiKey = null,
   openRouterApiKey = null,
-  openRouterModel = 'openai/gpt-4o-mini',
+  openRouterModel = 'deepseek/deepseek-v4-pro',
+  openRouterMediaModel = DEFAULT_APP_MEDIA_MODEL,
   openRouterEmbeddingModel = 'openai/text-embedding-3-small',
   embeddingDimensions = 1536,
+  credentialEncryptionKey = null,
 }) {
   fs.mkdirSync(videoDir, { recursive: true });
   const processed = [];
@@ -78,6 +82,16 @@ async function processImportJobs({
         error: null,
       });
 
+      const mediaPlan = await chooseMediaPlan({
+        store,
+        userId,
+        item,
+        openRouterApiKey,
+        openRouterMediaModel,
+        geminiApiKey,
+        credentialEncryptionKey,
+      });
+
       let mediaPaths = [];
       if (shouldDownload && item.contentType !== 'unknown') {
         try {
@@ -89,8 +103,44 @@ async function processImportJobs({
       }
 
       await store.updateJob(userId, job.id, { status: 'analyzing', error: null });
-      const analysis = await analyzeItem({ item, mediaPaths, geminiApiKey, openRouterApiKey, openRouterModel });
+      if (requiresMediaAnalysis(item) && !mediaPaths.length) {
+        throw new Error('Media file could not be downloaded for analysis.');
+      }
+
+      const mediaAnalysis = mediaPlan
+        ? await analyzeMediaWithCredential({
+            credential: mediaPlan.credential,
+            mediaPaths,
+            item,
+          })
+        : null;
+      const baseAnalysis = buildTextBaseAnalysis(item, mediaAnalysis);
+      const textCredential = await chooseTextCredential({
+        store,
+        userId,
+        openRouterApiKey,
+        openRouterModel,
+        credentialEncryptionKey,
+        source: mediaPlan?.source,
+      });
+      const textAnalysis = textCredential
+        ? await analyzeTextWithCredential({
+            credential: textCredential,
+            item,
+            baseAnalysis,
+          })
+        : null;
+      const analysis = mergeAnalysis(baseAnalysis, textAnalysis);
       await store.saveAnalysis(userId, item.id, analysis);
+      if (mediaPlan?.source === 'free' || mediaPlan?.source === 'paid') {
+        await store.recordUsage({
+          userId,
+          itemId: item.id,
+          source: mediaPlan.source,
+          provider: mediaPlan.credential.provider,
+          model: mediaPlan.credential.model,
+        });
+      }
       if (openRouterApiKey && typeof store.saveEmbedding === 'function') {
         try {
           const content = buildEmbeddingContent(item, analysis);
@@ -115,6 +165,21 @@ async function processImportJobs({
       const done = await store.updateJob(userId, job.id, { status: 'done', error: null });
       processed.push(done);
     } catch (error) {
+      if (error.pauseStatus) {
+        await pauseJob({ store, userId, item, job, status: error.pauseStatus, message: error.message });
+        continue;
+      }
+      if (isProviderLimitError(error)) {
+        await pauseJob({
+          store,
+          userId,
+          item,
+          job,
+          status: 'paused_api_limit',
+          message: 'Video did not process because your API limit was reached.',
+        });
+        continue;
+      }
       await store.markItemFailed(userId, item.id, error.message);
       await store.updateJob(userId, job.id, {
         status: 'failed',
@@ -127,7 +192,78 @@ async function processImportJobs({
   return processed;
 }
 
+function requiresMediaAnalysis(item) {
+  return ['reel', 'post'].includes(item.contentType);
+}
+
+async function chooseMediaPlan({ store, userId, item, openRouterApiKey, openRouterMediaModel, geminiApiKey, credentialEncryptionKey }) {
+  if (!requiresMediaAnalysis(item)) return null;
+  const credits = typeof store.getCredits === 'function' ? await store.getCredits(userId) : { freeItemsRemaining: 0, paidCredits: 0 };
+
+  if (credits.freeItemsRemaining > 0) {
+    const credential = appMediaCredential({ openRouterApiKey, openRouterMediaModel, geminiApiKey });
+    if (!credential) throw pauseError('paused_missing_provider', 'Video did not process because no supported image/video provider is connected.');
+    return { source: 'free', credential };
+  }
+
+  const userCredential =
+    typeof store.getPreferredProviderCredential === 'function' && credentialEncryptionKey
+      ? await store.getPreferredProviderCredential(userId, 'media', credentialEncryptionKey)
+      : null;
+  if (userCredential) return { source: 'byok', credential: userCredential };
+
+  if (credits.paidCredits > 0) {
+    const credential = appMediaCredential({ openRouterApiKey, openRouterMediaModel, geminiApiKey });
+    if (!credential) throw pauseError('paused_missing_provider', 'Video did not process because no supported image/video provider is connected.');
+    return { source: 'paid', credential };
+  }
+
+  throw pauseError('paused_needs_billing', 'Video did not process because credits are over. Add credits or connect your own API key.');
+}
+
+async function chooseTextCredential({ store, userId, openRouterApiKey, openRouterModel, credentialEncryptionKey, source }) {
+  if (source === 'free' || source === 'paid') {
+    return openRouterApiKey ? { provider: 'openrouter', purpose: 'text', model: openRouterModel, apiKey: openRouterApiKey } : null;
+  }
+  const userCredential =
+    typeof store.getPreferredProviderCredential === 'function' && credentialEncryptionKey
+      ? await store.getPreferredProviderCredential(userId, 'text', credentialEncryptionKey)
+      : null;
+  if (userCredential) return userCredential;
+  return openRouterApiKey ? { provider: 'openrouter', purpose: 'text', model: openRouterModel, apiKey: openRouterApiKey } : null;
+}
+
+function appMediaCredential({ openRouterApiKey, openRouterMediaModel, geminiApiKey }) {
+  if (openRouterApiKey) {
+    return { provider: 'openrouter', purpose: 'media', model: openRouterMediaModel, apiKey: openRouterApiKey };
+  }
+  if (geminiApiKey) {
+    return { provider: 'gemini', purpose: 'media', model: 'gemini-1.5-flash', apiKey: geminiApiKey };
+  }
+  return null;
+}
+
+function pauseError(status, message) {
+  const error = new Error(message);
+  error.pauseStatus = status;
+  return error;
+}
+
+async function pauseJob({ store, userId, item, job, status, message }) {
+  if (typeof store.setItemStatus === 'function') {
+    await store.setItemStatus(userId, item.id, status, message);
+  } else {
+    await store.markItemFailed(userId, item.id, message);
+  }
+  await store.updateJob(userId, job.id, {
+    status,
+    attempts: job.attempts || 0,
+    error: message,
+  });
+}
+
 module.exports = {
   analyzeItem,
   processImportJobs,
+  requiresMediaAnalysis,
 };

@@ -3,7 +3,9 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Brain,
+  CheckCircle2,
   Database,
+  KeyRound,
   FileSearch,
   FolderUp,
   Loader2,
@@ -16,10 +18,15 @@ import {
 import {
   getItem,
   getItems,
+  getCredits,
+  getProviderCredentials,
   importInstagramExport,
   processImport,
+  deleteProviderCredential,
+  saveProviderCredential,
   setApiAccessToken,
   searchItems,
+  testProviderCredential,
 } from './api';
 import { supabase } from './supabaseClient';
 import './App.css';
@@ -32,6 +39,15 @@ function App() {
   const [confirmEmail, setConfirmEmail] = useState('');
   const [activeImport, setActiveImport] = useState(null);
   const [selectedItem, setSelectedItem] = useState(null);
+  const [credentials, setCredentials] = useState([]);
+  const [credentialOptions, setCredentialOptions] = useState(null);
+  const [credits, setCredits] = useState(null);
+  const [credentialForm, setCredentialForm] = useState({
+    purpose: 'text',
+    provider: 'openrouter',
+    model: 'deepseek/deepseek-v4-pro',
+    apiKey: '',
+  });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -44,11 +60,18 @@ function App() {
     setItems(body.items || []);
   }, []);
 
+  const loadAccountControls = useCallback(async () => {
+    const [credentialBody, creditBody] = await Promise.all([getProviderCredentials(), getCredits()]);
+    setCredentials(credentialBody.credentials || []);
+    setCredentialOptions(credentialBody.options || null);
+    setCredits(creditBody.credits || null);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const initializeLocal = async () => {
       try {
-        await loadItems();
+        await Promise.all([loadItems(), loadAccountControls()]);
       } catch (err) {
         if (!cancelled) setError(err.message);
       } finally {
@@ -67,7 +90,7 @@ function App() {
       setSession(data.session);
       setApiAccessToken(data.session?.access_token);
       if (data.session) {
-        loadItems()
+        Promise.all([loadItems(), loadAccountControls()])
           .catch((err) => setError(err.message))
           .finally(() => setLoading(false));
       } else {
@@ -79,13 +102,14 @@ function App() {
       setSession(nextSession);
       setApiAccessToken(nextSession?.access_token);
       if (nextSession) loadItems().catch((err) => setError(err.message));
+      if (nextSession) loadAccountControls().catch((err) => setError(err.message));
     });
 
     return () => {
       cancelled = true;
       listener.subscription.unsubscribe();
     };
-  }, [authEnabled, loadItems]);
+  }, [authEnabled, loadAccountControls, loadItems]);
 
   const handleSignIn = async (event) => {
     event.preventDefault();
@@ -106,8 +130,33 @@ function App() {
     const done = items.filter((item) => item.status === 'done').length;
     const failed = items.filter((item) => item.status === 'failed').length;
     const queued = items.filter((item) => item.status === 'queued').length;
-    return { total: items.length, done, failed, queued };
+    const paused = items.filter((item) => String(item.status || '').startsWith('paused')).length;
+    return { total: items.length, done, failed, queued, paused };
   }, [items]);
+
+  const providerChoices = useMemo(() => {
+    if (!credentialOptions) return [];
+    if (credentialForm.purpose === 'media') return Object.entries(credentialOptions.mediaProviders || {});
+    return Object.entries(credentialOptions.textProviders || {});
+  }, [credentialForm.purpose, credentialOptions]);
+
+  const applyPurpose = (purpose) => {
+    const provider = purpose === 'media' ? 'openrouter' : 'openrouter';
+    const model =
+      purpose === 'media'
+        ? credentialOptions?.defaultAppMediaModel || 'google/gemini-3.1-flash-lite-preview'
+        : credentialOptions?.defaultAppTextModel || 'deepseek/deepseek-v4-pro';
+    setCredentialForm({ purpose, provider, model, apiKey: '' });
+  };
+
+  const applyProvider = (provider) => {
+    const group = credentialForm.purpose === 'media' ? credentialOptions?.mediaProviders : credentialOptions?.textProviders;
+    setCredentialForm((current) => ({
+      ...current,
+      provider,
+      model: group?.[provider]?.defaultModel || current.model,
+    }));
+  };
 
   const handleImport = async () => {
     if (!files.length) {
@@ -139,6 +188,47 @@ function App() {
     try {
       await processImport(activeImport.id);
       window.setTimeout(() => loadItems().catch((err) => setError(err.message)), 1500);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveCredential = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await saveProviderCredential(credentialForm);
+      setCredentialForm((current) => ({ ...current, apiKey: '' }));
+      await loadAccountControls();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeleteCredential = async (id) => {
+    setBusy(true);
+    setError('');
+    try {
+      await deleteProviderCredential(id);
+      await loadAccountControls();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleTestCredential = async (id) => {
+    setBusy(true);
+    setError('');
+    try {
+      await testProviderCredential(id);
+      setError('Credential is stored and readable by the backend.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -218,7 +308,7 @@ function App() {
           <Stat label="Total" value={stats.total} />
           <Stat label="Indexed" value={stats.done} />
           <Stat label="Queued" value={stats.queued} />
-          <Stat label="Failed" value={stats.failed} />
+          <Stat label="Paused" value={stats.paused || stats.failed} />
         </div>
 
         <section className="panel">
@@ -264,6 +354,75 @@ function App() {
             {busy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
             Process queue
           </button>
+        </section>
+
+        <section className="panel provider-panel">
+          <h2>Providers & Credits</h2>
+          <div className="credit-strip">
+            <span>Free items</span>
+            <strong>{credits ? `${credits.freeItemsRemaining}/${credits.freeItemsLimit}` : '200/200'}</strong>
+          </div>
+          <div className="credit-strip">
+            <span>Paid credits</span>
+            <strong>{credits?.paidCredits ?? 0}</strong>
+          </div>
+
+          <form className="credential-form" onSubmit={handleSaveCredential}>
+            <div className="segmented">
+              <button type="button" className={credentialForm.purpose === 'text' ? 'active' : ''} onClick={() => applyPurpose('text')}>
+                Text
+              </button>
+              <button type="button" className={credentialForm.purpose === 'media' ? 'active' : ''} onClick={() => applyPurpose('media')}>
+                Media
+              </button>
+            </div>
+            <select value={credentialForm.provider} onChange={(event) => applyProvider(event.target.value)}>
+              {providerChoices.map(([id, provider]) => (
+                <option value={id} key={id}>
+                  {provider.label}
+                </option>
+              ))}
+            </select>
+            <input
+              value={credentialForm.model}
+              onChange={(event) => setCredentialForm((current) => ({ ...current, model: event.target.value }))}
+              placeholder="Model"
+              list={credentialForm.purpose === 'media' ? 'media-models' : undefined}
+            />
+            <datalist id="media-models">
+              {(credentialOptions?.mediaModelAllowlist || []).map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            <input
+              type="password"
+              value={credentialForm.apiKey}
+              onChange={(event) => setCredentialForm((current) => ({ ...current, apiKey: event.target.value }))}
+              placeholder="API key"
+              required
+            />
+            <button className="primary-button" disabled={busy}>
+              {busy ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
+              Save key
+            </button>
+          </form>
+
+          <div className="credential-list">
+            {credentials.map((credential) => (
+              <div className="credential-row" key={credential.id}>
+                <div>
+                  <strong>{credential.provider}</strong>
+                  <span>{credential.purpose} · {credential.model} · {credential.keyHint}</span>
+                </div>
+                <button type="button" onClick={() => handleTestCredential(credential.id)} aria-label="Test key">
+                  <CheckCircle2 size={15} />
+                </button>
+                <button type="button" onClick={() => handleDeleteCredential(credential.id)} aria-label="Delete key">
+                  <X size={15} />
+                </button>
+              </div>
+            ))}
+          </div>
         </section>
       </aside>
 

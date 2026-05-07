@@ -2,8 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const { createJobsForImport } = require('../services/queue');
 const { searchItems } = require('../services/analyzer');
+const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
+const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/providers');
 
 const DEFAULT_USER_ID = 'local-dev-user';
+const FREE_ITEMS_LIMIT = 200;
 
 function now() {
   return new Date().toISOString();
@@ -22,7 +25,7 @@ function writeJson(file, value) {
 function seedFromLegacyIndex(dataPath) {
   const legacyFile = path.join(dataPath, 'index.json');
   if (!fs.existsSync(legacyFile)) {
-    return { users: [], imports: [], items: [], collections: [], jobs: [] };
+    return emptyState();
   }
 
   const legacy = readJson(legacyFile, []);
@@ -31,6 +34,9 @@ function seedFromLegacyIndex(dataPath) {
     imports: [],
     collections: [],
     jobs: [],
+    providerCredentials: [],
+    creditTransactions: [],
+    analysisUsageEvents: [],
     items: legacy.map((item) => ({
       ...item,
       userId: DEFAULT_USER_ID,
@@ -59,9 +65,32 @@ function seedFromLegacyIndex(dataPath) {
   };
 }
 
+function emptyState() {
+  return {
+    users: [],
+    imports: [],
+    items: [],
+    collections: [],
+    jobs: [],
+    providerCredentials: [],
+    creditTransactions: [],
+    analysisUsageEvents: [],
+  };
+}
+
+function normalizeState(state) {
+  return {
+    ...emptyState(),
+    ...state,
+    providerCredentials: state.providerCredentials || [],
+    creditTransactions: state.creditTransactions || [],
+    analysisUsageEvents: state.analysisUsageEvents || [],
+  };
+}
+
 function createLocalStore({ dataPath }) {
   const file = path.join(dataPath, 'brain.local.json');
-  let state = readJson(file, null) || seedFromLegacyIndex(dataPath);
+  let state = normalizeState(readJson(file, null) || seedFromLegacyIndex(dataPath));
 
   function save() {
     writeJson(file, state);
@@ -183,8 +212,150 @@ function createLocalStore({ dataPath }) {
       return item;
     },
 
+    setItemStatus(userId, itemId, status, error = null) {
+      const item = this.getItem(userId, itemId);
+      if (!item) return null;
+      item.status = status;
+      item.error = error;
+      item.updatedAt = now();
+      save();
+      return item;
+    },
+
     search(userId, query, filters = {}) {
       return searchItems(this.getItems(userId), query, filters);
+    },
+
+    getCredits(userId) {
+      const freeItemsUsed = new Set(
+        state.analysisUsageEvents
+          .filter((event) => event.userId === userId && event.source === 'free')
+          .map((event) => event.itemId),
+      ).size;
+      const paidCredits = state.creditTransactions
+        .filter((entry) => entry.userId === userId)
+        .reduce((total, entry) => total + Number(entry.amount || 0), 0);
+
+      return {
+        userId,
+        freeItemsLimit: FREE_ITEMS_LIMIT,
+        freeItemsUsed,
+        freeItemsRemaining: Math.max(FREE_ITEMS_LIMIT - freeItemsUsed, 0),
+        paidCredits,
+      };
+    },
+
+    recordUsage({ userId, itemId, source, provider, model }) {
+      const existing = state.analysisUsageEvents.find(
+        (event) => event.userId === userId && event.itemId === itemId && event.source === source,
+      );
+      if (existing) return existing;
+
+      const event = {
+        id: `usage-${Date.now()}-${state.analysisUsageEvents.length + 1}`,
+        userId,
+        itemId,
+        source,
+        provider,
+        model,
+        createdAt: now(),
+      };
+      state.analysisUsageEvents.push(event);
+      if (source === 'paid') {
+        state.creditTransactions.push({
+          id: `credit-${Date.now()}-${state.creditTransactions.length + 1}`,
+          userId,
+          amount: -1,
+          reason: 'item_analysis',
+          itemId,
+          createdAt: now(),
+        });
+      }
+      save();
+      return event;
+    },
+
+    addCreditTransaction({ userId, amount, reason = 'manual' }) {
+      const transaction = {
+        id: `credit-${Date.now()}-${state.creditTransactions.length + 1}`,
+        userId,
+        amount,
+        reason,
+        createdAt: now(),
+      };
+      state.creditTransactions.push(transaction);
+      save();
+      return transaction;
+    },
+
+    listProviderCredentials(userId) {
+      return state.providerCredentials
+        .filter((credential) => credential.userId === userId)
+        .map(publicCredential);
+    },
+
+    saveProviderCredential(userId, { provider, purpose, model, apiKey, encryptionKey, status = 'active', isPreferred = true }) {
+      assertProviderPurpose(provider, purpose);
+      if (purpose === 'media' && provider === 'openrouter') assertMediaModelAllowed(model);
+      if (!apiKey) throw new Error('API key is required.');
+
+      if (isPreferred) {
+        state.providerCredentials
+          .filter((credential) => credential.userId === userId && credential.purpose === purpose)
+          .forEach((credential) => {
+            credential.isPreferred = false;
+            credential.updatedAt = now();
+          });
+      }
+
+      const existing = state.providerCredentials.find(
+        (credential) => credential.userId === userId && credential.provider === provider && credential.purpose === purpose,
+      );
+      const row = existing || {
+        id: `credential-${Date.now()}-${state.providerCredentials.length + 1}`,
+        userId,
+        provider,
+        purpose,
+        createdAt: now(),
+      };
+      Object.assign(row, {
+        model,
+        encryptedKey: encryptSecret(apiKey, encryptionKey),
+        keyHint: maskSecret(apiKey),
+        status,
+        isPreferred,
+        updatedAt: now(),
+      });
+      if (!existing) state.providerCredentials.push(row);
+      save();
+      return publicCredential(row);
+    },
+
+    getPreferredProviderCredential(userId, purpose, encryptionKey) {
+      const credential = state.providerCredentials
+        .filter((entry) => entry.userId === userId && entry.purpose === purpose && entry.status === 'active')
+        .sort((a, b) => Number(b.isPreferred) - Number(a.isPreferred) || String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+      if (!credential) return null;
+      return {
+        ...publicCredential(credential),
+        apiKey: decryptSecret(credential.encryptedKey, encryptionKey),
+      };
+    },
+
+    getProviderCredential(userId, id, encryptionKey) {
+      const credential = state.providerCredentials.find((entry) => entry.userId === userId && entry.id === id);
+      if (!credential) return null;
+      return {
+        ...publicCredential(credential),
+        apiKey: decryptSecret(credential.encryptedKey, encryptionKey),
+      };
+    },
+
+    deleteProviderCredential(userId, id) {
+      const before = state.providerCredentials.length;
+      state.providerCredentials = state.providerCredentials.filter((credential) => !(credential.userId === userId && credential.id === id));
+      save();
+      return state.providerCredentials.length !== before;
     },
 
     dump() {

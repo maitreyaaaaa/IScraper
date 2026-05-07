@@ -14,8 +14,10 @@ function getConfig() {
     geminiApiKey: process.env.GEMINI_API_KEY,
     openRouterApiKey: process.env.OPENROUTER_API_KEY,
     openRouterModel: process.env.OPENROUTER_MODEL || 'deepseek/deepseek-v4-pro',
+    openRouterMediaModel: process.env.OPENROUTER_MEDIA_MODEL || 'google/gemini-3.1-flash-lite-preview',
     openRouterEmbeddingModel: process.env.OPENROUTER_EMBEDDING_MODEL || 'openai/text-embedding-3-small',
     embeddingDimensions: Number(process.env.EMBEDDING_DIMENSIONS || 1536),
+    credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY,
   };
 }
 

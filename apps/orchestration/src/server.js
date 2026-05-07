@@ -4,6 +4,8 @@ const multer = require('multer');
 const { parseInstagramExport, validateLoginScrapeConsent } = require('./services/instagramParser');
 const { processImportJobs } = require('./services/worker');
 const { createOpenRouterEmbedding } = require('./services/embeddings');
+const { credentialOptions } = require('./services/providers');
+const { testProviderCredential } = require('./services/providerClients');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -56,6 +58,41 @@ function createApp({ store, config = {} }) {
     return res.json({ item });
   }));
 
+  app.get('/api/credits', asyncRoute(async (req, res) => {
+    res.json({ credits: await store.getCredits(req.user.id) });
+  }));
+
+  app.get('/api/provider-credentials', asyncRoute(async (req, res) => {
+    res.json({
+      credentials: await store.listProviderCredentials(req.user.id),
+      options: credentialOptions(),
+    });
+  }));
+
+  app.post('/api/provider-credentials', asyncRoute(async (req, res) => {
+    const credential = await store.saveProviderCredential(req.user.id, {
+      provider: req.body.provider,
+      purpose: req.body.purpose,
+      model: req.body.model,
+      apiKey: req.body.apiKey,
+      encryptionKey: config.credentialEncryptionKey,
+    });
+    res.json({ credential });
+  }));
+
+  app.delete('/api/provider-credentials/:id', asyncRoute(async (req, res) => {
+    const deleted = await store.deleteProviderCredential(req.user.id, req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Credential not found.' });
+    return res.json({ deleted: true });
+  }));
+
+  app.post('/api/provider-credentials/:id/test', asyncRoute(async (req, res) => {
+    const credential = await store.getProviderCredential(req.user.id, req.params.id, config.credentialEncryptionKey);
+    if (!credential) return res.status(404).json({ error: 'Credential not found.' });
+    await testProviderCredential({ credential });
+    return res.json({ ok: true, provider: credential.provider, purpose: credential.purpose, model: credential.model });
+  }));
+
   app.post('/api/imports', upload.array('exportFiles', 20), asyncRoute(async (req, res) => {
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
     if (!files.length) return res.status(400).json({ error: 'Upload saved_posts.html and optionally saved_collections.html.' });
@@ -96,8 +133,10 @@ function createApp({ store, config = {} }) {
       geminiApiKey: config.geminiApiKey,
       openRouterApiKey: config.openRouterApiKey,
       openRouterModel: config.openRouterModel,
+      openRouterMediaModel: config.openRouterMediaModel,
       openRouterEmbeddingModel: config.openRouterEmbeddingModel,
       embeddingDimensions: config.embeddingDimensions,
+      credentialEncryptionKey: config.credentialEncryptionKey,
     }).catch((error) => {
       console.error('Background processing failed:', error);
     });

@@ -40,3 +40,56 @@ test('POST /api/imports imports all uploaded export files and creates processing
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('provider credential API stores keys without returning secrets', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { credentialEncryptionKey: 'dev-encryption-key' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const createResponse = await fetch(`http://127.0.0.1:${port}/api/provider-credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'openrouter',
+        purpose: 'text',
+        model: 'deepseek/deepseek-v4-pro',
+        apiKey: 'sk-or-test-secret',
+      }),
+    });
+    const created = await createResponse.json();
+    const listResponse = await fetch(`http://127.0.0.1:${port}/api/provider-credentials`);
+    const listed = await listResponse.json();
+
+    assert.equal(createResponse.status, 200);
+    assert.equal(created.credential.keyHint, 'sk-...cret');
+    assert.doesNotMatch(JSON.stringify(created), /sk-or-test-secret/);
+    assert.equal(listed.credentials.length, 1);
+    assert.doesNotMatch(JSON.stringify(listed), /sk-or-test-secret/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/credits returns free item allowance', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/credits`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.credits.freeItemsLimit, 200);
+    assert.equal(body.credits.freeItemsRemaining, 200);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

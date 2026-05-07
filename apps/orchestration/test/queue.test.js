@@ -33,3 +33,14 @@ test('pickNextProcessableJob resumes queued and failed jobs but skips done jobs'
 
   assert.equal(pickNextProcessableJob(jobs).itemId, 'b');
 });
+
+test('pickNextProcessableJob skips paused billing and provider jobs', () => {
+  const jobs = [
+    { itemId: 'a', status: 'paused_needs_billing' },
+    { itemId: 'b', status: 'paused_api_limit' },
+    { itemId: 'c', status: 'paused_missing_provider' },
+    { itemId: 'd', status: 'queued' },
+  ];
+
+  assert.equal(pickNextProcessableJob(jobs).itemId, 'd');
+});

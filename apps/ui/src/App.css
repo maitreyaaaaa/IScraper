@@ -165,6 +165,8 @@
 }
 
 .risk-box input,
+.credential-form input,
+.credential-form select,
 .search-form input {
   background: #0b0d10;
   color: #f5f7fb;
@@ -176,6 +178,70 @@
 .risk-box input {
   height: 38px;
   padding: 0 10px;
+}
+
+.provider-panel {
+  gap: 12px;
+}
+
+.credit-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid #252c38;
+  background: #0d1117;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.credit-strip span,
+.credential-row span {
+  color: #93a0b3;
+  font-size: 12px;
+}
+
+.credential-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.credential-form input,
+.credential-form select {
+  height: 38px;
+  padding: 0 10px;
+}
+
+.credential-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.credential-row {
+  display: grid;
+  grid-template-columns: 1fr 32px 32px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #252c38;
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.credential-row strong,
+.credential-row span {
+  display: block;
+}
+
+.credential-row button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #303846;
+  border-radius: 8px;
+  background: #0b0d10;
+  color: #f5f7fb;
+  display: grid;
+  place-items: center;
 }
 
 .file-drop {
@@ -345,7 +411,10 @@ button:disabled {
 
 .status.queued,
 .status.downloading,
-.status.analyzing {
+.status.analyzing,
+.status.paused_needs_billing,
+.status.paused_api_limit,
+.status.paused_missing_provider {
   background: #1f2b45;
   color: #93c5fd;
 }
