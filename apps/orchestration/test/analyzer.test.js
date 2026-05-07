@@ -41,12 +41,12 @@ test('searchItems matches exact words and related metadata fields', () => {
 
 test('buildOpenRouterAnalysisRequest creates a structured JSON chat request without exposing secrets', () => {
   const request = buildOpenRouterAnalysisRequest({
-    model: 'openai/gpt-4o-mini',
+    model: 'deepseek/deepseek-v4-pro',
     item: { id: 'abc', caption: 'Claude Code and GitHub repo demo' },
     baseAnalysis: analyzeTextMetadata({ caption: 'Claude Code and GitHub repo demo' }),
   });
 
-  assert.equal(request.model, 'openai/gpt-4o-mini');
+  assert.equal(request.model, 'deepseek/deepseek-v4-pro');
   assert.equal(request.response_format.type, 'json_schema');
   assert.match(request.messages[1].content, /Claude Code/);
   assert.doesNotMatch(JSON.stringify(request), /sk-or-v1/);

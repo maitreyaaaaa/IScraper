@@ -13,7 +13,7 @@ function getConfig() {
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
     geminiApiKey: process.env.GEMINI_API_KEY,
     openRouterApiKey: process.env.OPENROUTER_API_KEY,
-    openRouterModel: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+    openRouterModel: process.env.OPENROUTER_MODEL || 'deepseek/deepseek-v4-pro',
     openRouterEmbeddingModel: process.env.OPENROUTER_EMBEDDING_MODEL || 'openai/text-embedding-3-small',
     embeddingDimensions: Number(process.env.EMBEDDING_DIMENSIONS || 1536),
   };

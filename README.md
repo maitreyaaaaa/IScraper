@@ -10,6 +10,7 @@ Searchable brain for Instagram saved reels, posts, and collections.
 - Enriches saved items with transcript/OCR/metadata fields.
 - Searches captions, transcripts, brands, tools, repos, people, topics, and tags.
 - Supports local JSON storage for development and Supabase for production.
+- Uses DeepSeek through OpenRouter for structured text analysis by default.
 
 ## Apps
 
