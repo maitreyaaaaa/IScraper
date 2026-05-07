@@ -21,8 +21,8 @@ import {
   getCredits,
   getProviderCredentials,
   importInstagramExport,
-  processImport,
   deleteProviderCredential,
+  restartQueue,
   saveProviderCredential,
   setApiAccessToken,
   searchItems,
@@ -190,7 +190,11 @@ function App() {
     setError('');
     setNotice('');
     try {
-      await processImport(activeImport.id);
+      if (activeImport) {
+        await restartQueue(activeImport.id);
+      } else {
+        await restartQueue();
+      }
       window.setTimeout(() => loadItems().catch((err) => setError(err.message)), 1500);
     } catch (err) {
       setError(err.message);
@@ -362,9 +366,9 @@ function App() {
             Import files
           </button>
 
-          <button className="secondary-button" disabled={busy || !activeImport} onClick={handleProcess}>
+          <button className="secondary-button" disabled={busy || (!activeImport && !items.length)} onClick={handleProcess}>
             {busy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-            Process queue
+            Restart queue
           </button>
         </section>
 

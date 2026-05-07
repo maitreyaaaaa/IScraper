@@ -74,6 +74,14 @@ export function processImport(importId) {
   });
 }
 
+export function restartQueue(importId = null) {
+  return request('/jobs/restart', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ importId, download: true }),
+  });
+}
+
 export function searchItems(query, filters = {}) {
   return request('/search', {
     method: 'POST',

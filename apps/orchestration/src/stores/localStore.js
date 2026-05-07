@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { createJobsForImport } = require('../services/queue');
+const { createJobsForImport, isRestartableJob } = require('../services/queue');
 const { searchItems } = require('../services/analyzer');
 const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
 const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/providers');
@@ -190,6 +190,25 @@ function createLocalStore({ dataPath }) {
       Object.assign(job, patch, { updatedAt: now() });
       save();
       return job;
+    },
+
+    restartJobs(userId, importId = null) {
+      const jobs = state.jobs.filter((job) => job.userId === userId && (!importId || job.importId === importId) && isRestartableJob(job));
+      for (const job of jobs) {
+        Object.assign(job, {
+          status: 'queued',
+          error: null,
+          updatedAt: now(),
+        });
+        const item = state.items.find((entry) => entry.userId === userId && entry.id === job.itemId);
+        if (item && item.status !== 'done') {
+          item.status = 'queued';
+          item.error = null;
+          item.updatedAt = now();
+        }
+      }
+      save();
+      return jobs.length;
     },
 
     saveAnalysis(userId, itemId, analysis) {

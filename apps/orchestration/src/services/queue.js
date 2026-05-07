@@ -19,7 +19,12 @@ function pickNextProcessableJob(jobs) {
   return jobs.find((job) => job.status === 'failed') || jobs.find((job) => job.status === 'queued') || null;
 }
 
+function isRestartableJob(job) {
+  return ['failed', 'downloading', 'analyzing'].includes(job.status) || String(job.status || '').startsWith('paused');
+}
+
 module.exports = {
   createJobsForImport,
+  isRestartableJob,
   pickNextProcessableJob,
 };

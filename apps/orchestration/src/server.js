@@ -124,24 +124,24 @@ function createApp({ store, config = {} }) {
 
   app.post('/api/imports/:id/process', asyncRoute(async (req, res) => {
     const jobs = await store.getJobs(req.user.id, req.params.id);
-    processImportJobs({
-      store,
-      userId: req.user.id,
-      importId: req.params.id,
-      videoDir: config.videoDir,
-      shouldDownload: req.body?.download !== false,
-      geminiApiKey: config.geminiApiKey,
-      openRouterApiKey: config.openRouterApiKey,
-      openRouterModel: config.openRouterModel,
-      openRouterMediaModel: config.openRouterMediaModel,
-      openRouterEmbeddingModel: config.openRouterEmbeddingModel,
-      embeddingDimensions: config.embeddingDimensions,
-      credentialEncryptionKey: config.credentialEncryptionKey,
-    }).catch((error) => {
-      console.error('Background processing failed:', error);
-    });
+    startProcessing({ store, userId: req.user.id, importId: req.params.id, config, shouldDownload: req.body?.download !== false });
 
     res.json({ message: 'Processing started', jobCount: jobs.length });
+  }));
+
+  app.post('/api/jobs/restart', asyncRoute(async (req, res) => {
+    const importId = req.body?.importId || null;
+    const resetCount = typeof store.restartJobs === 'function' ? await store.restartJobs(req.user.id, importId) : 0;
+    const jobs = await store.getJobs(req.user.id, importId);
+    if (req.body?.start !== false) {
+      startProcessing({ store, userId: req.user.id, importId, config, shouldDownload: req.body?.download !== false });
+    }
+
+    res.json({
+      message: 'Queue restart requested',
+      resetCount,
+      jobCount: jobs.length,
+    });
   }));
 
   app.get('/api/jobs/:id', asyncRoute(async (req, res) => {
@@ -177,6 +177,25 @@ function createApp({ store, config = {} }) {
   });
 
   return app;
+}
+
+function startProcessing({ store, userId, importId, config, shouldDownload = true }) {
+  processImportJobs({
+    store,
+    userId,
+    importId,
+    videoDir: config.videoDir,
+    shouldDownload,
+    geminiApiKey: config.geminiApiKey,
+    openRouterApiKey: config.openRouterApiKey,
+    openRouterModel: config.openRouterModel,
+    openRouterMediaModel: config.openRouterMediaModel,
+    openRouterEmbeddingModel: config.openRouterEmbeddingModel,
+    embeddingDimensions: config.embeddingDimensions,
+    credentialEncryptionKey: config.credentialEncryptionKey,
+  }).catch((error) => {
+    console.error('Background processing failed:', error);
+  });
 }
 
 module.exports = {

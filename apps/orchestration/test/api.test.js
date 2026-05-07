@@ -93,3 +93,41 @@ test('GET /api/credits returns free item allowance', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('POST /api/jobs/restart requeues paused and stuck jobs', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { videoDir: path.join(dir, 'media') } });
+  const server = app.listen(0);
+
+  try {
+    await store.ensureUser('local-dev-user', 'local@example.com');
+    const parsed = {
+      collections: [],
+      items: [
+        { id: 'a', url: 'https://www.instagram.com/reel/A/', contentType: 'reel', caption: '', hashtags: [], collections: [] },
+        { id: 'b', url: 'https://www.instagram.com/reel/B/', contentType: 'reel', caption: '', hashtags: [], collections: [] },
+      ],
+    };
+    await store.upsertImportData({ userId: 'local-dev-user', importId: 'import-1', parsed });
+    await store.createJobs({ userId: 'local-dev-user', importId: 'import-1', items: parsed.items });
+    await store.updateJob('local-dev-user', 'import-1:a', { status: 'paused_needs_billing', error: 'credits over' });
+    await store.updateJob('local-dev-user', 'import-1:b', { status: 'analyzing', error: null });
+
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/jobs/restart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ start: false }),
+    });
+    const body = await response.json();
+    const jobs = await store.getJobs('local-dev-user');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.resetCount, 2);
+    assert.equal(jobs.every((job) => job.status === 'queued'), true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

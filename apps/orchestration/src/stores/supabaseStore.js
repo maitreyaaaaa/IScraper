@@ -116,6 +116,29 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return mapJob(data);
     },
+    async restartJobs(userId, importId = null) {
+      const restartableStatuses = ['failed', 'downloading', 'analyzing', 'paused_needs_billing', 'paused_api_limit', 'paused_missing_provider'];
+      let query = client
+        .from('processing_jobs')
+        .update({ status: 'queued', error: null })
+        .eq('user_id', userId)
+        .in('status', restartableStatuses);
+      if (importId) query = query.eq('import_id', importId);
+      const { data, error } = await query.select('item_id');
+      if (error) throw error;
+
+      const itemIds = [...new Set((data || []).map((row) => row.item_id))];
+      if (itemIds.length) {
+        await client
+          .from('saved_items')
+          .update({ status: 'queued', error: null })
+          .eq('user_id', userId)
+          .in('id', itemIds)
+          .neq('status', 'done')
+          .throwOnError();
+      }
+      return itemIds.length;
+    },
     async saveAnalysis(userId, itemId, analysis) {
       await client
         .from('item_analysis')
