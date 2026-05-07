@@ -37,6 +37,7 @@ function seedFromLegacyIndex(dataPath) {
     providerCredentials: [],
     creditTransactions: [],
     analysisUsageEvents: [],
+    feedback: [],
     items: legacy.map((item) => ({
       ...item,
       userId: DEFAULT_USER_ID,
@@ -75,6 +76,7 @@ function emptyState() {
     providerCredentials: [],
     creditTransactions: [],
     analysisUsageEvents: [],
+    feedback: [],
   };
 }
 
@@ -85,6 +87,7 @@ function normalizeState(state) {
     providerCredentials: state.providerCredentials || [],
     creditTransactions: state.creditTransactions || [],
     analysisUsageEvents: state.analysisUsageEvents || [],
+    feedback: state.feedback || [],
   };
 }
 
@@ -105,6 +108,27 @@ function createLocalStore({ dataPath }) {
 
   return {
     ensureUser,
+
+    listPublicFeedback() {
+      return [...state.feedback]
+        .filter((entry) => entry.status !== 'hidden')
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, 50);
+    },
+
+    createPublicFeedback({ feature, message }) {
+      const entry = {
+        id: `feedback-${Date.now()}-${state.feedback.length + 1}`,
+        feature: String(feature || 'Feature idea').trim().slice(0, 80),
+        message: String(message || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+        displayName: 'Anonymous user',
+        status: 'visible',
+        createdAt: now(),
+      };
+      state.feedback.push(entry);
+      save();
+      return entry;
+    },
 
     createImport({ userId, source, mode = 'export', fileNames = [] }) {
       const entry = {

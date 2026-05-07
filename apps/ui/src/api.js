@@ -20,6 +20,18 @@ export function getItems() {
   return request('/items');
 }
 
+export function getPublicFeedback() {
+  return request('/feedback');
+}
+
+export function submitPublicFeedback(payload) {
+  return request('/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getItem(id) {
   return request(`/items/${id}`);
 }
@@ -52,13 +64,11 @@ export function testProviderCredential(id) {
   });
 }
 
-export function importInstagramExport({ files, mode, confirmEmail }) {
+export function importInstagramExport({ files }) {
   const formData = new FormData();
   for (const file of files) {
     formData.append('exportFiles', file);
   }
-  formData.append('mode', mode);
-  formData.append('confirmEmail', confirmEmail || '');
 
   return request('/imports', {
     method: 'POST',

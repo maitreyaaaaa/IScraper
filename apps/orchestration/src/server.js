@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const { parseInstagramExport, validateLoginScrapeConsent } = require('./services/instagramParser');
+const { parseInstagramExport } = require('./services/instagramParser');
 const { processImportJobs } = require('./services/worker');
 const { createOpenRouterEmbedding } = require('./services/embeddings');
 const { credentialOptions } = require('./services/providers');
@@ -34,6 +34,20 @@ function createApp({ store, config = {} }) {
   const app = express();
   app.use(cors());
   app.use(express.json());
+
+  app.get('/api/feedback', asyncRoute(async (_req, res) => {
+    res.json({ feedback: await store.listPublicFeedback() });
+  }));
+
+  app.post('/api/feedback', asyncRoute(async (req, res) => {
+    const message = String(req.body?.message || '').trim();
+    const feature = String(req.body?.feature || '').trim();
+    if (message.length < 3) return res.status(400).json({ error: 'Feedback must be at least 3 characters.' });
+    if (message.length > 500) return res.status(400).json({ error: 'Feedback must be 500 characters or less.' });
+
+    const feedback = await store.createPublicFeedback({ feature, message });
+    return res.status(201).json({ feedback });
+  }));
 
   app.use(asyncRoute(async (req, _res, next) => {
     const user = await getUser(req, store);
@@ -97,18 +111,11 @@ function createApp({ store, config = {} }) {
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
     if (!files.length) return res.status(400).json({ error: 'Upload saved_posts.html and optionally saved_collections.html.' });
 
-    const mode = req.body.mode || 'export';
-    if (mode === 'login-scrape' && !validateLoginScrapeConsent(req.body.confirmEmail, req.user.email)) {
-      return res.status(403).json({
-        error: 'Login scrape is risky. Type your account email exactly to confirm.',
-      });
-    }
-
     const parsed = parseInstagramExport(files);
     const importEntry = await store.createImport({
       userId: req.user.id,
-      source: mode === 'login-scrape' ? 'instagram-login' : 'instagram-export',
-      mode,
+      source: 'instagram-export',
+      mode: 'export',
       fileNames: files.map((file) => file.originalname),
     });
     const items = await store.upsertImportData({ userId: req.user.id, importId: importEntry.id, parsed });

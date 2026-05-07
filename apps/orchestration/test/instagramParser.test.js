@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { parseInstagramExport, validateLoginScrapeConsent } = require('../src/services/instagramParser');
+const { parseInstagramExport } = require('../src/services/instagramParser');
 
 test('parseInstagramExport extracts every saved post with owner, hashtags, and date', () => {
   const savedPostsHtml = `
@@ -54,10 +54,4 @@ test('parseInstagramExport links collection names to saved items', () => {
   assert.equal(result.collections[0].name, 'AI Tools');
   assert.equal(result.items.length, 1);
   assert.deepEqual(result.items[0].collections, ['AI Tools']);
-});
-
-test('validateLoginScrapeConsent requires exact email confirmation', () => {
-  assert.equal(validateLoginScrapeConsent('person@example.com', 'person@example.com'), true);
-  assert.equal(validateLoginScrapeConsent('wrong@example.com', 'person@example.com'), false);
-  assert.equal(validateLoginScrapeConsent('', 'person@example.com'), false);
 });

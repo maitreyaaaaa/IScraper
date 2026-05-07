@@ -33,6 +33,30 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .upsert({ user_id: userId, free_items_limit: FREE_ITEMS_LIMIT }, { onConflict: 'user_id' })
         .throwOnError();
     },
+    async listPublicFeedback() {
+      const { data, error } = await client
+        .from('public_feedback')
+        .select('*')
+        .eq('status', 'visible')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return data.map(mapFeedback);
+    },
+    async createPublicFeedback({ feature, message }) {
+      const { data, error } = await client
+        .from('public_feedback')
+        .insert({
+          feature: String(feature || 'Feature idea').trim().slice(0, 80),
+          message: String(message || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+          display_name: 'Anonymous user',
+          status: 'visible',
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return mapFeedback(data);
+    },
     async createImport({ userId, source, mode = 'export', fileNames = [] }) {
       const { data, error } = await client
         .from('imports')
@@ -424,6 +448,17 @@ function credentialWithSecret(row, encryptionKey) {
   return {
     ...publicCredential(credential),
     apiKey: decryptSecret(credential.encryptedKey, encryptionKey),
+  };
+}
+
+function mapFeedback(row) {
+  return {
+    id: row.id,
+    feature: row.feature,
+    message: row.message,
+    displayName: row.display_name || 'Anonymous user',
+    status: row.status,
+    createdAt: row.created_at,
   };
 }
 

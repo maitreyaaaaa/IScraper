@@ -152,12 +152,7 @@ function parseInstagramExport(files) {
   };
 }
 
-function validateLoginScrapeConsent(typedEmail, userEmail) {
-  return Boolean(typedEmail && userEmail && typedEmail.trim().toLowerCase() === userEmail.trim().toLowerCase());
-}
-
 module.exports = {
   parseInstagramExport,
-  validateLoginScrapeConsent,
   normalizeText,
 };
