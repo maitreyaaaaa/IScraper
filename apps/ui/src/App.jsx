@@ -11,6 +11,7 @@ import {
   Brain,
   Check,
   CheckCircle2,
+  ChevronDown,
   Database,
   Download,
   ExternalLink,
@@ -70,6 +71,7 @@ const STATUS_META = {
 };
 
 const STATUSES = ['all', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
+const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 
 function normalizeStatus(status = 'queued') {
   return String(status).startsWith('paused') ? 'paused' : status;
@@ -576,15 +578,10 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
 
             <form onSubmit={handleFeedbackSubmit} className="feedback-card mt-10 rounded-3xl border border-white/10 bg-white/[0.03] p-5">
               <label className="block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Feature area</label>
-              <select
+              <AnimatedFeatureSelect
                 value={feedbackForm.feature}
-                onChange={(event) => setFeedbackForm((current) => ({ ...current, feature: event.target.value }))}
-                className="mt-3 w-full rounded-2xl border border-white/10 bg-black px-4 py-3 text-sm outline-none focus:border-primary"
-              >
-                {['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'].map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
+                onChange={(feature) => setFeedbackForm((current) => ({ ...current, feature }))}
+              />
 
               <label className="mt-5 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Your idea</label>
               <textarea
@@ -908,6 +905,76 @@ function LegalPage({ type, onBack }) {
           ))}
         </div>
       </main>
+    </div>
+  );
+}
+
+function AnimatedFeatureSelect({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const selectRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOnOutside = (event) => {
+      if (!selectRef.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={selectRef} className="relative mt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`group flex w-full items-center justify-between rounded-2xl border bg-black px-4 py-3 text-left text-sm outline-none transition duration-200 ${
+          open ? 'border-primary shadow-[0_0_0_4px_rgba(165,255,24,0.12)]' : 'border-white/10 hover:border-primary/70'
+        }`}
+      >
+        <span className="flex items-center gap-3">
+          <span className="h-2.5 w-2.5 rounded-full bg-orange-500 shadow-[0_0_16px_rgba(255,106,0,0.75)]" />
+          {value}
+        </span>
+        <ChevronDown className={`h-4 w-4 text-muted-foreground transition duration-200 ${open ? 'rotate-180 text-primary' : 'group-hover:text-primary'}`} />
+      </button>
+
+      <div
+        role="listbox"
+        className={`absolute left-0 right-0 top-[calc(100%+0.5rem)] z-50 overflow-hidden rounded-2xl border border-primary/40 bg-black/95 p-2 shadow-[0_24px_80px_rgba(0,0,0,0.65)] backdrop-blur transition duration-200 ${
+          open ? 'pointer-events-auto translate-y-0 scale-100 opacity-100' : 'pointer-events-none -translate-y-2 scale-[0.98] opacity-0'
+        }`}
+      >
+        {FEEDBACK_FEATURE_OPTIONS.map((option) => {
+          const selected = option === value;
+          return (
+            <button
+              key={option}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              onClick={() => {
+                onChange(option);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition duration-150 ${
+                selected ? 'bg-orange-500 text-black' : 'text-foreground hover:bg-orange-500/15 hover:text-orange-300'
+              }`}
+            >
+              <span>{option}</span>
+              {selected && <Check className="h-4 w-4" />}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
