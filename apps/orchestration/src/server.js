@@ -681,6 +681,7 @@ function startProcessing({ store, userId, importId, config, shouldDownload = tru
     openRouterMediaModel: config.openRouterMediaModel,
     openRouterEmbeddingModel: config.openRouterEmbeddingModel,
     embeddingDimensions: config.embeddingDimensions,
+    indexingConcurrency: config.indexingConcurrency,
     credentialEncryptionKey: config.credentialEncryptionKey,
   }).catch((error) => {
     console.error('Background processing failed:', error);

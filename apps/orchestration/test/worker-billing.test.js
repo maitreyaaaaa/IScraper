@@ -220,3 +220,90 @@ test('processing one saved item uses app OpenRouter key and consumes free allowa
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('processing jobs can run with bounded parallel indexing', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const userId = 'u1';
+  const originalFetch = global.fetch;
+  let inFlight = 0;
+  let maxInFlight = 0;
+
+  global.fetch = async (url) => {
+    if (String(url).includes('/embeddings')) {
+      return {
+        ok: true,
+        json: async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
+      };
+    }
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    inFlight -= 1;
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                title: 'Parallel idea',
+                summary: 'A save processed in a parallel batch.',
+                transcript: '',
+                ocrText: '',
+                visualDescription: '',
+                brandsMentioned: [],
+                toolsMentioned: [],
+                reposMentioned: [],
+                peopleMentioned: [],
+                topics: ['saved'],
+                tags: ['saved'],
+                whyUseful: 'It is worth finding again.',
+              }),
+            },
+          },
+        ],
+      }),
+    };
+  };
+
+  try {
+    store.ensureUser(userId, 'u1@example.com');
+    const entry = store.createImport({ userId, source: 'instagram-export', fileNames: ['saved_posts.html'] });
+    const items = store.upsertImportData({
+      userId,
+      importId: entry.id,
+      parsed: {
+        collections: [],
+        items: [1, 2, 3].map((number) => ({
+          id: `parallel-${number}`,
+          url: `https://www.instagram.com/p/parallel-${number}/`,
+          contentType: 'unknown',
+          caption: `Saved idea ${number}`,
+          hashtags: [],
+          collections: [],
+        })),
+      },
+    });
+    store.createJobs({ userId, importId: entry.id, items });
+
+    await processImportJobs({
+      store,
+      userId,
+      importId: entry.id,
+      videoDir: path.join(dir, 'videos'),
+      shouldDownload: false,
+      openRouterApiKey: 'app-openrouter-key',
+      credentialEncryptionKey: 'dev-encryption-key',
+      indexingConcurrency: 3,
+    });
+
+    const jobs = await store.getJobs(userId, entry.id);
+    assert.equal(jobs.every((job) => job.status === 'done'), true);
+    assert.equal(store.getCredits(userId).freeItemsUsed, 3);
+    assert.ok(maxInFlight > 1);
+  } finally {
+    global.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

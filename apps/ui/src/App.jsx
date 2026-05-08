@@ -2317,6 +2317,15 @@ function Dashboard({ onBack, onOpenHowTo }) {
     needsReview: items.filter((item) => item.sourceStatus === 'needs_review').length,
     paused: items.filter((item) => item.status === 'paused' || item.status === 'failed').length,
   }), [items]);
+  const indexingActivity = useMemo(() => summarizeIndexing(items), [items]);
+
+  useEffect(() => {
+    if (!canUsePrivateActions || indexingActivity.activeTotal <= 0) return undefined;
+    const timer = window.setInterval(() => {
+      loadItems().catch((err) => setError(err.message));
+    }, 3500);
+    return () => window.clearInterval(timer);
+  }, [canUsePrivateActions, indexingActivity.activeTotal, loadItems]);
 
   const handleGoogleSignIn = async () => {
     setBusy(true);
@@ -2687,6 +2696,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
                     platforms={platforms}
                     onSelect={openDetail}
                     onRestart={handleRestart}
+                    indexingActivity={indexingActivity}
                   />
                 )}
                 {authEnabled && !session && tab === 'graph' && (
@@ -2751,6 +2761,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
                     onSelect={openDetail}
                     busy={busy}
                     onOpenHowTo={onOpenHowTo}
+                    indexingActivity={indexingActivity}
                   />
                 )}
                 {authEnabled && !session && tab === 'settings' && (
@@ -2891,6 +2902,82 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo }) {
   );
 }
 
+function summarizeIndexing(items) {
+  const queued = items.filter((item) => item.status === 'queued').length;
+  const downloading = items.filter((item) => item.status === 'downloading').length;
+  const analyzing = items.filter((item) => item.status === 'analyzing').length;
+  const done = items.filter((item) => item.status === 'done').length;
+  const active = downloading + analyzing;
+  const activeTotal = queued + active;
+  const total = items.filter((item) => item.sourceStatus !== 'needs_review').length;
+  const parallelAgents = 3;
+  const etaSeconds = activeTotal > 0 ? Math.max(10, Math.ceil(((queued * 35) + (active * 20)) / parallelAgents)) : 0;
+  const progress = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  return {
+    queued,
+    downloading,
+    analyzing,
+    active,
+    activeTotal,
+    done,
+    etaSeconds,
+    parallelAgents,
+    progress,
+  };
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(0, Number(totalSeconds) || 0);
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes <= 0) return `${remainder}s`;
+  return `${minutes}m ${String(remainder).padStart(2, '0')}s`;
+}
+
+function IndexingProgressCard({ activity }) {
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!activity.activeTotal) return undefined;
+    const timer = window.setInterval(() => setTick((current) => current + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [activity.activeTotal, activity.etaSeconds]);
+
+  if (!activity.activeTotal) return null;
+
+  const remainingSeconds = Math.max(0, activity.etaSeconds - (tick % Math.max(1, activity.etaSeconds + 1)));
+  const progress = Math.min(99, Math.max(2, activity.progress));
+
+  return (
+    <div className="mt-5 overflow-hidden rounded-2xl border border-primary/30 bg-primary/5 p-5">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Indexing in progress</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">
+            {activity.activeTotal} saves left · about {formatDuration(remainingSeconds)}
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            Running up to {activity.parallelAgents} indexing workers in parallel. This estimate updates as saves finish.
+          </p>
+        </div>
+        <div className="grid min-w-36 gap-1 rounded-xl border border-white/10 bg-black px-4 py-3 text-center">
+          <span className="font-display text-3xl font-bold text-primary">{activity.active}</span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">active now</span>
+        </div>
+      </div>
+      <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
+        <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${progress}%` }} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+        <span>{activity.queued} queued</span>
+        <span>{activity.downloading} downloading</span>
+        <span>{activity.analyzing} analyzing</span>
+      </div>
+    </div>
+  );
+}
+
 function LibraryTab({
   items,
   totalCount,
@@ -2908,6 +2995,7 @@ function LibraryTab({
   platforms,
   onSelect,
   onRestart,
+  indexingActivity,
 }) {
   const boardRef = useRef(null);
   const [visibleCount, setVisibleCount] = useState(80);
@@ -2992,6 +3080,8 @@ function LibraryTab({
           </div>
         ))}
       </div>
+
+      <IndexingProgressCard activity={indexingActivity} />
 
       {indexingNeeded && (
         <div className="mt-5 flex flex-col gap-4 rounded-2xl border border-primary/30 bg-primary/5 p-5 md:flex-row md:items-center md:justify-between">
@@ -3174,6 +3264,7 @@ function UploadTab({
   onSelect,
   busy,
   onOpenHowTo,
+  indexingActivity,
 }) {
   const [dragging, setDragging] = useState(false);
   return (
@@ -3204,6 +3295,8 @@ function UploadTab({
           Use your free included allowance to build the first version of your searchable brain. Review saves before indexing so the free allowance goes toward posts you actually want.
         </p>
       </div>
+
+      <IndexingProgressCard activity={indexingActivity} />
 
       <form onSubmit={onSaveLink} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div>

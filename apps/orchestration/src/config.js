@@ -17,6 +17,7 @@ function getConfig() {
     openRouterMediaModel: process.env.OPENROUTER_MEDIA_MODEL || 'google/gemini-3.1-flash-lite-preview',
     openRouterEmbeddingModel: process.env.OPENROUTER_EMBEDDING_MODEL || 'openai/text-embedding-3-small',
     embeddingDimensions: Number(process.env.EMBEDDING_DIMENSIONS || 1536),
+    indexingConcurrency: Number(process.env.INDEXING_CONCURRENCY || 3),
     credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY,
     adminApiKey: process.env.ADMIN_API_KEY,
     appUrl: process.env.APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173',
