@@ -1220,6 +1220,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
 }
 
 const SUPPORT_EMAIL = 'itsallover.2006@gmail.com';
+const SUPPORT_TOPIC_OPTIONS = ['Import help', 'Login or account', 'Extension', 'Search results', 'Billing or credits', 'Other'];
 
 function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
   const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('IScraper support request')}`;
@@ -1306,6 +1307,9 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
           </p>
 
           <form onSubmit={handleSupportSubmit} className="mt-6 grid gap-3">
+            <label className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
+              Your email <span className="text-orange-500">*</span>
+            </label>
             <input
               type="email"
               value={supportForm.email}
@@ -1314,18 +1318,11 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
               required
               className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm outline-none focus:border-primary"
             />
-            <select
+            <AnimatedFeatureSelect
               value={supportForm.topic}
-              onChange={(event) => setSupportForm((current) => ({ ...current, topic: event.target.value }))}
-              className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm outline-none focus:border-primary"
-            >
-              <option>Import help</option>
-              <option>Login or account</option>
-              <option>Extension</option>
-              <option>Search results</option>
-              <option>Billing or credits</option>
-              <option>Other</option>
-            </select>
+              options={SUPPORT_TOPIC_OPTIONS}
+              onChange={(topic) => setSupportForm((current) => ({ ...current, topic }))}
+            />
             <textarea
               value={supportForm.message}
               onChange={(event) => setSupportForm((current) => ({ ...current, message: event.target.value }))}
@@ -1451,7 +1448,7 @@ function LegalPage({ type, onBack }) {
   );
 }
 
-function AnimatedFeatureSelect({ value, onChange }) {
+function AnimatedFeatureSelect({ value, onChange, options = FEEDBACK_FEATURE_OPTIONS }) {
   const [open, setOpen] = useState(false);
   const selectRef = useRef(null);
 
@@ -1495,7 +1492,7 @@ function AnimatedFeatureSelect({ value, onChange }) {
           open ? 'pointer-events-auto translate-y-0 scale-100 opacity-100' : 'pointer-events-none -translate-y-2 scale-[0.98] opacity-0'
         }`}
       >
-        {FEEDBACK_FEATURE_OPTIONS.map((option) => {
+        {options.map((option) => {
           const selected = option === value;
           return (
             <button
