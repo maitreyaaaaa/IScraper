@@ -47,6 +47,7 @@ import {
   getProviderCredentials,
   importInstagramExport,
   restartQueue,
+  saveLink,
   saveProfile,
   saveProviderCredential,
   searchItems,
@@ -124,15 +125,41 @@ function scrollToSection(event, id) {
 }
 
 function getRouteFromHash() {
-  if (window.location.hash === '#app') return 'app';
+  const hash = window.location.hash || '';
+  if (hash === '#app' || hash.startsWith('#app?')) return 'app';
   if (window.location.hash === '#how-to-use') return 'how-to-use';
   if (window.location.hash === '#terms') return 'terms';
   if (window.location.hash === '#privacy') return 'privacy';
   return 'landing';
 }
 
+function pendingSaveFromHash() {
+  const hash = window.location.hash || '';
+  if (!hash.startsWith('#app?')) return null;
+  const params = new URLSearchParams(hash.slice('#app?'.length));
+  const url = params.get('url') || params.get('saveUrl');
+  if (!url) return null;
+  return {
+    url,
+    title: params.get('title') || '',
+    description: params.get('description') || '',
+    platform: params.get('platform') || '',
+    note: params.get('note') || '',
+    autoSave: params.get('autoSave') === '1',
+  };
+}
+
+function rememberPendingSave() {
+  const pending = pendingSaveFromHash();
+  if (!pending) return;
+  window.localStorage.setItem('iscraper.pendingSaveLink', JSON.stringify(pending));
+}
+
 export default function App() {
-  const [route, setRoute] = useState(getRouteFromHash);
+  const [route, setRoute] = useState(() => {
+    rememberPendingSave();
+    return getRouteFromHash();
+  });
 
   const navigate = useCallback((nextRoute) => {
     setRoute(nextRoute);
@@ -141,7 +168,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const onHashChange = () => setRoute(getRouteFromHash());
+    const onHashChange = () => {
+      rememberPendingSave();
+      setRoute(getRouteFromHash());
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -454,7 +484,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
 
           <div className="mt-12 flex flex-col items-start justify-between gap-8 md:flex-row md:items-end">
             <p className="hero-fade max-w-xl text-lg leading-relaxed text-muted-foreground">
-              Recipes, outfits, workouts, trips, products, creators, ideas. Turn the posts you already saved into a private library you can actually search.
+              Recipes, outfits, workouts, trips, products, creators, ideas. Save links from any platform and turn the posts you already saved into a private library you can actually search.
             </p>
             <div className="hero-fade flex flex-wrap items-center gap-4">
               <button
@@ -473,7 +503,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
           <div className="hero-fade mt-24 grid grid-cols-2 gap-6 text-sm md:grid-cols-4">
             {[
               ['Saved ideas rescued', 'All'],
-              ['Upload needed', 'Once'],
+              ['Platforms supported', 'Any'],
               ['Private by default', 'Yes'],
               ['Search in seconds', 'Fast'],
             ].map(([label, value]) => (
@@ -493,7 +523,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
         <div className="marquee flex gap-12 whitespace-nowrap font-display text-5xl font-bold tracking-tighter md:text-7xl">
           {Array.from({ length: 2 }).map((_, index) => (
             <div key={index} className="flex gap-12">
-              {['recipes', 'outfits', 'travel', 'workouts', 'products', 'creators', 'ideas', 'places', 'captions', 'text'].map((label) => (
+              {['pinterest', 'twitter', 'youtube', 'tiktok', 'instagram', 'recipes', 'outfits', 'travel', 'products', 'ideas'].map((label) => (
                 <span key={`${index}-${label}`} className="text-foreground/20 transition hover:text-primary">
                   {label} <span className="text-primary">✦</span>
                 </span>
@@ -518,12 +548,12 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
 
           <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
             {[
-              [Zap, 'Find it before the moment passes', 'Search by what you remember: the dish, the outfit, the place, the creator, or the words on screen.'],
+              [Zap, 'Save from any platform', 'Paste a link from Pinterest, X, TikTok, YouTube, Instagram, or any site and keep it in the same searchable brain.'],
               [Brain, 'Know why you saved it', 'Each save can get a plain-English summary, so old posts become useful again instead of forgotten.'],
               [Tag, 'Organized without the cleanup', 'Group saves by themes like travel, food, fitness, shopping, home, business, or inspiration.'],
               [Lock, 'Private by default', 'Your saved export starts on your machine, so your personal taste and plans stay yours.'],
               [ShieldCheck, 'Built around official export', 'Use Instagram export files to build your library without handing over your Instagram login.'],
-              [KeyRound, 'Upgrade when you want deeper notes', 'Connect your own AI keys only if you want richer summaries, visible-text reading, and media analysis.'],
+              [KeyRound, 'Browser extension ready', 'Use the Phase 1 extension to send the current tab into IScraper without giving the extension your account token.'],
             ].map(([Icon, title, description], index) => (
               <div
                 key={title}
@@ -643,7 +673,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
           <h2 data-reveal className="text-balance font-display text-6xl font-bold tracking-tighter md:text-8xl">
             Your best saves are already there. <br />Make them <span className="text-glow italic text-primary">useful</span>.
           </h2>
-          <p data-reveal className="mx-auto mt-8 max-w-xl text-lg text-muted-foreground">One upload turns your saved folder from a pile of posts into a library you can come back to.</p>
+          <p data-reveal className="mx-auto mt-8 max-w-xl text-lg text-muted-foreground">Paste one link or upload an export, then turn saved posts into a library you can come back to.</p>
           <div data-reveal className="mt-12 flex items-center justify-center gap-4">
             <button
               type="button"
@@ -987,6 +1017,7 @@ function Dashboard({ onBack }) {
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
+  const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
   const [credentials, setCredentials] = useState([]);
   const [credentialOptions, setCredentialOptions] = useState(null);
   const [credentialForm, setCredentialForm] = useState({
@@ -1004,6 +1035,7 @@ function Dashboard({ onBack }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const sidebarRef = useRef(null);
+  const pendingSaveHandledRef = useRef(false);
   const authEnabled = Boolean(supabase);
 
   const loadItems = useCallback(async () => {
@@ -1170,6 +1202,58 @@ function Dashboard({ onBack }) {
       setBusy(false);
     }
   };
+
+  const handleSaveLink = useCallback(async (event, override = null) => {
+    event?.preventDefault();
+    const payload = override || linkForm;
+    if (!String(payload.url || '').trim()) {
+      setError('Paste a link first.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const result = await saveLink({ ...payload, startProcessing: true });
+      const duplicate = result.skippedDuplicateCount > 0;
+      setNotice(duplicate ? 'That link was already in your brain.' : 'Link saved. Indexing will start if your AI key is connected.');
+      setLinkForm({ url: '', title: '', description: '', note: '' });
+      window.localStorage.removeItem('iscraper.pendingSaveLink');
+      await loadItems();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [linkForm, loadItems]);
+
+  useEffect(() => {
+    if (pendingSaveHandledRef.current || loading || (authEnabled && (!session || profileRequired))) return;
+    const raw = window.localStorage.getItem('iscraper.pendingSaveLink');
+    if (!raw) return;
+    let timer = null;
+    try {
+      const pending = JSON.parse(raw);
+      pendingSaveHandledRef.current = true;
+      timer = window.setTimeout(() => {
+        setTab('upload');
+        setLinkForm({
+          url: pending.url || '',
+          title: pending.title || '',
+          description: pending.description || '',
+          note: pending.note || '',
+        });
+        if (pending.autoSave) {
+          handleSaveLink(null, pending);
+        }
+      }, 0);
+    } catch {
+      window.localStorage.removeItem('iscraper.pendingSaveLink');
+    }
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [authEnabled, handleSaveLink, loading, profileRequired, session]);
 
   const handleImport = async () => {
     if (!files.length) {
@@ -1400,6 +1484,9 @@ function Dashboard({ onBack }) {
                   <UploadTab
                     files={files}
                     setFiles={setFiles}
+                    linkForm={linkForm}
+                    setLinkForm={setLinkForm}
+                    onSaveLink={handleSaveLink}
                     onImport={handleImport}
                     onRestart={handleRestart}
                     busy={busy}
@@ -1724,14 +1811,50 @@ function PinCard({ item, index, onClick }) {
   );
 }
 
-function UploadTab({ files, setFiles, onImport, onRestart, busy }) {
+function UploadTab({ files, setFiles, linkForm, setLinkForm, onSaveLink, onImport, onRestart, busy }) {
   const [dragging, setDragging] = useState(false);
   return (
     <div className="mx-auto max-w-2xl space-y-6 px-6 py-20">
       <div>
         <h1 className="font-display text-4xl font-bold tracking-tight">Add your saved posts</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Upload your Instagram export once. The app turns it into a searchable library.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Paste any link now, or upload your Instagram export when you want a full saved folder.</p>
       </div>
+
+      <form onSubmit={onSaveLink} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save from any platform</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Add a Pinterest pin, tweet, video, post, or article</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            Phase 1 stores the link and indexes the page title, description, note, and source. Browser extension saves land here too.
+          </p>
+        </div>
+        <input
+          type="url"
+          value={linkForm.url}
+          onChange={(event) => setLinkForm((current) => ({ ...current, url: event.target.value }))}
+          placeholder="https://pinterest.com/pin/..."
+          required
+          className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+        />
+        <input
+          value={linkForm.title}
+          onChange={(event) => setLinkForm((current) => ({ ...current, title: event.target.value }))}
+          placeholder="Title optional"
+          maxLength={160}
+          className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+        />
+        <textarea
+          value={linkForm.note}
+          onChange={(event) => setLinkForm((current) => ({ ...current, note: event.target.value }))}
+          placeholder="Why are you saving this? optional"
+          maxLength={500}
+          className="min-h-24 w-full resize-none rounded-xl border border-white/10 bg-black px-4 py-3 text-sm leading-6 outline-none focus:border-primary"
+        />
+        <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+          Save link to brain
+        </button>
+      </form>
 
       <div
         onDragOver={(event) => {

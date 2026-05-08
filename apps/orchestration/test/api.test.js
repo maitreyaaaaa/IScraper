@@ -102,6 +102,69 @@ test('POST /api/imports skips already imported canonical duplicate URLs', async 
   }
 });
 
+test('POST /api/saves/link stores one deduped web save', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const payload = {
+      url: 'https://www.pinterest.com/pin/123/?utm_source=feed',
+      title: 'Kitchen shelf idea',
+      description: 'A saved Pinterest pin',
+      startProcessing: false,
+    };
+    const firstResponse = await fetch(`http://127.0.0.1:${port}/api/saves/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const secondResponse = await fetch(`http://127.0.0.1:${port}/api/saves/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const first = await firstResponse.json();
+    const second = await secondResponse.json();
+
+    assert.equal(firstResponse.status, 201);
+    assert.equal(secondResponse.status, 201);
+    assert.equal(first.newItemCount, 1);
+    assert.equal(first.queuedJobCount, 1);
+    assert.equal(second.newItemCount, 0);
+    assert.equal(second.skippedDuplicateCount, 1);
+    assert.equal(store.getItems('local-dev-user').length, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/saves/link rejects unsafe URLs', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/saves/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'http://127.0.0.1/admin', title: 'Bad link' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.match(body.error, /Local or private/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/imports rejects non-HTML uploads', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

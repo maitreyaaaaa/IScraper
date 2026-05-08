@@ -12,6 +12,7 @@ const { credentialOptions } = require('./services/providers');
 const { testProviderCredential } = require('./services/providerClients');
 const { formatPrice } = require('./services/credits');
 const { buildKnowledgeGraph, buildObsidianFiles } = require('./services/graph');
+const { parseManualLinkPayload } = require('./services/linkSaver');
 const { validateProfileInput } = require('./services/profiles');
 
 const HTML_UPLOAD_EXTENSIONS = new Set(['.html', '.htm']);
@@ -375,6 +376,31 @@ function createApp({ store, config = {} }) {
       collectionCount: parsed.collections.length,
       queuedJobCount: jobs.length,
       jobCount: jobs.length,
+    });
+  }));
+
+  app.post('/api/saves/link', importRateLimit, asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    const parsed = parseManualLinkPayload(req.body || {});
+    const importEntry = await store.createImport({
+      userId: req.user.id,
+      source: 'manual-link',
+      mode: 'export',
+      fileNames: [parsed.items[0].url],
+    });
+    const items = await store.upsertImportData({ userId: req.user.id, importId: importEntry.id, parsed });
+    const jobs = await store.createJobs({ userId: req.user.id, importId: importEntry.id, items });
+
+    if (req.body?.startProcessing !== false && jobs.length) {
+      startProcessing({ store, userId: req.user.id, importId: importEntry.id, config, shouldDownload: false });
+    }
+
+    res.status(201).json({
+      import: importEntry,
+      item: items[0] || parsed.items[0],
+      newItemCount: items.length,
+      skippedDuplicateCount: items.length ? 0 : 1,
+      queuedJobCount: jobs.length,
     });
   }));
 

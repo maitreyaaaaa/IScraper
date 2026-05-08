@@ -115,6 +115,14 @@ export function importInstagramExport({ files }) {
   });
 }
 
+export function saveLink(payload) {
+  return request('/saves/link', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function processImport(importId) {
   return request(`/imports/${importId}/process`, {
     method: 'POST',
