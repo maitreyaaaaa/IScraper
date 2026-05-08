@@ -422,7 +422,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
         </div>
       </header>
 
-      <section className="landing-hero relative flex min-h-screen items-center overflow-hidden bg-black pt-24">
+      <section className="landing-hero relative flex min-h-screen items-center overflow-x-hidden overflow-y-visible bg-black pt-24">
         <div className="parallax-grid radial-fade grid-bg absolute inset-0 opacity-60" />
         <div
           className="parallax-glow-primary absolute -left-20 -top-32 h-[480px] w-[480px] rounded-full opacity-40 blur-[120px]"
@@ -433,13 +433,13 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
           style={{ background: 'radial-gradient(circle, var(--glow-2) 0%, transparent 70%)' }}
         />
 
-        <div className="hero-content relative mx-auto w-full max-w-[90rem] px-6 pr-10 md:px-10 xl:px-14">
+        <div className="hero-content relative mx-auto w-full max-w-[100rem] overflow-visible px-6 pr-16 md:px-10 md:pr-20 xl:px-14 xl:pr-24">
           <h1
             ref={heroTitle}
-            className="text-balance font-display text-[clamp(3rem,10.5vw,11rem)] font-bold leading-[0.85] tracking-tighter"
+            className="overflow-visible text-balance font-display text-[clamp(3rem,10.5vw,11rem)] font-bold leading-[0.85] tracking-tighter"
           >
             {heroWords.map((word, index) => (
-              <span key={word} className="mr-[0.18em] inline-block overflow-hidden">
+              <span key={word} className="mr-[0.18em] inline-block overflow-visible">
                 <span className={`word inline-block ${index === 4 ? 'text-glow italic text-primary' : ''}`}>{word}</span>
               </span>
             ))}
