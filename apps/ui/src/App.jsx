@@ -433,10 +433,10 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
           style={{ background: 'radial-gradient(circle, var(--glow-2) 0%, transparent 70%)' }}
         />
 
-        <div className="hero-content relative mx-auto w-full max-w-7xl px-6">
+        <div className="hero-content relative mx-auto w-full max-w-[90rem] px-6 pr-10 md:px-10 xl:px-14">
           <h1
             ref={heroTitle}
-            className="text-balance font-display text-[clamp(3rem,11vw,12rem)] font-bold leading-[0.85] tracking-tighter"
+            className="text-balance font-display text-[clamp(3rem,10.5vw,11rem)] font-bold leading-[0.85] tracking-tighter"
           >
             {heroWords.map((word, index) => (
               <span key={word} className="mr-[0.18em] inline-block overflow-hidden">
