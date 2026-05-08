@@ -1585,10 +1585,10 @@ function LibraryTab({
 const PIN_BACKDROPS = [
   '#d6ff24',
   '#f4f4f0',
-  '#ff84dd',
+  '#ff6a00',
   '#29ffc6',
   '#ffb347',
-  '#bea8ff',
+  '#ff8a1f',
 ];
 
 const PIN_HEIGHTS = ['min-h-72', 'min-h-96', 'min-h-80', 'min-h-[28rem]', 'min-h-64', 'min-h-[24rem]'];

@@ -174,8 +174,8 @@
   z-index: 2;
   padding: 96px 24px 140px;
   background:
-    radial-gradient(circle at top left, rgba(255, 159, 252, 0.18), transparent 32%),
-    radial-gradient(circle at bottom right, rgba(99, 214, 255, 0.12), transparent 30%),
+    radial-gradient(circle at top left, rgba(255, 106, 0, 0.18), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(255, 106, 0, 0.12), transparent 30%),
     #000;
 }
 
@@ -192,7 +192,7 @@
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 999px;
   padding: 0 14px;
-  color: #f4b1ff;
+  color: #ff6a00;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -396,7 +396,7 @@
   padding: 0 24px 140px;
   background:
     radial-gradient(circle at 12% 18%, rgba(255, 255, 255, 0.08), transparent 24%),
-    radial-gradient(circle at 88% 82%, rgba(244, 177, 255, 0.08), transparent 28%),
+    radial-gradient(circle at 88% 82%, rgba(255, 106, 0, 0.1), transparent 28%),
     #000;
 }
 
@@ -513,7 +513,7 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.05);
-  color: #f4b1ff;
+  color: #ff6a00;
 }
 
 .system-map-node-copy {
@@ -630,7 +630,7 @@
   padding: 0 24px 160px;
   background:
     radial-gradient(circle at 16% 18%, rgba(255, 255, 255, 0.08), transparent 24%),
-    radial-gradient(circle at 82% 84%, rgba(244, 177, 255, 0.1), transparent 30%),
+    radial-gradient(circle at 82% 84%, rgba(255, 106, 0, 0.1), transparent 30%),
     #000;
 }
 
@@ -798,7 +798,7 @@
   align-items: center;
   gap: 6px;
   margin-top: 10px;
-  color: #f4b1ff;
+  color: #ff6a00;
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;

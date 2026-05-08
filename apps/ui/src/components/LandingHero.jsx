@@ -52,7 +52,7 @@ function LandingHero({ opening = false, reducedMotion = false, onEnterApp, onExp
               waveAmplitude={1}
               particleSize={1.5}
               lerpSpeed={0.05}
-              color="#FF9FFC"
+              color="#ff6a00"
               autoAnimate
               particleVariance={1}
             />
