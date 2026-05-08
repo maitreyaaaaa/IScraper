@@ -3,6 +3,7 @@ const test = require('node:test');
 const { mkdtempSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
+const JSZip = require('jszip');
 
 const { createApp } = require('../src/server');
 const { createLocalStore } = require('../src/stores/localStore');
@@ -96,6 +97,35 @@ test('POST /api/imports skips already imported canonical duplicate URLs', async 
     assert.equal(allJobs.length, 2);
     assert.equal(allJobs.filter((job) => job.itemId === 'AAA111').length, 1);
     assert.equal(existingItem.status, 'done');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/imports accepts Pinterest export zip files', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const zip = new JSZip();
+    zip.file('pins.json', JSON.stringify([{ url: 'https://www.pinterest.com/pin/1234567890/' }]));
+    const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+    const form = new FormData();
+    form.append('exportFiles', new Blob([buffer], { type: 'application/zip' }), 'pinterest.zip');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports`, { method: 'POST', body: form });
+    const body = await response.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.itemCount, 1);
+    assert.equal(body.import.source, 'pinterest-export');
+    assert.equal(items[0].platform, 'Pinterest');
+    assert.equal(items[0].url, 'https://pinterest.com/pin/1234567890');
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -299,7 +329,7 @@ test('POST /api/saves/link rejects unsafe URLs', async () => {
   }
 });
 
-test('POST /api/imports rejects non-HTML uploads', async () => {
+test('POST /api/imports rejects unsupported uploads', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const app = createApp({ store });
@@ -314,7 +344,7 @@ test('POST /api/imports rejects non-HTML uploads', async () => {
     const body = await response.json();
 
     assert.equal(response.status, 400);
-    assert.match(body.error, /HTML export/);
+    assert.match(body.error, /Instagram HTML/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });

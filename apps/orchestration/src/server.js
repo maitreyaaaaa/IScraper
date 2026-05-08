@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const path = require('path');
 const Stripe = require('stripe');
 const JSZip = require('jszip');
-const { parseInstagramExport } = require('./services/instagramParser');
+const { parseImportExport } = require('./services/exportParser');
 const { processImportJobs } = require('./services/worker');
 const { createOpenRouterEmbedding } = require('./services/embeddings');
 const { credentialOptions } = require('./services/providers');
@@ -22,8 +22,18 @@ const {
 } = require('./services/extensionTokens');
 const { cleanLensText, describeLensCrop } = require('./services/lensSearch');
 
-const HTML_UPLOAD_EXTENSIONS = new Set(['.html', '.htm']);
-const HTML_UPLOAD_MIME_TYPES = new Set(['text/html', 'application/octet-stream', '']);
+const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv']);
+const EXPORT_UPLOAD_MIME_TYPES = new Set([
+  'text/html',
+  'application/octet-stream',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/json',
+  'text/csv',
+  'application/csv',
+  'application/vnd.ms-excel',
+  '',
+]);
 const rateBuckets = new Map();
 
 async function getUser(req, store) {
@@ -134,8 +144,8 @@ function securityHeaders(_req, res, next) {
 
 function uploadFileFilter(_req, file, callback) {
   const extension = path.extname(file.originalname || '').toLowerCase();
-  if (!HTML_UPLOAD_EXTENSIONS.has(extension) || !HTML_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
-    return callback(new Error('Only Instagram HTML export files are allowed.'));
+  if (!EXPORT_UPLOAD_EXTENSIONS.has(extension) || !EXPORT_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
+    return callback(new Error('Upload Instagram HTML files or Pinterest export ZIP/JSON/CSV files.'));
   }
   return callback(null, true);
 }
@@ -561,12 +571,15 @@ function createApp({ store, config = {} }) {
   app.post('/api/imports', importRateLimit, upload.array('exportFiles', 20), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
-    if (!files.length) return res.status(400).json({ error: 'Upload saved_posts.html and optionally saved_collections.html.' });
+    if (!files.length) return res.status(400).json({ error: 'Upload Instagram HTML files or your Pinterest export ZIP.' });
 
-    const parsed = parseInstagramExport(files);
+    const parsed = await parseImportExport(files);
+    if (!parsed.items.length) {
+      return res.status(400).json({ error: 'No saves were found in those files. Upload Instagram saved-post HTML files or the Pinterest export ZIP.' });
+    }
     const importEntry = await store.createImport({
       userId: req.user.id,
-      source: 'instagram-export',
+      source: parsed.source || 'user-export',
       mode: 'export',
       fileNames: files.map((file) => file.originalname),
     });
@@ -646,7 +659,7 @@ function createApp({ store, config = {} }) {
   }));
 
   app.use((error, _req, res, _next) => {
-    const statusCode = error.statusCode || (error instanceof multer.MulterError || /Only Instagram HTML export/.test(error.message) ? 400 : 500);
+    const statusCode = error.statusCode || (error instanceof multer.MulterError || /Upload Instagram HTML/.test(error.message) ? 400 : 500);
     if (statusCode >= 500) console.error(error);
     res.status(statusCode).json({ error: error.message });
   });

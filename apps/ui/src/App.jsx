@@ -87,6 +87,93 @@ const HERO_PLATFORMS = [
   { name: 'YouTube', src: '/platforms/youtube.svg', bg: '#ff0033' },
 ];
 
+const KEY_SETUP_OPTIONS = {
+  openrouter_all: {
+    label: 'OpenRouter - recommended',
+    shortLabel: 'OpenRouter',
+    help: 'Best option. One OpenRouter key powers summaries, image/video reading, and smart search. Add $1-$3 credits in OpenRouter before indexing.',
+    credentials: (options) => [
+      {
+        purpose: 'text',
+        provider: 'openrouter',
+        model: options?.defaultAppTextModel || 'deepseek/deepseek-v4-pro',
+      },
+      {
+        purpose: 'media',
+        provider: 'openrouter',
+        model: options?.defaultAppMediaModel || 'google/gemini-3.1-flash-lite-preview',
+      },
+      {
+        purpose: 'embedding',
+        provider: 'openrouter',
+        model: options?.defaultEmbeddingModel || 'openai/text-embedding-3-small',
+      },
+    ],
+  },
+  gemini: {
+    label: 'Gemini API key',
+    shortLabel: 'Gemini',
+    help: 'Good for reading images/videos and basic summaries. It does not enable smart semantic search by itself.',
+    credentials: (options) => [
+      {
+        purpose: 'text',
+        provider: 'gemini',
+        model: options?.textProviders?.gemini?.defaultModel || 'gemini-1.5-flash',
+      },
+      {
+        purpose: 'media',
+        provider: 'gemini',
+        model: options?.mediaProviders?.gemini?.defaultModel || 'gemini-1.5-flash',
+      },
+    ],
+  },
+  openai: {
+    label: 'OpenAI API key',
+    shortLabel: 'OpenAI',
+    help: 'Works for text summaries and tags only. Use OpenRouter if you want one simple setup for everything.',
+    credentials: (options) => [
+      {
+        purpose: 'text',
+        provider: 'openai',
+        model: options?.textProviders?.openai?.defaultModel || 'gpt-4o-mini',
+      },
+    ],
+  },
+  anthropic: {
+    label: 'Anthropic Claude key',
+    shortLabel: 'Anthropic',
+    help: 'Works for text summaries and tags only.',
+    credentials: (options) => [
+      {
+        purpose: 'text',
+        provider: 'anthropic',
+        model: options?.textProviders?.anthropic?.defaultModel || 'claude-3-5-haiku-latest',
+      },
+    ],
+  },
+  deepseek: {
+    label: 'DeepSeek key',
+    shortLabel: 'DeepSeek',
+    help: 'Works for text summaries and tags only.',
+    credentials: (options) => [
+      {
+        purpose: 'text',
+        provider: 'deepseek',
+        model: options?.textProviders?.deepseek?.defaultModel || 'deepseek-chat',
+      },
+    ],
+  },
+};
+
+const PROVIDER_DISPLAY_LABELS = {
+  openrouter: 'OpenRouter',
+  gemini: 'Gemini',
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  deepseek: 'DeepSeek',
+  glm: 'Z.ai',
+};
+
 function normalizeStatus(status = 'queued') {
   return String(status).startsWith('paused') ? 'paused' : status;
 }
@@ -198,6 +285,7 @@ function RotatingPlatformLogo() {
 function getRouteFromHash() {
   const hash = window.location.hash || '';
   if (hash === '#app' || hash.startsWith('#app?')) return 'app';
+  if (window.location.hash === '#login') return 'login';
   if (window.location.hash === '#how-to-use') return 'how-to-use';
   if (window.location.hash === '#terms') return 'terms';
   if (window.location.hash === '#privacy') return 'privacy';
@@ -230,6 +318,56 @@ function itemIdFromHash() {
   return new URLSearchParams(hash.slice('#app?'.length)).get('item') || '';
 }
 
+function dashboardTabFromHash() {
+  const hash = window.location.hash || '';
+  if (!hash.startsWith('#app?')) return 'library';
+  const tab = new URLSearchParams(hash.slice('#app?'.length)).get('tab');
+  return ['library', 'graph', 'upload', 'settings'].includes(tab) ? tab : 'library';
+}
+
+function cleanAuthCallbackUrl() {
+  const url = new URL(window.location.href);
+  let changed = false;
+  for (const key of ['code', 'state', 'error', 'error_code', 'error_description']) {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      changed = true;
+    }
+  }
+  if (url.pathname === '/auth/callback') {
+    url.pathname = '/';
+    url.hash = '#app';
+    changed = true;
+  }
+  if (changed) {
+    window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash || '#app'}`);
+  }
+}
+
+async function startGoogleSignIn() {
+  if (!supabase) throw new Error('Google login is not configured yet.');
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: `${window.location.origin}/#app`,
+      queryParams: {
+        prompt: 'select_account',
+      },
+    },
+  });
+  if (error) throw error;
+}
+
+function keyValidationMessage(setup, apiKey) {
+  const value = String(apiKey || '').trim();
+  if (!value) return 'Paste your API key first.';
+  if (setup === 'openrouter_all' && !value.startsWith('sk-or-')) return 'This does not look like an OpenRouter key. OpenRouter keys usually start with sk-or-.';
+  if (setup === 'gemini' && !value.startsWith('AIza')) return 'This does not look like a Gemini API key. Gemini keys usually start with AIza.';
+  if (setup === 'anthropic' && !value.startsWith('sk-ant-')) return 'This does not look like an Anthropic key. Anthropic keys usually start with sk-ant-.';
+  if ((setup === 'openai' || setup === 'deepseek') && !value.startsWith('sk-')) return 'This does not look like the right key. This provider usually gives keys starting with sk-.';
+  return '';
+}
+
 function rememberPendingSave() {
   const pending = pendingSaveFromHash();
   if (!pending) return;
@@ -244,7 +382,7 @@ export default function App() {
 
   const navigate = useCallback((nextRoute) => {
     setRoute(nextRoute);
-    window.location.hash = ['app', 'how-to-use', 'terms', 'privacy', 'help', 'security', 'data-deletion', 'cookies'].includes(nextRoute) ? nextRoute : '';
+    window.location.hash = ['app', 'login', 'how-to-use', 'terms', 'privacy', 'help', 'security', 'data-deletion', 'cookies'].includes(nextRoute) ? nextRoute : '';
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
@@ -258,6 +396,7 @@ export default function App() {
   }, []);
 
   if (route === 'app') return <Dashboard onBack={() => navigate('landing')} onOpenHowTo={() => navigate('how-to-use')} />;
+  if (route === 'login') return <LoginPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />;
   if (route === 'how-to-use') return <HowToUsePage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />;
   if (route === 'terms') return <LegalPage type="terms" onBack={() => navigate('landing')} />;
   if (route === 'privacy') return <LegalPage type="privacy" onBack={() => navigate('landing')} />;
@@ -268,6 +407,7 @@ export default function App() {
   return (
     <Landing
       onOpenApp={() => navigate('app')}
+      onOpenLogin={() => navigate('login')}
       onOpenHowTo={() => navigate('how-to-use')}
       onOpenTerms={() => navigate('terms')}
       onOpenPrivacy={() => navigate('privacy')}
@@ -279,7 +419,228 @@ export default function App() {
   );
 }
 
-function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHelp, onOpenSecurity, onOpenDataDeletion, onOpenCookies }) {
+function LoginPage({ onBack, onOpenApp }) {
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [profileRequired, setProfileRequired] = useState(false);
+  const [profileForm, setProfileForm] = useState({ username: '', avatarUrl: '' });
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(Boolean(supabase));
+  const [error, setError] = useState('');
+
+  const applyProfileState = useCallback((nextProfile, required) => {
+    setProfile(nextProfile || null);
+    setProfileRequired(Boolean(required));
+    if (nextProfile) {
+      setProfileForm({
+        username: nextProfile.username || '',
+        avatarUrl: nextProfile.avatarUrl || '',
+      });
+    }
+  }, []);
+
+  const loadProfile = useCallback(async () => {
+    if (!supabase) return;
+    const { data } = await supabase.auth.getSession();
+    setSession(data.session);
+    setApiAccessToken(data.session?.access_token);
+    if (!data.session) return;
+    const profileBody = await getProfile();
+    applyProfileState(profileBody.profile, profileBody.required);
+    cleanAuthCallbackUrl();
+  }, [applyProfileState]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve()
+      .then(loadProfile)
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    if (!supabase) return () => {
+      cancelled = true;
+    };
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setApiAccessToken(nextSession?.access_token);
+      if (nextSession) {
+        loadProfile().catch((err) => setError(err.message));
+      } else {
+        setProfile(null);
+        setProfileRequired(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      listener.subscription.unsubscribe();
+    };
+  }, [loadProfile]);
+
+  const handleGoogleSignIn = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await startGoogleSignIn();
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  };
+
+  const handleAvatarFile = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setError('Profile picture must be PNG, JPEG, or WebP.');
+      return;
+    }
+    if (file.size > 250 * 1024) {
+      setError('Profile picture must be smaller than 250 KB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setProfileForm((current) => ({ ...current, avatarUrl: String(reader.result || '') }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleProfileSave = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const body = await saveProfile(profileForm);
+      applyProfileState(body.profile, false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const steps = [
+    ['1', 'Continue with Google', 'Use the same Google account every time.'],
+    ['2', 'Choose a username', 'This keeps your private library tied to your account.'],
+    ['3', 'Import your saves', 'Upload Instagram HTML or Pinterest export files from the Add saves page.'],
+  ];
+
+  return (
+    <div className="min-h-screen bg-black text-foreground">
+      <div className="grid-bg radial-fade pointer-events-none fixed inset-0 opacity-35" />
+      <header className="relative z-10 border-b border-white/10 bg-black/85 px-5 py-4 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
+          <button type="button" onClick={onBack} className="flex items-center gap-3 transition hover:opacity-80">
+            <ArrowLeft className="h-5 w-5 text-muted-foreground" />
+            <BrandLogo className="h-12 w-40" />
+          </button>
+          <button type="button" onClick={onOpenApp} className="rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5">
+            Open app
+          </button>
+        </div>
+      </header>
+
+      <main className="relative z-10 mx-auto grid min-h-[calc(100vh-5rem)] max-w-7xl items-center gap-10 px-5 py-14 lg:grid-cols-[1fr_0.82fr]">
+        <section>
+          <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Account access</div>
+          <h1 className="mt-4 max-w-3xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
+            Sign in before you import.
+          </h1>
+          <p className="mt-6 max-w-xl text-lg leading-8 text-muted-foreground">
+            You can visit IScraper without logging in, but your saved library, imports, API keys, graph, and indexing are private account features.
+          </p>
+          <div className="mt-10 grid gap-3">
+            {steps.map(([number, title, copy]) => (
+              <div key={title} className="flex gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary font-display text-lg font-bold text-primary-foreground">{number}</span>
+                <div>
+                  <h2 className="font-display text-xl font-bold tracking-tight">{title}</h2>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{copy}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="glow-ring rounded-[2rem] border border-white/10 bg-black p-6 shadow-2xl shadow-black/50 md:p-8">
+          {loading ? (
+            <div className="grid min-h-80 place-items-center text-muted-foreground">Checking login...</div>
+          ) : !supabase ? (
+            <div>
+              <Lock className="h-8 w-8 text-primary" />
+              <h2 className="mt-5 font-display text-3xl font-bold tracking-tight">Login is not configured locally.</h2>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">Production uses Supabase Google login. Open the app to continue in local mode.</p>
+              <button type="button" onClick={onOpenApp} className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground">
+                Open app
+              </button>
+            </div>
+          ) : !session ? (
+            <div>
+              <Lock className="h-8 w-8 text-primary" />
+              <h2 className="mt-5 font-display text-3xl font-bold tracking-tight">Welcome back.</h2>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">Continue with Google to open your private IScraper library.</p>
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                disabled={busy}
+                className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground disabled:opacity-60"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Continue with Google
+              </button>
+              <p className="mt-4 text-xs leading-5 text-muted-foreground">By continuing, you agree to the Terms of Service and Privacy Policy.</p>
+            </div>
+          ) : profileRequired ? (
+            <form onSubmit={handleProfileSave}>
+              <h2 className="font-display text-3xl font-bold tracking-tight">Choose your username</h2>
+              <p className="mt-2 text-sm text-muted-foreground">One last step before importing. Usernames are unique.</p>
+              <label className="mt-6 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Username</label>
+              <input
+                value={profileForm.username}
+                onChange={(event) => setProfileForm((current) => ({ ...current, username: event.target.value.toLowerCase() }))}
+                placeholder="your_username"
+                pattern="[a-z0-9_]{3,24}"
+                className="mt-2 w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+                required
+              />
+              <label className="mt-5 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Profile picture optional</label>
+              <div className="mt-2 flex items-center gap-3">
+                <div className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-white/5">
+                  {profileForm.avatarUrl ? <img src={profileForm.avatarUrl} alt="" className="h-full w-full object-cover" /> : <Brain className="h-5 w-5 text-muted-foreground" />}
+                </div>
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleAvatarFile} className="min-w-0 text-xs text-muted-foreground file:mr-3 file:rounded-full file:border-0 file:bg-primary file:px-3 file:py-2 file:text-xs file:font-semibold file:text-primary-foreground" />
+              </div>
+              <button disabled={busy} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Save profile
+              </button>
+            </form>
+          ) : (
+            <div>
+              <CheckCircle2 className="h-9 w-9 text-primary" />
+              <h2 className="mt-5 font-display text-3xl font-bold tracking-tight">You are signed in.</h2>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                {profile?.username ? `Signed in as @${profile.username}.` : 'Your session is ready.'}
+              </p>
+              <button type="button" onClick={onOpenApp} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground">
+                Go to library <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+          {error && <Banner type="error">{error}</Banner>}
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHelp, onOpenSecurity, onOpenDataDeletion, onOpenCookies }) {
   const root = useRef(null);
   const introRef = useRef(null);
   const cursorRef = useRef(null);
@@ -575,13 +936,22 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHel
             <a href="#feedback" onClick={(event) => scrollToSection(event, '#feedback')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Feedback</a>
             <button type="button" onClick={onOpenHowTo} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">How to Use</button>
           </nav>
-          <button
-            type="button"
-            onClick={onOpenApp}
-            className="nav-item pointer-events-auto group inline-flex items-center gap-2 justify-self-end rounded-full bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow-[0_16px_55px_rgba(164,255,18,0.22)] transition hover:scale-[1.03]"
-          >
-            Open library <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
-          </button>
+          <div className="nav-item pointer-events-auto flex items-center gap-2 justify-self-end">
+            <button
+              type="button"
+              onClick={onOpenLogin}
+              className="inline-flex rounded-full border border-white/15 bg-black/75 px-4 py-2 text-sm font-bold text-foreground shadow-[0_16px_55px_rgba(0,0,0,0.22)] backdrop-blur transition hover:bg-white/10"
+            >
+              Log in
+            </button>
+            <button
+              type="button"
+              onClick={onOpenApp}
+              className="group hidden items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow-[0_16px_55px_rgba(164,255,18,0.22)] transition hover:scale-[1.03] sm:inline-flex"
+            >
+              Open library <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -626,10 +996,13 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHel
             <div className="hero-fade flex flex-wrap items-center gap-4">
               <button
                 type="button"
-                onClick={onOpenApp}
+                onClick={onOpenLogin}
                 className="glow-ring group inline-flex items-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
               >
-                Open my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+                Log in with Google <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+              </button>
+              <button type="button" onClick={onOpenApp} className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
+                Visit library
               </button>
               <button type="button" onClick={onOpenHowTo} className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
                 <FileText className="h-4 w-4" /> How to use
@@ -941,10 +1314,154 @@ const HOW_TO_STEPS = [
   },
 ];
 
+const OPENROUTER_STEPS = [
+  {
+    image: '/how-to/openrouter-01.png',
+    title: 'Open OpenRouter',
+    copy: <>Open your browser and go to <a href="https://openrouter.ai" target="_blank" rel="noreferrer" className="font-semibold text-primary underline underline-offset-4">openrouter.ai</a>.</>,
+    url: 'openrouter.ai',
+  },
+  {
+    image: '/how-to/openrouter-02.png',
+    title: 'Click Get API Key',
+    copy: 'On the OpenRouter homepage, click Get API Key.',
+  },
+  {
+    image: '/how-to/openrouter-03.png',
+    title: 'Use the API key button',
+    copy: 'Click the Get API Key button in the hero section.',
+  },
+  {
+    image: '/how-to/openrouter-04.png',
+    title: 'Sign in',
+    copy: 'Sign in with Google, GitHub, MetaMask, or email. If you do not have an account, create one.',
+  },
+  {
+    image: '/how-to/openrouter-05.png',
+    title: 'Open API Keys',
+    copy: 'After login, you should land on API Keys. If not, open API Keys from the left sidebar.',
+  },
+  {
+    image: '/how-to/openrouter-06.png',
+    title: 'Create a new key',
+    copy: 'Click New Key.',
+  },
+  {
+    image: '/how-to/openrouter-07.png',
+    title: 'Name the key',
+    copy: 'Give it any name you like. Leave the credit limit blank unless you want a hard spending limit. Then click Create.',
+  },
+  {
+    image: '/how-to/openrouter-08.png',
+    title: 'Copy the key',
+    copy: 'Copy the key now. You will not be able to see it again after closing this window.',
+  },
+  {
+    image: '/how-to/openrouter-09.png',
+    title: 'Save it in IScraper',
+    copy: 'Go back to IScraper, open Keys & privacy, choose OpenRouter, paste the key once, and save it. IScraper chooses the right models automatically.',
+  },
+  {
+    image: '/how-to/openrouter-10.png',
+    title: 'Open Credits',
+    copy: 'Back in OpenRouter, use the left sidebar and click Credits.',
+  },
+  {
+    image: '/how-to/openrouter-11.png',
+    title: 'Add credits',
+    copy: 'Click Add Credits.',
+  },
+  {
+    image: '/how-to/openrouter-12.png',
+    title: 'Add $1-$3',
+    copy: 'Add a payment method and buy 1 to 3 dollars of credits. That is enough to start testing.',
+  },
+];
+
+const PINTEREST_STEPS = [
+  {
+    image: '/how-to/pinterest-01.png',
+    title: 'Open Pinterest',
+    copy: 'Open Pinterest while signed in to the account you want to export.',
+  },
+  {
+    image: '/how-to/pinterest-02.png',
+    title: 'Open settings',
+    copy: 'Click the settings gear in the left sidebar.',
+  },
+  {
+    image: '/how-to/pinterest-03.png',
+    title: 'Go to Settings',
+    copy: 'In Settings & Support, click Settings.',
+  },
+  {
+    image: '/how-to/pinterest-04.png',
+    title: 'Open Privacy and data',
+    copy: 'Find the Privacy and data section in Pinterest settings.',
+  },
+  {
+    image: '/how-to/pinterest-05.png',
+    title: 'Find Request your data',
+    copy: 'Scroll until you see Request your data.',
+  },
+  {
+    image: '/how-to/pinterest-06.png',
+    title: 'Click Request data',
+    copy: 'Click Request data. Pinterest will prepare a copy of your account data.',
+  },
+  {
+    image: '/how-to/pinterest-07.png',
+    title: 'Confirm the request',
+    copy: 'Pinterest will show that the request was received and the next steps will come by email.',
+  },
+  {
+    image: '/how-to/pinterest-08.png',
+    title: 'Check your email',
+    copy: 'Pinterest sends an email saying your data request has been received. The download email comes later.',
+    wide: true,
+    mockEmail: true,
+  },
+  {
+    image: '/how-to/pinterest-09.png',
+    title: 'Open the ready email',
+    copy: 'When Pinterest emails you that your data is ready, open the email and click the red button to view your data.',
+    wide: true,
+  },
+  {
+    image: '/how-to/pinterest-10.png',
+    title: 'Enter your email',
+    copy: 'Type the same email address you used for Pinterest, then click Submit.',
+    wide: true,
+  },
+  {
+    image: '/how-to/pinterest-11.png',
+    title: 'Choose one verification option',
+    copy: 'Choose any 1 option from the two: log in with Google or email yourself a one-time verification code. Then tick the SendSafely terms checkbox.',
+  },
+  {
+    image: '/how-to/pinterest-12.png',
+    title: 'Open the secure message',
+    copy: 'After verification, SendSafely shows your secure message and the attached Pinterest export file.',
+    wide: true,
+  },
+  {
+    image: '/how-to/pinterest-13.png',
+    title: 'Download pinterest.zip',
+    copy: 'Click the download icon beside pinterest.zip and save the file somewhere easy to find.',
+    wide: true,
+  },
+  {
+    image: '/how-to/pinterest-14.png',
+    title: 'Upload your files here',
+    copy: 'Open IScraper, go to Add saves, and upload your Pinterest ZIP file there.',
+    wide: true,
+  },
+];
+
 const HOW_TO_GUIDES = [
   { key: 'instagram', icon: Upload, title: 'Instagram export', copy: 'Get your saved posts file from Instagram and upload it into IScraper.', status: 'Guide ready' },
-  { key: 'api-keys', icon: KeyRound, title: 'API keys', copy: 'Add your own AI keys for summaries, media reading, and semantic search.', status: 'Coming soon' },
-  { key: 'pinterest', icon: ExternalLink, title: 'Pinterest export', copy: 'Bring saved pins into your library when Pinterest import support is ready.', status: 'Coming soon' },
+  { key: 'api-keys', icon: KeyRound, title: 'API keys', copy: 'Method 1: use OpenRouter for summaries, tags, and semantic search.', status: 'Guide ready' },
+  { key: 'pinterest', icon: ExternalLink, title: 'Pinterest export', copy: 'Request and download your Pinterest data export.', status: 'Guide ready' },
   { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Coming soon: save pages, use Lens search, and open results from your browser.', status: 'Coming soon' },
 ];
 
@@ -952,6 +1469,10 @@ function HowToUsePage({ onBack, onOpenApp }) {
   const pageRef = useRef(null);
   const [activeGuide, setActiveGuide] = useState(null);
   const activeGuideDetails = HOW_TO_GUIDES.find((guide) => guide.key === activeGuide);
+  const openKeysPrivacy = () => {
+    window.location.hash = '#app?tab=settings';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   useEffect(() => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1070,12 +1591,12 @@ function HowToUsePage({ onBack, onOpenApp }) {
             <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Choose a guide</div>
             <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">Click Instagram export to see the import steps.</h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-              We will add the API key, Pinterest, and extension walkthroughs here as those flows are finalized.
+              We will add Pinterest and extension walkthroughs here as those flows are finalized.
             </p>
           </section>
         )}
 
-        {activeGuide && activeGuide !== 'instagram' && activeGuide !== 'extension' && (
+        {activeGuide && activeGuide !== 'instagram' && activeGuide !== 'api-keys' && activeGuide !== 'pinterest' && activeGuide !== 'extension' && (
           <section className="howto-reveal rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 md:p-10">
             <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">{activeGuideDetails?.status}</div>
             <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">{activeGuideDetails?.title}</h2>
@@ -1083,6 +1604,119 @@ function HowToUsePage({ onBack, onOpenApp }) {
               This guide will live here next. For now, use the Help Center or email us if you get stuck.
             </p>
           </section>
+        )}
+
+        {activeGuide === 'api-keys' && (
+          <>
+            <section className="howto-reveal mb-6">
+              <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">API keys / Method 1</div>
+              <h2 className="mt-3 font-display text-3xl font-bold tracking-tight md:text-5xl">Use OpenRouter with IScraper.</h2>
+            </section>
+
+            <div className="space-y-6 md:space-y-0">
+              {OPENROUTER_STEPS.map((step, index) => (
+                <article
+                  key={step.image}
+                  data-reverse={index % 2 === 1}
+                  className="howto-step grid min-h-[calc(100vh-5rem)] items-center gap-8 py-10 md:grid-cols-2 md:gap-14 md:py-16"
+                >
+                  <div className={`howto-shot ${index % 2 === 1 ? 'md:order-2' : ''}`}>
+                    <div className="mx-auto max-w-[22rem] overflow-hidden rounded-[1.75rem] shadow-2xl shadow-black/50 md:max-w-[42rem]">
+                      <img src={step.image} alt={`Step ${index + 1}: ${step.title}`} className="max-h-[68vh] w-full object-contain" loading={index < 2 ? 'eager' : 'lazy'} />
+                    </div>
+                    {step.url && (
+                      <div className="mx-auto mt-4 flex max-w-[42rem] items-center gap-3 rounded-full border border-white/10 bg-white/[0.06] px-4 py-3 font-mono text-sm text-foreground shadow-xl shadow-black/30">
+                        <span className="h-2.5 w-2.5 rounded-full bg-primary" />
+                        <span className="text-muted-foreground">https://</span>
+                        <span className="font-semibold">{step.url}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className={`howto-copy flex flex-col justify-center p-2 md:p-10 ${index % 2 === 1 ? 'md:order-1' : ''}`}>
+                    <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-primary font-display text-2xl font-bold text-primary-foreground">
+                      {index + 1}
+                    </div>
+                    <h2 className="font-display text-3xl font-bold tracking-tight md:text-5xl">{step.title}</h2>
+                    <p className="mt-5 max-w-xl text-lg leading-8 text-muted-foreground">{step.copy}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <section className="howto-reveal mt-14 rounded-[2rem] border border-primary/30 bg-primary p-6 text-black md:p-10">
+              <h2 className="font-display text-4xl font-bold tracking-tight">OpenRouter alternatives</h2>
+              <p className="mt-3 max-w-2xl text-base leading-7">
+                You can also use{' '}
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="font-bold underline underline-offset-4">Gemini</a>,{' '}
+                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="font-bold underline underline-offset-4">OpenAI</a>,{' '}
+                <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="font-bold underline underline-offset-4">Anthropic</a>, or{' '}
+                <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer" className="font-bold underline underline-offset-4">DeepSeek</a>{' '}
+                keys. They follow a similar process: create an account, create an API key, add credits or billing if needed, then paste the key in IScraper.
+              </p>
+              <button type="button" onClick={openKeysPrivacy} className="mt-6 inline-flex items-center gap-3 rounded-full bg-black px-6 py-4 font-semibold text-white transition hover:scale-[1.02]">
+                Open Keys & privacy <ArrowRight className="h-5 w-5" />
+              </button>
+            </section>
+          </>
+        )}
+
+        {activeGuide === 'pinterest' && (
+          <>
+            <section className="howto-reveal mb-6">
+              <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Pinterest export</div>
+              <h2 className="mt-3 font-display text-3xl font-bold tracking-tight md:text-5xl">Request and download your Pinterest data.</h2>
+            </section>
+
+            <div className="space-y-6 md:space-y-0">
+              {PINTEREST_STEPS.map((step, index) => (
+                <article
+                  key={step.image}
+                  data-reverse={index % 2 === 1}
+                  className="howto-step grid min-h-[calc(100vh-5rem)] items-center gap-8 py-10 md:grid-cols-2 md:gap-14 md:py-16"
+                >
+                  <div className={`howto-shot ${index % 2 === 1 ? 'md:order-2' : ''}`}>
+                    {step.mockEmail ? (
+                      <div className="mx-auto w-full max-w-[46rem] rounded-2xl border border-white/10 bg-white p-4 text-black shadow-2xl shadow-black/50">
+                        <div className="flex items-center gap-4 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-4">
+                          <span className="h-4 w-4 shrink-0 rounded-sm border border-zinc-300" />
+                          <span className="text-zinc-400">☆</span>
+                          <span className="shrink-0 font-bold">Pinterest</span>
+                          <span className="min-w-0 flex-1 truncate text-sm">
+                            <strong>Your data request has been received!</strong>
+                            <span className="text-zinc-600"> - Your data request has been received and is being processed. You will rec...</span>
+                          </span>
+                          <span className="shrink-0 font-semibold">02:25</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={`mx-auto overflow-hidden rounded-[1.75rem] shadow-2xl shadow-black/50 ${
+                        step.wide ? 'max-w-[28rem] md:max-w-[58rem]' : 'max-w-[22rem] md:max-w-[42rem]'
+                      }`}>
+                        <img src={step.image} alt={`Step ${index + 1}: ${step.title}`} className={`${step.wide ? 'max-h-[42vh]' : 'max-h-[68vh]'} w-full object-contain`} loading={index < 2 ? 'eager' : 'lazy'} />
+                      </div>
+                    )}
+                  </div>
+                  <div className={`howto-copy flex flex-col justify-center p-2 md:p-10 ${index % 2 === 1 ? 'md:order-1' : ''}`}>
+                    <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-primary font-display text-2xl font-bold text-primary-foreground">
+                      {index + 1}
+                    </div>
+                    <h2 className="font-display text-3xl font-bold tracking-tight md:text-5xl">{step.title}</h2>
+                    <p className="mt-5 max-w-xl text-lg leading-8 text-muted-foreground">{step.copy}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <section className="howto-reveal mt-14 rounded-[2rem] border border-primary/30 bg-primary p-6 text-black md:p-10">
+              <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-full bg-white">
+                <img src="/platforms/pinterest.svg" alt="" className="h-8 w-8" />
+              </div>
+              <h2 className="font-display text-4xl font-bold tracking-tight">Upload your files here</h2>
+              <p className="mt-3 max-w-2xl text-base leading-7">
+                When Pinterest sends your download, upload the ZIP in Add saves. IScraper accepts Pinterest export files and Instagram export files.
+              </p>
+            </section>
+          </>
         )}
 
         {activeGuide === 'extension' && (
@@ -1514,7 +2148,7 @@ function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, ico
 }
 
 function Dashboard({ onBack, onOpenHowTo }) {
-  const [tab, setTab] = useState('library');
+  const [tab, setTab] = useState(() => dashboardTabFromHash());
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [collectionFilter, setCollectionFilter] = useState('all');
@@ -1526,9 +2160,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
   const [credentials, setCredentials] = useState([]);
   const [credentialOptions, setCredentialOptions] = useState(null);
   const [credentialForm, setCredentialForm] = useState({
-    purpose: 'text',
-    provider: 'openrouter',
-    model: 'deepseek/deepseek-v4-pro',
+    setup: 'openrouter_all',
     apiKey: '',
   });
   const [session, setSession] = useState(null);
@@ -1543,6 +2175,22 @@ function Dashboard({ onBack, onOpenHowTo }) {
   const pendingSaveHandledRef = useRef(false);
   const pendingItemHandledRef = useRef(false);
   const authEnabled = Boolean(supabase);
+  const signedIn = !authEnabled || Boolean(session);
+  const canUsePrivateActions = signedIn && (!authEnabled || !profileRequired);
+
+  const requireSignIn = useCallback((action = 'do this') => {
+    if (!authEnabled || session) return true;
+    setError(`Sign in with Google to ${action}.`);
+    setNotice('');
+    return false;
+  }, [authEnabled, session]);
+
+  const requireProfile = useCallback((action = 'do this') => {
+    if (!authEnabled || !session || !profileRequired) return true;
+    setError(`Choose a username before you ${action}.`);
+    setNotice('');
+    return false;
+  }, [authEnabled, profileRequired, session]);
 
   const loadItems = useCallback(async () => {
     const body = await getItems();
@@ -1593,14 +2241,27 @@ function Dashboard({ onBack, onOpenHowTo }) {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setApiAccessToken(data.session?.access_token);
-      if (data.session) initialize();
-      else setLoading(false);
+      if (data.session) {
+        initialize().finally(() => cleanAuthCallbackUrl());
+      } else {
+        setItems([]);
+        setCredentials([]);
+        setLoading(false);
+      }
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       setApiAccessToken(nextSession?.access_token);
-      if (nextSession) initialize();
+      if (nextSession) {
+        initialize().finally(() => cleanAuthCallbackUrl());
+      } else {
+        setItems([]);
+        setCredentials([]);
+        setProfile(null);
+        setProfileRequired(false);
+        setLoading(false);
+      }
     });
 
     return () => {
@@ -1646,13 +2307,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
     setBusy(true);
     setError('');
     try {
-      const { error: signInError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/#app`,
-        },
-      });
-      if (signInError) throw signInError;
+      await startGoogleSignIn();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1697,6 +2352,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
 
   const handleSearch = async (event) => {
     event?.preventDefault();
+    if (!requireSignIn('search your library')) return;
     setBusy(true);
     setError('');
     try {
@@ -1715,6 +2371,8 @@ function Dashboard({ onBack, onOpenHowTo }) {
 
   const handleSaveLink = useCallback(async (event, override = null) => {
     event?.preventDefault();
+    if (!requireSignIn('save links')) return;
+    if (!requireProfile('save links')) return;
     const payload = override || linkForm;
     if (!String(payload.url || '').trim()) {
       setError('Paste a link first.');
@@ -1735,7 +2393,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
     } finally {
       setBusy(false);
     }
-  }, [linkForm, loadItems]);
+  }, [linkForm, loadItems, requireProfile, requireSignIn]);
 
   useEffect(() => {
     if (pendingSaveHandledRef.current || loading || (authEnabled && (!session || profileRequired))) return;
@@ -1780,8 +2438,10 @@ function Dashboard({ onBack, onOpenHowTo }) {
   }, [authEnabled, loading, profileRequired, session]);
 
   const handleImport = async () => {
+    if (!requireSignIn('import saves')) return;
+    if (!requireProfile('import saves')) return;
     if (!files.length) {
-      setError('Upload saved_posts.html and optionally saved_collections.html.');
+      setError('Upload Instagram HTML files or your Pinterest export ZIP.');
       return;
     }
     setBusy(true);
@@ -1801,6 +2461,8 @@ function Dashboard({ onBack, onOpenHowTo }) {
   };
 
   const handleRestart = async () => {
+    if (!requireSignIn('start indexing')) return;
+    if (!requireProfile('start indexing')) return;
     setBusy(true);
     setError('');
     setNotice('');
@@ -1816,6 +2478,8 @@ function Dashboard({ onBack, onOpenHowTo }) {
   };
 
   const handleUpdateReview = async (item, updates) => {
+    if (!requireSignIn('edit reviewed saves')) return;
+    if (!requireProfile('edit reviewed saves')) return;
     setBusy(true);
     setError('');
     setNotice('');
@@ -1833,6 +2497,8 @@ function Dashboard({ onBack, onOpenHowTo }) {
   };
 
   const handleApproveReview = async (item, updates = {}) => {
+    if (!requireSignIn('index saves')) return;
+    if (!requireProfile('index saves')) return;
     setBusy(true);
     setError('');
     setNotice('');
@@ -1851,6 +2517,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
   };
 
   const openDetail = async (item) => {
+    if (!requireSignIn('open saved details')) return;
     setError('');
     try {
       const body = await getItem(item.id);
@@ -1862,101 +2529,37 @@ function Dashboard({ onBack, onOpenHowTo }) {
 
   const saveCredential = async (event) => {
     event.preventDefault();
+    if (!requireSignIn('save API keys')) return;
+    if (!requireProfile('save API keys')) return;
+    const selectedSetup = KEY_SETUP_OPTIONS[credentialForm.setup] || KEY_SETUP_OPTIONS.openrouter_all;
+    const plannedCredentials = selectedSetup.credentials(credentialOptions);
+    const validationMessage = keyValidationMessage(credentialForm.setup, credentialForm.apiKey);
+    if (validationMessage) {
+      setError(validationMessage);
+      return;
+    }
     setBusy(true);
     setError('');
     setNotice('');
-    let saved = null;
+    const savedCredentials = [];
     try {
-      saved = await saveProviderCredential(credentialForm);
-      await testProviderCredential(saved.credential.id);
-      setCredentialForm((current) => ({ ...current, apiKey: '' }));
+      for (const entry of plannedCredentials) {
+        const saved = await saveProviderCredential({
+          ...entry,
+          apiKey: credentialForm.apiKey,
+        });
+        savedCredentials.push(saved.credential);
+      }
       await loadControls();
-      setNotice(`Connected. Your ${saved.credential.provider} key works.`);
+      setCredentialForm((current) => ({ ...current, apiKey: '' }));
+      setNotice(`${selectedSetup.shortLabel} key saved. IScraper will use our default models automatically.`);
     } catch (err) {
-      setError(saved ? `Key saved, but test failed: ${err.message}` : err.message);
+      setError(savedCredentials.length ? `Some key settings were saved, but one failed: ${err.message}` : err.message);
       await loadControls().catch(() => {});
     } finally {
       setBusy(false);
     }
   };
-
-  const providerChoices = useMemo(() => {
-    if (!credentialOptions) return [];
-    if (credentialForm.purpose === 'media') return Object.entries(credentialOptions.mediaProviders || {});
-    if (credentialForm.purpose === 'embedding') return Object.entries(credentialOptions.embeddingProviders || {});
-    return Object.entries(credentialOptions.textProviders || {});
-  }, [credentialForm.purpose, credentialOptions]);
-
-  const applyPurpose = (purpose) => {
-    const model = purpose === 'media'
-      ? credentialOptions?.defaultAppMediaModel || 'google/gemini-3.1-flash-lite-preview'
-      : purpose === 'embedding'
-        ? credentialOptions?.defaultEmbeddingModel || 'openai/text-embedding-3-small'
-        : credentialOptions?.defaultAppTextModel || 'deepseek/deepseek-v4-pro';
-    setCredentialForm({ purpose, provider: 'openrouter', model, apiKey: '' });
-  };
-
-  const applyProvider = (provider) => {
-    const group = credentialForm.purpose === 'media'
-      ? credentialOptions?.mediaProviders
-      : credentialForm.purpose === 'embedding'
-        ? credentialOptions?.embeddingProviders
-        : credentialOptions?.textProviders;
-    setCredentialForm((current) => ({ ...current, provider, model: group?.[provider]?.defaultModel || current.model }));
-  };
-
-  if (authEnabled && !session) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-black px-6 text-foreground">
-        <div className="glow-ring w-full max-w-md rounded-2xl border border-white/10 bg-black p-8">
-          <BrandLogo className="mb-8 h-16 w-56" />
-          <h1 className="font-display text-4xl font-bold tracking-tight">Open your library</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Sign in with Google before importing. Your saved library stays tied to your private account.</p>
-          <button type="button" onClick={handleGoogleSignIn} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Continue with Google
-          </button>
-          <p className="mt-4 text-xs leading-5 text-muted-foreground">By continuing, you agree to the Terms of Service and Privacy Policy.</p>
-          {error && <Banner type="error">{error}</Banner>}
-          {notice && <Banner>{notice}</Banner>}
-        </div>
-      </div>
-    );
-  }
-
-  if (authEnabled && session && profileRequired) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-black px-6 text-foreground">
-        <form onSubmit={handleProfileSave} className="glow-ring w-full max-w-md rounded-2xl border border-white/10 bg-black p-8">
-          <BrandLogo className="mb-8 h-16 w-56" />
-          <h1 className="font-display text-4xl font-bold tracking-tight">Choose your username</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Required before importing. Usernames are unique, so no two users can claim the same one.</p>
-          <label className="mt-6 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Username</label>
-          <input
-            value={profileForm.username}
-            onChange={(event) => setProfileForm((current) => ({ ...current, username: event.target.value.toLowerCase() }))}
-            placeholder="your_username"
-            pattern="[a-z0-9_]{3,24}"
-            className="mt-2 w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
-            required
-          />
-          <label className="mt-5 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Profile picture optional</label>
-          <div className="mt-2 flex items-center gap-3">
-            <div className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-white/5">
-              {profileForm.avatarUrl ? <img src={profileForm.avatarUrl} alt="" className="h-full w-full object-cover" /> : <Brain className="h-5 w-5 text-muted-foreground" />}
-            </div>
-            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleAvatarFile} className="min-w-0 text-xs text-muted-foreground file:mr-3 file:rounded-full file:border-0 file:bg-primary file:px-3 file:py-2 file:text-xs file:font-semibold file:text-primary-foreground" />
-          </div>
-          <button disabled={busy} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground disabled:opacity-60">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Save profile
-          </button>
-          {error && <Banner type="error">{error}</Banner>}
-          {notice && <Banner>{notice}</Banner>}
-        </form>
-      </div>
-    );
-  }
 
   const navItems = [
     ['library', 'Saved library', Brain],
@@ -1966,8 +2569,8 @@ function Dashboard({ onBack, onOpenHowTo }) {
   ];
 
   return (
-    <div className="flex min-h-screen bg-black text-foreground">
-      <aside ref={sidebarRef} className="hidden w-60 shrink-0 flex-col border-r border-white/5 bg-black md:flex">
+    <div className="flex h-screen overflow-hidden bg-black text-foreground">
+      <aside ref={sidebarRef} className="hidden h-screen w-60 shrink-0 flex-col overflow-hidden border-r border-white/5 bg-black md:flex">
         <button onClick={onBack} className="flex items-center gap-3 border-b border-white/5 px-5 py-4 transition hover:opacity-80">
           <ArrowLeft className="h-4 w-4 text-muted-foreground" />
           <BrandLogo className="h-14 w-40" />
@@ -1975,6 +2578,24 @@ function Dashboard({ onBack, onOpenHowTo }) {
         {profile?.username && (
           <div className="border-b border-white/5 px-5 py-3 text-xs text-muted-foreground">
             Signed in as <span className="font-semibold text-foreground">@{profile.username}</span>
+          </div>
+        )}
+        {authEnabled && !session && (
+          <div className="border-b border-white/5 px-5 py-3">
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={busy}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+              Sign in
+            </button>
+          </div>
+        )}
+        {authEnabled && session && profileRequired && (
+          <div className="border-b border-white/5 px-5 py-3 text-xs leading-5 text-muted-foreground">
+            Choose a username before importing or saving.
           </div>
         )}
         <nav className="flex-1 space-y-1 p-3">
@@ -2002,8 +2623,8 @@ function Dashboard({ onBack, onOpenHowTo }) {
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1">
-        <div className="dash-panel min-h-screen overflow-auto">
+      <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
+        <div className="dash-panel h-screen overflow-y-auto overflow-x-hidden">
           <div className="dash-panel-inner">
             <MobileTopbar onBack={onBack} tab={tab} setTab={setTab} onOpenHowTo={onOpenHowTo} />
             {(error || notice) && (
@@ -2016,7 +2637,24 @@ function Dashboard({ onBack, onOpenHowTo }) {
               <div className="grid min-h-screen place-items-center text-muted-foreground">Loading your saved index...</div>
             ) : (
               <>
-                {tab === 'library' && (
+                {authEnabled && !session && tab === 'library' && (
+                  <AuthRequiredPanel
+                    title="Your library is private."
+                    copy="You can visit this page, but your saved posts only load after Google sign-in."
+                    busy={busy}
+                    onSignIn={handleGoogleSignIn}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'library' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'library' && (
                   <LibraryTab
                     items={filtered}
                     totalCount={items.length}
@@ -2036,7 +2674,24 @@ function Dashboard({ onBack, onOpenHowTo }) {
                     onRestart={handleRestart}
                   />
                 )}
-                {tab === 'graph' && (
+                {authEnabled && !session && tab === 'graph' && (
+                  <AuthRequiredPanel
+                    title="Sign in to view your graph."
+                    copy="The graph is built from your private saved library."
+                    busy={busy}
+                    onSignIn={handleGoogleSignIn}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'graph' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'graph' && (
                   <GraphTab
                     onSelectItem={async (itemId) => {
                       setError('');
@@ -2049,7 +2704,24 @@ function Dashboard({ onBack, onOpenHowTo }) {
                     }}
                   />
                 )}
-                {tab === 'upload' && (
+                {authEnabled && !session && tab === 'upload' && (
+                  <AuthRequiredPanel
+                    title="Sign in before importing."
+                    copy="Imports are tied to your private account, so Google sign-in is required."
+                    busy={busy}
+                    onSignIn={handleGoogleSignIn}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'upload' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'upload' && (
                   <UploadTab
                     files={files}
                     setFiles={setFiles}
@@ -2066,14 +2738,28 @@ function Dashboard({ onBack, onOpenHowTo }) {
                     onOpenHowTo={onOpenHowTo}
                   />
                 )}
-                {tab === 'settings' && (
+                {authEnabled && !session && tab === 'settings' && (
+                  <AuthRequiredPanel
+                    title="Sign in to manage keys."
+                    copy="API keys and privacy settings belong to your account."
+                    busy={busy}
+                    onSignIn={handleGoogleSignIn}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'settings' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'settings' && (
                   <SettingsTab
                     credentials={credentials}
                     credentialForm={credentialForm}
                     setCredentialForm={setCredentialForm}
-                    providerChoices={providerChoices}
-                    applyPurpose={applyPurpose}
-                    applyProvider={applyProvider}
                     onSave={saveCredential}
                     onDelete={async (id) => {
                       setBusy(true);
@@ -2097,6 +2783,59 @@ function Dashboard({ onBack, onOpenHowTo }) {
       </main>
 
       {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} busy={busy} />}
+    </div>
+  );
+}
+
+function AuthRequiredPanel({ title, copy, busy, onSignIn }) {
+  return (
+    <div className="grid min-h-[70vh] place-items-center px-6 py-16">
+      <div className="glow-ring w-full max-w-md rounded-2xl border border-white/10 bg-black p-8 text-center">
+        <Lock className="mx-auto h-8 w-8 text-primary" />
+        <h1 className="mt-5 font-display text-4xl font-bold tracking-tight">{title}</h1>
+        <p className="mt-3 text-sm leading-6 text-muted-foreground">{copy}</p>
+        <button
+          type="button"
+          onClick={onSignIn}
+          disabled={busy}
+          className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Continue with Google
+        </button>
+        <p className="mt-4 text-xs leading-5 text-muted-foreground">By continuing, you agree to the Terms of Service and Privacy Policy.</p>
+      </div>
+    </div>
+  );
+}
+
+function ProfileRequiredPanel({ profileForm, setProfileForm, onAvatarFile, onSave, busy }) {
+  return (
+    <div className="grid min-h-[70vh] place-items-center px-6 py-16">
+      <form onSubmit={onSave} className="glow-ring w-full max-w-md rounded-2xl border border-white/10 bg-black p-8">
+        <h1 className="font-display text-4xl font-bold tracking-tight">Choose your username</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Required before importing. Usernames are unique.</p>
+        <label className="mt-6 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Username</label>
+        <input
+          value={profileForm.username}
+          onChange={(event) => setProfileForm((current) => ({ ...current, username: event.target.value.toLowerCase() }))}
+          placeholder="your_username"
+          pattern="[a-z0-9_]{3,24}"
+          className="mt-2 w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+          required
+        />
+        <label className="mt-5 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Profile picture optional</label>
+        <div className="mt-2 flex items-center gap-3">
+          <div className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-white/5">
+            {profileForm.avatarUrl ? <img src={profileForm.avatarUrl} alt="" className="h-full w-full object-cover" /> : <Brain className="h-5 w-5 text-muted-foreground" />}
+          </div>
+          <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onAvatarFile} className="min-w-0 text-xs text-muted-foreground file:mr-3 file:rounded-full file:border-0 file:bg-primary file:px-3 file:py-2 file:text-xs file:font-semibold file:text-primary-foreground" />
+        </div>
+        <button disabled={busy} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Save profile
+        </button>
+      </form>
     </div>
   );
 }
@@ -2538,8 +3277,8 @@ function UploadTab({
         className={`rounded-2xl border-2 border-dashed p-12 text-center transition md:p-16 ${dragging ? 'border-primary bg-primary/5' : 'border-white/15'}`}
       >
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
-        <h3 className="mb-2 font-display text-xl font-bold">Drop your export files here</h3>
-        <p className="mb-6 font-mono text-xs text-muted-foreground">saved_posts.html · saved_collections.html</p>
+        <h3 className="mb-2 font-display text-xl font-bold">Upload your files here</h3>
+        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram HTML · Pinterest ZIP/JSON/CSV</p>
         <button
           type="button"
           onClick={onOpenHowTo}
@@ -2550,7 +3289,7 @@ function UploadTab({
         <br />
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
           Choose export files
-          <input type="file" multiple accept=".html" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
+          <input type="file" multiple accept=".html,.htm,.zip,.json,.csv" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
         </label>
         {files.length > 0 && (
           <div className="mt-6 space-y-2 text-left">
@@ -2665,9 +3404,6 @@ function SettingsTab({
   credentials,
   credentialForm,
   setCredentialForm,
-  providerChoices,
-  applyPurpose,
-  applyProvider,
   onSave,
   onDelete,
   onTest,
@@ -2675,6 +3411,22 @@ function SettingsTab({
   authEnabled,
   onOpenHowTo,
 }) {
+  const selectedSetup = KEY_SETUP_OPTIONS[credentialForm.setup] || KEY_SETUP_OPTIONS.openrouter_all;
+  const [providerWarning, setProviderWarning] = useState(null);
+  const groupedCredentials = credentials.reduce((groups, credential) => {
+    const key = `${credential.provider}:${credential.keyHint}`;
+    if (!groups[key]) {
+      groups[key] = {
+        id: key,
+        provider: credential.provider,
+        keyHint: credential.keyHint,
+        credentials: [],
+      };
+    }
+    groups[key].credentials.push(credential);
+    return groups;
+  }, {});
+
   return (
     <div className="mx-auto max-w-2xl space-y-8 px-6 py-20">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -2686,7 +3438,7 @@ function SettingsTab({
             </span>
           </div>
           <p className="mt-2 text-sm text-muted-foreground">
-            Connect your own AI keys before indexing. Until payments are live, IScraper does not spend an app-owned OpenRouter key.
+            Paste a valid key once. IScraper picks the right models for you.
           </p>
         </div>
         <button
@@ -2706,9 +3458,26 @@ function SettingsTab({
           </span>
         </div>
         <p className="mt-2 text-sm text-muted-foreground">
-          Your first 200 imported saves are included without paid IScraper credits. While payments are still coming soon, add your own AI keys for captions, summaries, media reading, and semantic search.
+          Your first 200 imported saves are included without paid IScraper credits. You still need your own provider credits, usually $1-$3 on OpenRouter, because AI providers charge for usage.
         </p>
       </div>
+
+      <section className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
+        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Valid keys</div>
+        <h2 className="font-display text-2xl font-bold tracking-tight">Use these keys only</h2>
+        <div className="grid gap-3">
+          {[
+            ['OpenRouter', 'Recommended. One key covers summaries, image/video reading, and smart search.'],
+            ['Gemini API', 'Good for image/video reading and basic summaries. No smart semantic search by itself.'],
+            ['OpenAI / Anthropic / DeepSeek', 'Text summaries only. Not the best first setup.'],
+          ].map(([title, copy]) => (
+            <div key={title} className="rounded-xl border border-white/10 bg-black p-4">
+              <div className="font-semibold">{title}</div>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">{copy}</p>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <section className="space-y-4 rounded-2xl border border-white/10 p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -2726,54 +3495,76 @@ function SettingsTab({
       </section>
 
       <form onSubmit={onSave} className="space-y-4 rounded-2xl border border-white/10 p-5">
-        <div className="grid grid-cols-3 gap-2 rounded-xl border border-white/10 p-1">
-          {['text', 'media', 'embedding'].map((purpose) => (
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Add key</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose where your key is from</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            You do not need to choose a model. We handle that.
+          </p>
+        </div>
+        <div className="grid gap-2 rounded-xl border border-white/10 p-1">
+          {Object.entries(KEY_SETUP_OPTIONS).map(([setup, option]) => (
             <button
-              key={purpose}
+              key={setup}
               type="button"
-              onClick={() => applyPurpose(purpose)}
-              className={`rounded-lg px-4 py-2 text-sm capitalize ${credentialForm.purpose === purpose ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
+              onClick={() => {
+                if (setup !== 'openrouter_all' && credentialForm.setup === 'openrouter_all') {
+                  setProviderWarning(setup);
+                  return;
+                }
+                setCredentialForm((current) => ({ ...current, setup }));
+              }}
+              className={`rounded-lg px-4 py-3 text-left text-sm transition ${
+                credentialForm.setup === setup
+                  ? setup === 'openrouter_all'
+                    ? 'bg-orange-500 text-black'
+                    : 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+              }`}
             >
-              {purpose}
+              <span className="block font-semibold">{option.label}</span>
+              <span className={`mt-1 block text-xs leading-5 ${credentialForm.setup === setup ? 'text-black/75' : 'text-muted-foreground'}`}>{option.help}</span>
             </button>
           ))}
         </div>
-        <select value={credentialForm.provider} onChange={(event) => applyProvider(event.target.value)} className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary">
-          {providerChoices.map(([id, provider]) => <option key={id} value={id}>{provider.label}</option>)}
-        </select>
-        <input
-          value={credentialForm.model}
-          onChange={(event) => setCredentialForm((current) => ({ ...current, model: event.target.value }))}
-          placeholder="Model"
-          className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 font-mono text-sm outline-none focus:border-primary"
-        />
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm leading-6 text-muted-foreground">
+          Selected: <span className="font-semibold text-foreground">{selectedSetup.label}</span>. {selectedSetup.help}
+        </div>
         <input
           type="password"
           value={credentialForm.apiKey}
           onChange={(event) => setCredentialForm((current) => ({ ...current, apiKey: event.target.value }))}
-          placeholder="API key"
+          placeholder="Paste API key"
           required
           className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 font-mono text-sm outline-none focus:border-primary"
         />
         <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-          Save and test key
+          Save key
         </button>
       </form>
 
       <div className="space-y-3">
-        {credentials.map((credential) => (
-          <div key={credential.id} className="flex items-center gap-3 rounded-xl border border-white/10 p-4">
+        {Object.values(groupedCredentials).map((group) => (
+          <div key={group.id} className="flex items-center gap-3 rounded-xl border border-white/10 p-4">
             <div className="min-w-0 flex-1">
-              <div className="font-semibold">{credential.provider}</div>
+              <div className="font-semibold">{PROVIDER_DISPLAY_LABELS[group.provider] || group.provider}</div>
               <div className="truncate text-xs text-muted-foreground">
-                {credential.purpose} · {credential.model} · {credential.keyHint}
+                {group.credentials.map((credential) => credential.purpose).join(', ')} - {group.keyHint}
               </div>
             </div>
-            <button onClick={() => onTest(credential.id)} className="rounded-lg border border-white/10 p-2 text-primary" aria-label="Test key">
+            <button onClick={() => onTest(group.credentials[0].id)} className="rounded-lg border border-white/10 p-2 text-primary" aria-label="Test key">
               <CheckCircle2 className="h-4 w-4" />
             </button>
-            <button onClick={() => onDelete(credential.id)} className="rounded-lg border border-white/10 p-2 text-destructive" aria-label="Delete key">
+            <button
+              onClick={async () => {
+                for (const credential of group.credentials) {
+                  await onDelete(credential.id);
+                }
+              }}
+              className="rounded-lg border border-white/10 p-2 text-destructive"
+              aria-label="Delete key"
+            >
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -2784,6 +3575,40 @@ function SettingsTab({
         <button onClick={() => supabase.auth.signOut()} className="w-full rounded-xl border border-white/10 px-5 py-3 text-sm text-muted-foreground">
           Sign out
         </button>
+      )}
+
+      {providerWarning && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-orange-500/50 bg-black p-6 shadow-[0_24px_80px_rgba(0,0,0,0.65)]">
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-orange-400">Recommended setup</div>
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">OpenRouter is the best setup.</h2>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">
+              OpenRouter is the simplest choice because one key can handle summaries, image/video reading, and smart search. Other keys may work, but output can be limited.
+            </p>
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCredentialForm((current) => ({ ...current, setup: 'openrouter_all' }));
+                  setProviderWarning(null);
+                }}
+                className="rounded-xl bg-orange-500 px-4 py-3 text-sm font-semibold text-black"
+              >
+                Use OpenRouter
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCredentialForm((current) => ({ ...current, setup: providerWarning }));
+                  setProviderWarning(null);
+                }}
+                className="rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-foreground"
+              >
+                Continue anyway
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
