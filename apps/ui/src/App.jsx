@@ -555,11 +555,23 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
             </div>
           </div>
 
+          <div className="hero-fade mt-8 inline-flex max-w-full flex-wrap items-center gap-3 rounded-2xl border border-primary/40 bg-primary/10 px-5 py-4">
+            <span className="rounded-full bg-primary px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-primary-foreground">
+              Launch offer
+            </span>
+            <span className="text-sm font-semibold text-foreground">
+              Your first 200 imported saves are on us.
+            </span>
+            <span className="text-sm text-muted-foreground">
+              Build your first searchable library before paying IScraper credits.
+            </span>
+          </div>
+
           <div className="hero-fade mt-24 grid grid-cols-2 gap-6 text-sm md:grid-cols-4">
             {[
               ['Saved ideas rescued', 'All'],
               ['Platforms supported', 'Any'],
-              ['Private by default', 'Yes'],
+              ['First saves on us', '200'],
               ['Search in seconds', 'Fast'],
             ].map(([label, value]) => (
               <div key={label} className="border-l border-white/10 pl-4">
@@ -605,10 +617,11 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
             {[
               [Zap, 'Save from any platform', 'Paste a link from Pinterest, X, TikTok, YouTube, Instagram, or any site and keep it in the same searchable brain.'],
               [Brain, 'Know why you saved it', 'Each save can get a plain-English summary, so old posts become useful again instead of forgotten.'],
+              [CheckCircle2, 'First 200 saves included', 'Start with 200 imported saves covered by IScraper before paid credits matter.'],
               [Tag, 'Organized without the cleanup', 'Group saves by themes like travel, food, fitness, shopping, home, business, or inspiration.'],
               [Lock, 'Private by default', 'Your saved export starts on your machine, so your personal taste and plans stay yours.'],
               [ShieldCheck, 'Built around official export', 'Use Instagram export files to build your library without handing over your Instagram login.'],
-              [KeyRound, 'Browser extension ready', 'Use the Phase 1 extension to send the current tab into IScraper without giving the extension your account token.'],
+              [KeyRound, 'Browser extension ready', 'Use the extension to send the current tab into IScraper without giving the extension your account token.'],
             ].map(([Icon, title, description], index) => (
               <div
                 key={title}
@@ -1031,7 +1044,7 @@ const LEGAL_CONTENT = {
       ['AI processing', 'When indexing is enabled, content may be sent to configured AI providers to create summaries, OCR, transcripts, tags, and search data. AI output can be wrong, incomplete, or outdated, so you should verify important information yourself.'],
       ['Browser extension', 'The IScraper browser extension is optional. It can save the active page, search selected text, or send a small user-selected screenshot crop to IScraper Lens. It must be used only on pages and content you are allowed to process.'],
       ['Things you cannot do', 'Do not upload content you do not have rights to use, attack the service, bypass rate limits, scrape or copy other users data, reverse engineer protected parts of the service, or use IScraper for unlawful activity.'],
-      ['Credits and paid features', 'Credit purchases are currently marked as coming soon. If payments are enabled later, pricing, refunds, and billing terms will be shown before purchase.'],
+      ['Credits and paid features', 'The first 200 imported saved items are currently included without paid IScraper credits, subject to abuse prevention and fair-use limits. Credit purchases are currently marked as coming soon. If payments are enabled later, pricing, refunds, and billing terms will be shown before purchase.'],
       ['Service changes', 'We may change, pause, or discontinue features. We will try to avoid disrupting your saved library, but we do not guarantee uninterrupted access.'],
       ['Disclaimer', 'IScraper is provided as-is without warranties. To the maximum extent allowed by law, we are not responsible for indirect damages, lost data, lost profits, or decisions made from AI-generated output.'],
       ['Contact', 'For support or legal questions, contact the IScraper operator using the support email that will be published before public launch.'],
@@ -2114,6 +2127,19 @@ function UploadTab({
         <p className="mt-2 text-sm text-muted-foreground">Paste any link now, review the capture, then approve indexing when it is worth spending AI usage.</p>
       </div>
 
+      <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Launch offer</div>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">First 200 imported saves are on us.</h2>
+          </div>
+          <span className="rounded-full bg-primary px-4 py-2 font-display text-xl font-bold text-primary-foreground">200</span>
+        </div>
+        <p className="mt-3 text-sm leading-6 text-muted-foreground">
+          Use your free included allowance to build the first version of your searchable brain. Review saves before indexing so the free allowance goes toward posts you actually want.
+        </p>
+      </div>
+
       <form onSubmit={onSaveLink} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save from any platform</div>
@@ -2356,7 +2382,7 @@ function SettingsTab({
           </span>
         </div>
         <p className="mt-2 text-sm text-muted-foreground">
-          Paid credits and app-funded indexing are disabled for now. Add a text key for captions/summaries, a media key for reels/images, and an embedding key if you want semantic AI search.
+          Your first 200 imported saves are included without paid IScraper credits. While payments are still coming soon, add your own AI keys for captions, summaries, media reading, and semantic search.
         </p>
       </div>
 
