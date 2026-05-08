@@ -440,7 +440,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
           >
             {heroWords.map((word, index) => (
               <span key={word} className="mr-[0.18em] inline-block overflow-visible">
-                <span className={`word inline-block ${index === 4 ? 'text-glow italic text-primary' : ''}`}>{word}</span>
+                <span className={`word inline-block ${index === 4 ? 'rounded-[5px] bg-orange-500 px-[0.08em] italic text-black' : ''}`}>{word}</span>
               </span>
             ))}
           </h1>
