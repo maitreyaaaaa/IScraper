@@ -37,16 +37,20 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import {
+  approveReviewItem,
+  createExtensionToken,
   deleteProviderCredential,
   downloadObsidianGraph,
   getItem,
   getItems,
   getKnowledgeGraph,
   getProfile,
+  getExtensionTokens,
   getPublicFeedback,
   getProviderCredentials,
   importInstagramExport,
   restartQueue,
+  revokeExtensionToken,
   saveLink,
   saveProfile,
   saveProviderCredential,
@@ -54,12 +58,14 @@ import {
   setApiAccessToken,
   submitPublicFeedback,
   testProviderCredential,
+  updateReviewItem,
 } from './api';
 import { supabase } from './supabaseClient';
 
 gsap.registerPlugin(ScrollTrigger);
 
 const STATUS_META = {
+  needs_review: { color: 'text-accent', icon: FileText },
   queued: { color: 'text-muted-foreground', icon: Activity },
   downloading: { color: 'text-accent', icon: Loader2 },
   analyzing: { color: 'text-primary', icon: Sparkles },
@@ -71,8 +77,9 @@ const STATUS_META = {
   paused_missing_provider: { color: 'text-muted-foreground', icon: Pause },
 };
 
-const STATUSES = ['all', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
+const STATUSES = ['all', 'needs_review', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
+const EXTENSION_INSTALL_URL = import.meta.env.VITE_EXTENSION_INSTALL_URL || '';
 
 function normalizeStatus(status = 'queued') {
   return String(status).startsWith('paused') ? 'paused' : status;
@@ -127,8 +134,16 @@ function BrandLogo({ className = 'h-8 w-28', align = 'left' }) {
 
 function scrollToSection(event, id) {
   event.preventDefault();
+  scrollToLandingSection(id);
+}
+
+function scrollToLandingSection(id) {
   document.querySelector(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   window.history.replaceState(null, '', id);
+}
+
+function openExternalUrl(url) {
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function getRouteFromHash() {
@@ -154,6 +169,17 @@ function pendingSaveFromHash() {
     note: params.get('note') || '',
     autoSave: params.get('autoSave') === '1',
   };
+}
+
+function itemIdFromHash() {
+  const hash = window.location.hash || '';
+  if (!hash.startsWith('#app?')) return '';
+  return new URLSearchParams(hash.slice('#app?'.length)).get('item') || '';
+}
+
+function extensionConnectFromHash() {
+  const hash = window.location.hash || '';
+  return hash.startsWith('#app?') && new URLSearchParams(hash.slice('#app?'.length)).get('connectExtension') === '1';
 }
 
 function rememberPendingSave() {
@@ -195,6 +221,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
   const introRef = useRef(null);
   const cursorRef = useRef(null);
   const heroTitle = useRef(null);
+  const [showExtensionPopup, setShowExtensionPopup] = useState(false);
   const [feedback, setFeedback] = useState([]);
   const [feedbackForm, setFeedbackForm] = useState({ feature: 'Search', message: '' });
   const [feedbackBusy, setFeedbackBusy] = useState(false);
@@ -210,6 +237,26 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
       .then((body) => setFeedback(body.feedback || []))
       .catch(() => setFeedback([]));
   }, []);
+
+  useEffect(() => {
+    if (window.localStorage.getItem('iscraper.extensionPromo.dismissed') === '1') return undefined;
+    const timer = window.setTimeout(() => setShowExtensionPopup(true), 15000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const dismissExtensionPopup = () => {
+    window.localStorage.setItem('iscraper.extensionPromo.dismissed', '1');
+    setShowExtensionPopup(false);
+  };
+
+  const openExtensionSection = () => {
+    if (EXTENSION_INSTALL_URL) {
+      openExternalUrl(EXTENSION_INSTALL_URL);
+    } else {
+      scrollToLandingSection('#extension');
+    }
+    dismissExtensionPopup();
+  };
 
   const handleFeedbackSubmit = async (event) => {
     event.preventDefault();
@@ -453,6 +500,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
           </button>
           <nav className="hidden items-center gap-8 text-sm text-muted-foreground md:flex">
             <a href="#features" onClick={(event) => scrollToSection(event, '#features')} className="nav-item transition hover:text-foreground">Features</a>
+            <a href="#extension" onClick={(event) => scrollToSection(event, '#extension')} className="nav-item transition hover:text-foreground">Extension</a>
             <a href="#why" onClick={(event) => scrollToSection(event, '#why')} className="nav-item transition hover:text-foreground">Why</a>
             <a href="#feedback" onClick={(event) => scrollToSection(event, '#feedback')} className="nav-item transition hover:text-foreground">Feedback</a>
           </nav>
@@ -581,10 +629,63 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
         </div>
       </section>
 
+      <section id="extension" className="relative border-y border-white/10 bg-black px-6 py-24 md:py-32">
+        <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
+          <div data-reveal>
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension</div>
+            <h2 className="max-w-4xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
+              Save and search while you browse.
+            </h2>
+            <p className="mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">
+              The IScraper extension lets you save the page you are on, run Lens search on selected text, or drag over an image area and search your private brain.
+            </p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={openExtensionSection}
+                className="inline-flex items-center gap-2 rounded-full bg-primary px-6 py-4 text-sm font-semibold text-primary-foreground transition hover:scale-[1.03]"
+              >
+                {EXTENSION_INSTALL_URL ? 'Install extension' : 'Chrome Store page coming'} <ArrowRight className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={onOpenApp}
+                className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5"
+              >
+                <KeyRound className="h-4 w-4" /> Connect token
+              </button>
+            </div>
+            <p className="mt-5 text-sm leading-6 text-muted-foreground">
+              Works today on Chromium browsers like Chrome, Edge, Brave, Arc, and Opera. Firefox and Safari need their own store packages before we call them fully supported.
+            </p>
+            {!EXTENSION_INSTALL_URL && (
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                Chrome Web Store listing is being prepared. Once approval is live, this button will open the public install page.
+              </p>
+            )}
+          </div>
+
+          <div data-reveal className="grid gap-4 sm:grid-cols-2">
+            {[
+              [KeyRound, 'Limited token', 'The extension stores only a revokable Lens token, not your Google login.'],
+              [Search, 'Selected text search', 'Highlight text on any normal web page and search it across your saved library.'],
+              [Eye, 'Image crop Lens', 'Drag over text or an object in an image and search the closest saved posts.'],
+              [ShieldCheck, 'Store-ready behavior', 'No background scraping, no automatic page scanning, and no remote extension code.'],
+            ].map(([Icon, title, description]) => (
+              <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+                <Icon className="h-6 w-6 text-primary" />
+                <h3 className="mt-6 font-display text-2xl font-semibold tracking-tight">{title}</h3>
+                <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section id="why" className="index-section relative overflow-hidden bg-black px-6 py-24 md:py-32">
         <div className="index-pin mx-auto max-w-7xl">
           <div className="index-heading mb-16">
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - What becomes searchable</div>
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 03 - What becomes searchable</div>
             <h2 className="max-w-4xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
               Turn every save into a <span className="italic text-accent">useful memory</span>.
             </h2>
@@ -607,7 +708,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
       <section id="feedback" className="bg-black px-6 py-24 md:py-32">
         <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.9fr_1.1fr]">
           <div data-reveal>
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 03 - Build with us</div>
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 04 - Build with us</div>
             <h2 className="font-display text-5xl font-bold tracking-tighter md:text-7xl">What should we add next?</h2>
             <p className="mt-6 max-w-xl leading-relaxed text-muted-foreground">
               Tell us what would make your saved-post library more useful. Ideas are shown publicly, but names and profile photos are hidden.
@@ -702,7 +803,46 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
           </div>
         </div>
       </footer>
+
+      <ExtensionInstallPopup
+        visible={showExtensionPopup}
+        onInstall={openExtensionSection}
+        onDismiss={dismissExtensionPopup}
+        hasInstallUrl={Boolean(EXTENSION_INSTALL_URL)}
+      />
     </div>
+  );
+}
+
+function ExtensionInstallPopup({ visible, onInstall, onDismiss, hasInstallUrl }) {
+  return (
+    <aside
+      aria-live="polite"
+      className={`fixed bottom-5 right-5 z-[120] w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-primary/50 bg-black p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55)] transition duration-500 ${
+        visible ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-10 opacity-0'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Browser extension</div>
+          <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Take IScraper with you.</h3>
+        </div>
+        <button type="button" onClick={onDismiss} className="rounded-full border border-white/10 p-2 text-muted-foreground transition hover:text-foreground" aria-label="Close extension popup">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <p className="mt-3 text-sm leading-6 text-muted-foreground">
+        Save pages, Lens-search selected text, and search image crops from Chrome, Edge, Brave, Arc, and other Chromium browsers.
+      </p>
+      <div className="mt-5 flex gap-3">
+        <button type="button" onClick={onInstall} className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground">
+          {hasInstallUrl ? 'Install extension' : 'See extension'} <ArrowRight className="h-4 w-4" />
+        </button>
+        <button type="button" onClick={onDismiss} className="rounded-full border border-white/10 px-4 py-3 text-sm text-muted-foreground transition hover:text-foreground">
+          Later
+        </button>
+      </div>
+    </aside>
   );
 }
 
@@ -884,11 +1024,12 @@ const LEGAL_CONTENT = {
     title: 'Terms of Service',
     intro: 'These terms explain the rules for using IScraper. They are a practical starting point, not a substitute for advice from your lawyer.',
     sections: [
-      ['Using IScraper', 'IScraper helps you upload your official Instagram export and turn saved posts into a private searchable library. You are responsible for using the app lawfully and only uploading exports that belong to you.'],
+      ['Using IScraper', 'IScraper helps you upload your official Instagram export, save links from other platforms, and turn saved posts into a private searchable library. You are responsible for using the app lawfully and only uploading or saving content you have the right to use.'],
       ['Accounts', 'You must sign in before importing saved posts. You are responsible for activity on your account and for keeping your login secure. Usernames must be unique and may be changed if they impersonate someone, violate rights, or create abuse.'],
       ['Your content', 'Your Instagram export, saved links, captions, notes, summaries, graph data, username, and optional profile picture remain your content. You give IScraper permission to process that content only to provide the app features.'],
       ['Emails and updates', 'We may send account, security, product, billing, import, and support emails to the email address on your account. We may also send product updates or marketing emails where you have opted in or where the law allows it, and those marketing emails must include a way to unsubscribe.'],
       ['AI processing', 'When indexing is enabled, content may be sent to configured AI providers to create summaries, OCR, transcripts, tags, and search data. AI output can be wrong, incomplete, or outdated, so you should verify important information yourself.'],
+      ['Browser extension', 'The IScraper browser extension is optional. It can save the active page, search selected text, or send a small user-selected screenshot crop to IScraper Lens. It must be used only on pages and content you are allowed to process.'],
       ['Things you cannot do', 'Do not upload content you do not have rights to use, attack the service, bypass rate limits, scrape or copy other users data, reverse engineer protected parts of the service, or use IScraper for unlawful activity.'],
       ['Credits and paid features', 'Credit purchases are currently marked as coming soon. If payments are enabled later, pricing, refunds, and billing terms will be shown before purchase.'],
       ['Service changes', 'We may change, pause, or discontinue features. We will try to avoid disrupting your saved library, but we do not guarantee uninterrupted access.'],
@@ -899,12 +1040,13 @@ const LEGAL_CONTENT = {
   privacy: {
     eyebrow: 'Privacy Policy',
     title: 'Privacy Policy',
-    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Google/Supabase login, Instagram export upload, AI indexing, and private saved libraries.',
+    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Google/Supabase login, Instagram export upload, saved links, optional browser extension, AI indexing, and private saved libraries.',
     sections: [
-      ['Information we collect', 'We collect login details from Supabase/Google such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded Instagram export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs.'],
+      ['Information we collect', 'We collect login details from Supabase/Google such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded Instagram export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, extension token records, credit records, and basic technical logs.'],
       ['Google login data', 'Google login is used to authenticate you and create your IScraper account. From Google/Supabase we may receive basic account details such as your user ID, email address, name, and profile image if Google provides them. IScraper does not ask for Gmail, Drive, Calendar, contacts, or other Google account content. Google OAuth configuration must use the Supabase callback URL and must include this privacy policy URL before public launch.'],
       ['Instagram data', 'IScraper uses official Instagram export files that you upload. We do not ask for your Instagram password and we removed Instagram login scraping. Your export is used to build your searchable library.'],
       ['AI providers', 'If indexing is enabled, parts of your uploaded content may be sent to configured AI providers such as OpenRouter, Gemini, or your own connected provider key. This is done to generate summaries, transcripts, OCR, tags, and embeddings.'],
+      ['Browser extension data', 'The extension runs only when you click it. For saving, it sends the current page URL, title, page metadata, and your optional note to IScraper. For Lens search, it sends selected text or a small screenshot crop that you choose. Screenshot crops are not stored by default; they are used to produce a search query and then discarded.'],
       ['How we use data', 'We use your data to authenticate your account, keep your library separate from other users, process imports, search your saves, build your graph, show anonymous public feedback, prevent abuse, enforce limits, improve reliability, send service messages, respond to support requests, and send product updates or marketing emails only where you have opted in or where legally permitted.'],
       ['Google data limits', 'We do not sell Google login data, use it to build advertising profiles, or transfer it to unrelated third parties for marketing. We use Google login data only for account access, account communication, security, support, and the email uses described in this policy.'],
       ['What is public', 'Public feedback is visible to everyone, but it is shown without your name or profile photo. Your saved library, username setup data, provider keys, credits, and imports are not meant to be public.'],
@@ -1027,6 +1169,8 @@ function Dashboard({ onBack }) {
   const [files, setFiles] = useState([]);
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
   const [credentials, setCredentials] = useState([]);
+  const [extensionTokens, setExtensionTokens] = useState([]);
+  const [newExtensionSecret, setNewExtensionSecret] = useState('');
   const [credentialOptions, setCredentialOptions] = useState(null);
   const [credentialForm, setCredentialForm] = useState({
     purpose: 'text',
@@ -1044,6 +1188,8 @@ function Dashboard({ onBack }) {
   const [notice, setNotice] = useState('');
   const sidebarRef = useRef(null);
   const pendingSaveHandledRef = useRef(false);
+  const pendingItemHandledRef = useRef(false);
+  const extensionConnectHandledRef = useRef(false);
   const authEnabled = Boolean(supabase);
 
   const loadItems = useCallback(async () => {
@@ -1052,9 +1198,13 @@ function Dashboard({ onBack }) {
   }, []);
 
   const loadControls = useCallback(async () => {
-    const credentialBody = await getProviderCredentials();
+    const [credentialBody, extensionBody] = await Promise.all([
+      getProviderCredentials(),
+      getExtensionTokens(),
+    ]);
     setCredentials(credentialBody.credentials || []);
     setCredentialOptions(credentialBody.options || null);
+    setExtensionTokens(extensionBody.tokens || []);
   }, []);
 
   const applyProfileState = (nextProfile, required) => {
@@ -1125,6 +1275,7 @@ function Dashboard({ onBack }) {
 
   const collections = useMemo(() => ['all', ...unique(items.map((item) => item.collection))], [items]);
   const platforms = useMemo(() => ['all', ...unique(items.map((item) => item.platform))], [items]);
+  const pendingReviews = useMemo(() => items.filter((item) => item.sourceStatus === 'needs_review'), [items]);
 
   const filtered = useMemo(() => {
     return items.filter((item) => {
@@ -1139,6 +1290,7 @@ function Dashboard({ onBack }) {
     total: items.length,
     done: items.filter((item) => item.status === 'done').length,
     queued: items.filter((item) => item.status === 'queued').length,
+    needsReview: items.filter((item) => item.sourceStatus === 'needs_review').length,
     paused: items.filter((item) => item.status === 'paused' || item.status === 'failed').length,
   }), [items]);
 
@@ -1224,9 +1376,9 @@ function Dashboard({ onBack }) {
     setError('');
     setNotice('');
     try {
-      const result = await saveLink({ ...payload, startProcessing: true });
+      const result = await saveLink({ ...payload, startProcessing: false });
       const duplicate = result.skippedDuplicateCount > 0;
-      setNotice(duplicate ? 'That link was already in your brain.' : 'Link saved. Indexing will start if your AI key is connected.');
+      setNotice(duplicate ? 'That link was already in your brain.' : 'Link saved to review. Approve it when you want to index it.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
       await loadItems();
@@ -1265,6 +1417,31 @@ function Dashboard({ onBack }) {
     };
   }, [authEnabled, handleSaveLink, loading, profileRequired, session]);
 
+  useEffect(() => {
+    if (pendingItemHandledRef.current || loading || (authEnabled && (!session || profileRequired))) return;
+    const itemId = itemIdFromHash();
+    if (!itemId) return;
+    pendingItemHandledRef.current = true;
+    const timer = window.setTimeout(() => {
+      setTab('library');
+      getItem(itemId)
+        .then((body) => setSelected(mapItem(body.item)))
+        .catch((err) => setError(err.message));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [authEnabled, loading, profileRequired, session]);
+
+  useEffect(() => {
+    if (extensionConnectHandledRef.current || loading || (authEnabled && (!session || profileRequired))) return;
+    if (!extensionConnectFromHash()) return;
+    extensionConnectHandledRef.current = true;
+    const timer = window.setTimeout(() => {
+      setTab('settings');
+      setNotice('Create a Lens token here, then paste it into the extension.');
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [authEnabled, loading, profileRequired, session]);
+
   const handleImport = async () => {
     if (!files.length) {
       setError('Upload saved_posts.html and optionally saved_collections.html.');
@@ -1301,6 +1478,41 @@ function Dashboard({ onBack }) {
     }
   };
 
+  const handleUpdateReview = async (item, updates) => {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await updateReviewItem(item.id, updates);
+      const nextItem = mapItem(body.item);
+      setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
+      setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
+      setNotice('Review details saved.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleApproveReview = async (item, updates = {}) => {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await approveReviewItem(item.id, { ...updates, startProcessing: true });
+      const nextItem = mapItem(body.item);
+      setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
+      setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
+      setNotice((body.queuedJobCount || 0) > 0 ? 'Approved. Indexing has started.' : 'Approved. This save was already indexed.');
+      window.setTimeout(() => loadItems().catch((err) => setError(err.message)), 1500);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const openDetail = async (item) => {
     setError('');
     try {
@@ -1326,6 +1538,38 @@ function Dashboard({ onBack }) {
     } catch (err) {
       setError(saved ? `Key saved, but test failed: ${err.message}` : err.message);
       await loadControls().catch(() => {});
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCreateExtensionToken = async () => {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await createExtensionToken('IScraper Lens extension');
+      setNewExtensionSecret(body.secret || '');
+      await loadControls();
+      setNotice('Lens token created. Paste it into the browser extension once.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRevokeExtensionToken = async (id) => {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await revokeExtensionToken(id);
+      if (newExtensionSecret) setNewExtensionSecret('');
+      await loadControls();
+      setNotice('Lens token revoked.');
+    } catch (err) {
+      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -1502,12 +1746,18 @@ function Dashboard({ onBack }) {
                     onSaveLink={handleSaveLink}
                     onImport={handleImport}
                     onRestart={handleRestart}
+                    pendingReviews={pendingReviews}
+                    onApproveReview={handleApproveReview}
+                    onUpdateReview={handleUpdateReview}
+                    onSelect={openDetail}
                     busy={busy}
                   />
                 )}
                 {tab === 'settings' && (
                   <SettingsTab
                     credentials={credentials}
+                    extensionTokens={extensionTokens}
+                    newExtensionSecret={newExtensionSecret}
                     credentialForm={credentialForm}
                     setCredentialForm={setCredentialForm}
                     providerChoices={providerChoices}
@@ -1524,6 +1774,9 @@ function Dashboard({ onBack }) {
                       await testProviderCredential(id).then(() => setNotice('Provider key works.')).catch((err) => setError(err.message));
                       setBusy(false);
                     }}
+                    onCreateExtensionToken={handleCreateExtensionToken}
+                    onRevokeExtensionToken={handleRevokeExtensionToken}
+                    onClearExtensionSecret={() => setNewExtensionSecret('')}
                     busy={busy}
                     authEnabled={authEnabled}
                   />
@@ -1534,7 +1787,7 @@ function Dashboard({ onBack }) {
         </div>
       </main>
 
-      {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} />}
+      {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} busy={busy} />}
     </div>
   );
 }
@@ -1596,7 +1849,7 @@ function LibraryTab({
     ['All saves', totalCount],
     ['On this board', items.length],
     ['Searchable', searchableCount],
-    ['Needs attention', items.filter((item) => item.status === 'failed' || item.status === 'paused').length],
+    ['Needs review', items.filter((item) => item.sourceStatus === 'needs_review').length],
     ]), [items, searchableCount, totalCount]);
 
   useEffect(() => {
@@ -1839,13 +2092,26 @@ function PinCard({ item, index, onClick }) {
   );
 }
 
-function UploadTab({ files, setFiles, linkForm, setLinkForm, onSaveLink, onImport, onRestart, busy }) {
+function UploadTab({
+  files,
+  setFiles,
+  linkForm,
+  setLinkForm,
+  onSaveLink,
+  onImport,
+  onRestart,
+  pendingReviews,
+  onApproveReview,
+  onUpdateReview,
+  onSelect,
+  busy,
+}) {
   const [dragging, setDragging] = useState(false);
   return (
-    <div className="mx-auto max-w-2xl space-y-6 px-6 py-20">
+    <div className="mx-auto max-w-5xl space-y-6 px-6 py-20">
       <div>
         <h1 className="font-display text-4xl font-bold tracking-tight">Add your saved posts</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Paste any link now, or upload your Instagram export when you want a full saved folder.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Paste any link now, review the capture, then approve indexing when it is worth spending AI usage.</p>
       </div>
 
       <form onSubmit={onSaveLink} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
@@ -1853,7 +2119,7 @@ function UploadTab({ files, setFiles, linkForm, setLinkForm, onSaveLink, onImpor
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save from any platform</div>
           <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Add a Pinterest pin, tweet, video, post, or article</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Phase 2 detects the platform, source ID, title, author, and thumbnail when the extension can capture them.
+            New web links go into review first. Nothing is indexed until you approve it.
           </p>
         </div>
         <input
@@ -1880,9 +2146,46 @@ function UploadTab({ files, setFiles, linkForm, setLinkForm, onSaveLink, onImpor
         />
         <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-          Save link to brain
+          Save to review inbox
         </button>
       </form>
+
+      {pendingReviews.length > 0 && (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+          <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Review inbox</div>
+              <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saves waiting</h2>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">Clean up the title and notes before indexing. This keeps your brain useful and avoids wasting credits.</p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                for (const item of pendingReviews) {
+                  await onApproveReview(item);
+                }
+              }}
+              disabled={busy}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              Index all reviewed
+            </button>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {pendingReviews.map((item) => (
+              <ReviewCard
+                key={item.id}
+                item={item}
+                busy={busy}
+                onSelect={onSelect}
+                onUpdate={onUpdateReview}
+                onApprove={onApproveReview}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       <div
         onDragOver={(event) => {
@@ -1930,8 +2233,93 @@ function UploadTab({ files, setFiles, linkForm, setLinkForm, onSaveLink, onImpor
   );
 }
 
+function ReviewCard({ item, busy, onSelect, onUpdate, onApprove }) {
+  const [draft, setDraft] = useState({
+    sourceTitle: item.sourceTitle || item.title || '',
+    sourceAuthor: item.sourceAuthor || '',
+    sourceDescription: item.sourceDescription || '',
+    collection: item.collection === 'Unsorted' ? '' : item.collection,
+  });
+
+  const payload = {
+    ...draft,
+    collections: draft.collection ? [draft.collection] : item.raw?.collections || [],
+  };
+
+  return (
+    <article className="rounded-2xl border border-white/10 bg-black p-4">
+      <div className="mb-4 flex items-start gap-3">
+        {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="h-20 w-20 shrink-0 rounded-xl object-cover" loading="lazy" /> : null}
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-widest text-primary">
+            <span>{item.platform}</span>
+            <span className="text-muted-foreground">{item.sourceStatus}</span>
+          </div>
+          <button type="button" onClick={() => onSelect(item)} className="line-clamp-2 text-left font-display text-xl font-bold tracking-tight hover:text-primary">
+            {item.sourceTitle || item.title}
+          </button>
+        </div>
+      </div>
+      <div className="space-y-3">
+        <input
+          value={draft.sourceTitle}
+          onChange={(event) => setDraft((current) => ({ ...current, sourceTitle: event.target.value }))}
+          placeholder="Clean title"
+          maxLength={160}
+          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm outline-none focus:border-primary"
+        />
+        <div className="grid gap-3 md:grid-cols-2">
+          <input
+            value={draft.sourceAuthor}
+            onChange={(event) => setDraft((current) => ({ ...current, sourceAuthor: event.target.value }))}
+            placeholder="Creator or source"
+            maxLength={120}
+            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm outline-none focus:border-primary"
+          />
+          <input
+            value={draft.collection}
+            onChange={(event) => setDraft((current) => ({ ...current, collection: event.target.value }))}
+            placeholder="Collection"
+            maxLength={80}
+            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm outline-none focus:border-primary"
+          />
+        </div>
+        <textarea
+          value={draft.sourceDescription}
+          onChange={(event) => setDraft((current) => ({ ...current, sourceDescription: event.target.value }))}
+          placeholder="Short note or reason you saved it"
+          maxLength={500}
+          className="min-h-24 w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm leading-6 outline-none focus:border-primary"
+        />
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onUpdate(item, payload)}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-60"
+        >
+          <Check className="h-4 w-4" />
+          Save edits
+        </button>
+        <button
+          type="button"
+          onClick={() => onApprove(item, payload)}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+        >
+          <Sparkles className="h-4 w-4" />
+          Index this
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function SettingsTab({
   credentials,
+  extensionTokens,
+  newExtensionSecret,
   credentialForm,
   setCredentialForm,
   providerChoices,
@@ -1940,6 +2328,9 @@ function SettingsTab({
   onSave,
   onDelete,
   onTest,
+  onCreateExtensionToken,
+  onRevokeExtensionToken,
+  onClearExtensionSecret,
   busy,
   authEnabled,
 }) {
@@ -1968,6 +2359,80 @@ function SettingsTab({
           Paid credits and app-funded indexing are disabled for now. Add a text key for captions/summaries, a media key for reels/images, and an embedding key if you want semantic AI search.
         </p>
       </div>
+
+      <section className="space-y-4 rounded-2xl border border-white/10 p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Browser Lens</div>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Connect the extension</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              This creates a limited token for Lens search only. It is not your Google login token, and you can revoke it anytime.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCreateExtensionToken}
+            disabled={busy}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+            Create Lens token
+          </button>
+        </div>
+
+        {newExtensionSecret && (
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+            <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Copy once</div>
+            <p className="mb-3 text-xs leading-5 text-muted-foreground">
+              Paste this into the extension. For safety, it will not be shown again after you clear it.
+            </p>
+            <div className="flex gap-2">
+              <input
+                readOnly
+                value={newExtensionSecret}
+                className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black px-3 py-2 font-mono text-xs outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(newExtensionSecret)}
+                className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+              >
+                Copy
+              </button>
+              <button
+                type="button"
+                onClick={onClearExtensionSecret}
+                className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {extensionTokens.map((token) => (
+            <div key={token.id} className="flex items-center gap-3 rounded-xl border border-white/10 bg-black p-3">
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold">{token.name}</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {token.revokedAt ? 'Revoked' : 'Active'} - {token.scopes.join(', ')} - last used {token.lastUsedAt ? new Date(token.lastUsedAt).toLocaleDateString() : 'never'}
+                </div>
+              </div>
+              {!token.revokedAt && (
+                <button
+                  type="button"
+                  onClick={() => onRevokeExtensionToken(token.id)}
+                  className="rounded-lg border border-white/10 p-2 text-destructive"
+                  aria-label="Revoke Lens token"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
 
       <form onSubmit={onSave} className="space-y-4 rounded-2xl border border-white/10 p-5">
         <div className="grid grid-cols-3 gap-2 rounded-xl border border-white/10 p-1">
@@ -2478,7 +2943,7 @@ function layoutGraph(graph) {
   return points;
 }
 
-function DetailDrawer({ item, onClose }) {
+function DetailDrawer({ item, onClose, onApprove, busy }) {
   const ref = useRef(null);
   useEffect(() => {
     gsap.fromTo(ref.current, { x: '100%' }, { x: 0, duration: 0.5, ease: 'power3.out' });
@@ -2504,6 +2969,17 @@ function DetailDrawer({ item, onClose }) {
             <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-primary">
               Open original save <ExternalLink className="h-3 w-3" />
             </a>
+            {item.sourceStatus === 'needs_review' && (
+              <button
+                type="button"
+                onClick={() => onApprove(item)}
+                disabled={busy}
+                className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                Approve and index
+              </button>
+            )}
           </div>
 
           {item.error && <Section icon={AlertCircle} label="Error">{item.error}</Section>}

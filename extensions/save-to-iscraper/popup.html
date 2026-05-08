@@ -16,12 +16,20 @@
       <textarea id="note" maxlength="500" placeholder="Why save this?"></textarea>
 
       <button id="save" type="button">Save to brain</button>
+      <button id="lens" type="button">Lens search this page</button>
       <button id="open" type="button" class="secondary">Open IScraper</button>
 
       <details>
         <summary>App URL</summary>
         <input id="app-url" type="url" value="https://iscraper.vercel.app" />
         <button id="save-url" type="button" class="secondary">Save URL</button>
+      </details>
+
+      <details open>
+        <summary>Lens token</summary>
+        <input id="lens-token" type="password" placeholder="Paste Lens token from IScraper" />
+        <button id="save-token" type="button" class="secondary">Save token</button>
+        <button id="connect" type="button" class="secondary">Create token in IScraper</button>
       </details>
 
       <p id="status" class="muted"></p>

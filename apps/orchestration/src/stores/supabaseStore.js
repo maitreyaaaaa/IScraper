@@ -3,6 +3,7 @@ const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('
 const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/providers');
 const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
 const { normalizeUsername, publicProfile } = require('../services/profiles');
+const { publicExtensionToken } = require('../services/extensionTokens');
 
 function createSupabaseStore({ url, serviceRoleKey }) {
   if (!url || !serviceRoleKey) {
@@ -64,6 +65,64 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return mapProfile(data);
     },
+    async createExtensionToken(userId, { tokenHash, name, scopes, expiresAt }) {
+      const { data, error } = await client
+        .from('extension_tokens')
+        .insert({
+          user_id: userId,
+          token_hash: tokenHash,
+          name: String(name || 'Browser extension').trim().slice(0, 80),
+          scopes,
+          expires_at: expiresAt,
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return publicExtensionToken(mapExtensionToken(data));
+    },
+    async listExtensionTokens(userId) {
+      const { data, error } = await client
+        .from('extension_tokens')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data.map(mapExtensionToken).map(publicExtensionToken);
+    },
+    async revokeExtensionToken(userId, id) {
+      const { data, error } = await client
+        .from('extension_tokens')
+        .update({ revoked_at: new Date().toISOString() })
+        .eq('user_id', userId)
+        .eq('id', id)
+        .select('id');
+      if (error) throw error;
+      return Boolean(data?.length);
+    },
+    async getUserForExtensionToken(tokenHash, requiredScope = 'lens:search') {
+      const { data, error } = await client
+        .from('extension_tokens')
+        .select('*')
+        .eq('token_hash', tokenHash)
+        .is('revoked_at', null)
+        .maybeSingle();
+      if (error) throw error;
+      const token = data ? mapExtensionToken(data) : null;
+      const expired = token?.expiresAt && new Date(token.expiresAt).getTime() <= Date.now();
+      if (!token || expired || !(token.scopes || []).includes(requiredScope)) return null;
+      await client
+        .from('extension_tokens')
+        .update({ last_used_at: new Date().toISOString() })
+        .eq('id', token.id)
+        .throwOnError();
+      return { id: token.userId, email: '' };
+    },
+    async recordLensSearchEvent({ userId, queryType, resultCount }) {
+      await client
+        .from('lens_search_events')
+        .insert({ user_id: userId, query_type: queryType, result_count: Number(resultCount || 0) })
+        .throwOnError();
+    },
     async listPublicFeedback() {
       const { data, error } = await client
         .from('public_feedback')
@@ -97,7 +156,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return mapImport(data);
     },
-    async upsertImportData({ userId, importId, parsed }) {
+    async upsertImportData({ userId, importId, parsed, initialStatus = 'queued' }) {
       if (!parsed.items.length) return [];
 
       const ids = [...new Set(parsed.items.map((item) => item.id).filter(Boolean))];
@@ -140,12 +199,23 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         source_author: item.sourceAuthor || item.ownerUsername || item.ownerName || '',
         source_description: item.sourceDescription || '',
         thumbnail_url: item.thumbnailUrl || '',
-        status: 'queued',
+        status: initialStatus,
       }));
       if (!items.length) return [];
       const { data, error } = await client.from('saved_items').insert(items).select('*');
       if (error) throw error;
       return data.map(mapItem);
+    },
+    async updateSavedItem(userId, id, patch = {}) {
+      const { data, error } = await client
+        .from('saved_items')
+        .update(toSavedItemPatch(patch))
+        .eq('user_id', userId)
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapItem(data) : null;
     },
     async createJobs({ userId, importId, items }) {
       const rows = items.map((item) => ({
@@ -569,6 +639,23 @@ function toJobRow(patch) {
   };
 }
 
+function toSavedItemPatch(patch = {}) {
+  const row = {};
+  if (Object.prototype.hasOwnProperty.call(patch, 'importId')) row.import_id = patch.importId;
+  if (Object.prototype.hasOwnProperty.call(patch, 'caption')) row.caption = patch.caption;
+  if (Object.prototype.hasOwnProperty.call(patch, 'collections')) row.collections = patch.collections;
+  if (Object.prototype.hasOwnProperty.call(patch, 'sourceTitle')) row.source_title = patch.sourceTitle;
+  if (Object.prototype.hasOwnProperty.call(patch, 'sourceAuthor')) row.source_author = patch.sourceAuthor;
+  if (Object.prototype.hasOwnProperty.call(patch, 'sourceDescription')) row.source_description = patch.sourceDescription;
+  if (Object.prototype.hasOwnProperty.call(patch, 'thumbnailUrl')) row.thumbnail_url = patch.thumbnailUrl;
+  if (Object.prototype.hasOwnProperty.call(patch, 'platform')) row.platform = patch.platform;
+  if (Object.prototype.hasOwnProperty.call(patch, 'platformKey')) row.platform_key = patch.platformKey;
+  if (Object.prototype.hasOwnProperty.call(patch, 'sourceId')) row.source_id = patch.sourceId;
+  if (Object.prototype.hasOwnProperty.call(patch, 'status')) row.status = patch.status;
+  if (Object.prototype.hasOwnProperty.call(patch, 'error')) row.error = patch.error;
+  return row;
+}
+
 function toAnalysisRow(analysis) {
   return {
     title: analysis.title,
@@ -650,6 +737,19 @@ function mapProfile(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
+}
+
+function mapExtensionToken(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    scopes: row.scopes || [],
+    createdAt: row.created_at,
+    lastUsedAt: row.last_used_at,
+    expiresAt: row.expires_at,
+    revokedAt: row.revoked_at,
+  };
 }
 
 function matchesFilters(item, filters = {}) {

@@ -14,6 +14,13 @@ const { formatPrice } = require('./services/credits');
 const { buildKnowledgeGraph, buildObsidianFiles } = require('./services/graph');
 const { parseManualLinkPayload } = require('./services/linkSaver');
 const { validateProfileInput } = require('./services/profiles');
+const {
+  DEFAULT_EXTENSION_SCOPES,
+  defaultExtensionExpiry,
+  generateExtensionToken,
+  hashExtensionToken,
+} = require('./services/extensionTokens');
+const { cleanLensText, describeLensCrop } = require('./services/lensSearch');
 
 const HTML_UPLOAD_EXTENSIONS = new Set(['.html', '.htm']);
 const HTML_UPLOAD_MIME_TYPES = new Set(['text/html', 'application/octet-stream', '']);
@@ -34,6 +41,22 @@ async function getUser(req, store) {
     id: req.header('x-user-id') || 'local-dev-user',
     email: req.header('x-user-email') || 'local@example.com',
   };
+}
+
+async function getExtensionUser(req, store, requiredScope = 'lens:search') {
+  const token = String(req.header('x-iscraper-extension-token') || '').trim();
+  if (!token || typeof store.getUserForExtensionToken !== 'function') {
+    const error = new Error('Connect the IScraper extension before using Lens search.');
+    error.statusCode = 401;
+    throw error;
+  }
+  const user = await store.getUserForExtensionToken(hashExtensionToken(token), requiredScope);
+  if (!user) {
+    const error = new Error('Extension token is invalid, expired, or revoked.');
+    error.statusCode = 401;
+    throw error;
+  }
+  return user;
 }
 
 function asyncRoute(handler) {
@@ -77,10 +100,10 @@ function clientIp(req) {
     .trim();
 }
 
-function createRateLimiter({ windowMs, max, name }) {
+function createRateLimiter({ windowMs, max, name, namespace = 'app' }) {
   return (req, res, next) => {
     const now = Date.now();
-    const key = `${name}:${clientIp(req)}`;
+    const key = `${namespace}:${name}:${clientIp(req)}`;
     const current = rateBuckets.get(key);
     const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + windowMs };
     bucket.count += 1;
@@ -117,6 +140,78 @@ function uploadFileFilter(_req, file, callback) {
   return callback(null, true);
 }
 
+function cleanText(value, maxLength) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function reviewUpdatesFromBody(body = {}, item = {}) {
+  const sourceTitle = cleanText(body.sourceTitle ?? body.title ?? item.sourceTitle, 160);
+  const sourceAuthor = cleanText(body.sourceAuthor ?? body.author ?? item.sourceAuthor, 120);
+  const sourceDescription = cleanText(body.sourceDescription ?? body.description ?? item.sourceDescription, 500);
+  const note = cleanText(body.note, 500);
+  const collections = Array.isArray(body.collections)
+    ? body.collections.map((entry) => cleanText(entry, 80)).filter(Boolean).slice(0, 12)
+    : cleanText(body.collection, 80)
+      ? [cleanText(body.collection, 80)]
+      : item.collections || [];
+  const caption = [
+    sourceTitle || item.sourceTitle || item.url,
+    sourceDescription ? `Description: ${sourceDescription}` : '',
+    note ? `Note: ${note}` : '',
+    `Source: ${item.platform || 'Web'}`,
+    `URL: ${item.url}`,
+  ].filter(Boolean).join('\n');
+
+  return {
+    sourceTitle,
+    sourceAuthor,
+    sourceDescription,
+    collections,
+    caption,
+  };
+}
+
+function publicLensResult(item) {
+  const analysis = item.analysis || {};
+  return {
+    id: item.id,
+    url: item.url,
+    platform: item.platform || 'Web',
+    sourceTitle: item.sourceTitle || analysis.title || firstLine(item.caption) || 'Saved item',
+    sourceAuthor: item.sourceAuthor || item.ownerUsername || item.ownerName || '',
+    sourceDescription: item.sourceDescription || analysis.summary || item.caption || '',
+    thumbnailUrl: item.thumbnailUrl || '',
+    status: item.status,
+    summary: analysis.summary || '',
+    tags: analysis.tags || item.hashtags || [],
+  };
+}
+
+function firstLine(value = '') {
+  return String(value).split('\n').find(Boolean)?.slice(0, 160);
+}
+
+async function runSearch({ store, config, userId, query, filters = {} }) {
+  let queryEmbedding = null;
+  if (query && config.credentialEncryptionKey && store.supportsSemanticSearch && typeof store.getPreferredProviderCredential === 'function') {
+    try {
+      const embeddingCredential = await store.getPreferredProviderCredential(userId, 'embedding', config.credentialEncryptionKey);
+      if (embeddingCredential) {
+        queryEmbedding = await createOpenRouterEmbedding({
+          apiKey: embeddingCredential.apiKey,
+          model: embeddingCredential.model || config.openRouterEmbeddingModel,
+          input: query,
+          dimensions: config.embeddingDimensions,
+          inputType: 'search_query',
+        });
+      }
+    } catch (error) {
+      console.warn(`Semantic query embedding failed: ${error.message}`);
+    }
+  }
+  return store.search(userId, query, filters, { queryEmbedding });
+}
+
 function createApp({ store, config = {} }) {
   const app = express();
   const upload = multer({
@@ -128,11 +223,12 @@ function createApp({ store, config = {} }) {
     },
   });
   const rateWindowMs = config.rateLimitWindowMs || 15 * 60 * 1000;
-  const generalRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.rateLimitMax || 600, name: 'general' });
-  const feedbackRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.feedbackRateLimitMax || 20, name: 'feedback' });
-  const importRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.importRateLimitMax || 10, name: 'import' });
-  const searchRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.searchRateLimitMax || 180, name: 'search' });
-  const checkoutRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.checkoutRateLimitMax || 10, name: 'checkout' });
+  const rateLimitNamespace = config.rateLimitNamespace || crypto.randomUUID();
+  const generalRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.rateLimitMax || 600, name: 'general', namespace: rateLimitNamespace });
+  const feedbackRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.feedbackRateLimitMax || 20, name: 'feedback', namespace: rateLimitNamespace });
+  const importRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.importRateLimitMax || 10, name: 'import', namespace: rateLimitNamespace });
+  const searchRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.searchRateLimitMax || 180, name: 'search', namespace: rateLimitNamespace });
+  const checkoutRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.checkoutRateLimitMax || 10, name: 'checkout', namespace: rateLimitNamespace });
   const allowedOrigins = new Set((config.corsOrigins || []).map((origin) => String(origin).replace(/\/$/, '')));
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
@@ -219,6 +315,50 @@ function createApp({ store, config = {} }) {
     return res.status(201).json(result);
   }));
 
+  app.post('/api/lens/search', searchRateLimit, asyncRoute(async (req, res) => {
+    const user = await getExtensionUser(req, store, 'lens:search');
+    const type = req.body?.type === 'image' ? 'image' : 'text';
+    let query = cleanLensText(req.body?.query, type === 'image' ? 500 : 240);
+    let imageAnalysis = null;
+
+    if (type === 'text' && query.length < 2) {
+      return res.status(400).json({ error: 'Select at least 2 characters to search your brain.' });
+    }
+
+    if (type === 'image') {
+      if (!config.credentialEncryptionKey || typeof store.getPreferredProviderCredential !== 'function') {
+        return res.status(428).json({ error: 'Connect a media AI key before using Lens image search.' });
+      }
+      const mediaCredential = await store.getPreferredProviderCredential(user.id, 'media', config.credentialEncryptionKey);
+      const described = await describeLensCrop({ dataUrl: req.body?.imageDataUrl, credential: mediaCredential });
+      query = described.query;
+      imageAnalysis = described.analysis;
+    }
+
+    const results = (await runSearch({
+      store,
+      config,
+      userId: user.id,
+      query,
+      filters: req.body?.filters || {},
+    })).slice(0, 8).map(publicLensResult);
+
+    if (typeof store.recordLensSearchEvent === 'function') {
+      await store.recordLensSearchEvent({ userId: user.id, queryType: type, resultCount: results.length });
+    }
+
+    return res.json({
+      query,
+      type,
+      results,
+      imageAnalysis: imageAnalysis ? {
+        title: imageAnalysis.title || '',
+        ocrText: imageAnalysis.ocrText || '',
+        visualDescription: imageAnalysis.visualDescription || '',
+      } : null,
+    });
+  }));
+
   app.use(asyncRoute(async (req, _res, next) => {
     const user = await getUser(req, store);
     await store.ensureUser(user.id, user.email);
@@ -242,6 +382,47 @@ function createApp({ store, config = {} }) {
     return res.json({ item });
   }));
 
+  app.patch('/api/items/:id/review', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.updateSavedItem !== 'function') return res.status(501).json({ error: 'Review updates are not available.' });
+    const item = await store.getItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+    const updated = await store.updateSavedItem(req.user.id, item.id, reviewUpdatesFromBody(req.body || {}, item));
+    return res.json({ item: updated });
+  }));
+
+  app.post('/api/items/:id/approve', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.updateSavedItem !== 'function') return res.status(501).json({ error: 'Review approval is not available.' });
+    let item = await store.getItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+
+    item = await store.updateSavedItem(req.user.id, item.id, {
+      ...reviewUpdatesFromBody(req.body || {}, item),
+      status: item.status === 'done' ? 'done' : 'queued',
+      error: null,
+    });
+
+    let importId = item.importId;
+    if (!importId) {
+      const importEntry = await store.createImport({
+        userId: req.user.id,
+        source: 'review-approval',
+        mode: 'export',
+        fileNames: [item.url],
+      });
+      importId = importEntry.id;
+      item = await store.updateSavedItem(req.user.id, item.id, { importId });
+    }
+
+    const jobs = item.status === 'done' ? [] : await store.createJobs({ userId: req.user.id, importId, items: [item] });
+    if (req.body?.startProcessing !== false && jobs.length) {
+      startProcessing({ store, userId: req.user.id, importId, config, shouldDownload: false });
+    }
+
+    return res.json({ item, queuedJobCount: jobs.length, jobs });
+  }));
+
   app.get('/api/credits', asyncRoute(async (req, res) => {
     res.json({ credits: await store.getCredits(req.user.id) });
   }));
@@ -258,6 +439,31 @@ function createApp({ store, config = {} }) {
     });
     const profile = await store.saveProfile(req.user.id, input);
     res.json({ profile });
+  }));
+
+  app.get('/api/extension-tokens', asyncRoute(async (req, res) => {
+    if (typeof store.listExtensionTokens !== 'function') return res.json({ tokens: [] });
+    return res.json({ tokens: await store.listExtensionTokens(req.user.id) });
+  }));
+
+  app.post('/api/extension-tokens', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.createExtensionToken !== 'function') return res.status(501).json({ error: 'Extension tokens are not available.' });
+    const rawToken = generateExtensionToken();
+    const token = await store.createExtensionToken(req.user.id, {
+      tokenHash: hashExtensionToken(rawToken),
+      name: cleanText(req.body?.name || 'Browser extension', 80),
+      scopes: DEFAULT_EXTENSION_SCOPES,
+      expiresAt: defaultExtensionExpiry(),
+    });
+    return res.status(201).json({ token, secret: rawToken });
+  }));
+
+  app.delete('/api/extension-tokens/:id', asyncRoute(async (req, res) => {
+    if (typeof store.revokeExtensionToken !== 'function') return res.status(501).json({ error: 'Extension tokens are not available.' });
+    const revoked = await store.revokeExtensionToken(req.user.id, req.params.id);
+    if (!revoked) return res.status(404).json({ error: 'Extension token not found.' });
+    return res.json({ revoked: true });
   }));
 
   app.get('/api/graph', asyncRoute(async (req, res) => {
@@ -388,10 +594,11 @@ function createApp({ store, config = {} }) {
       mode: 'export',
       fileNames: [parsed.items[0].url],
     });
-    const items = await store.upsertImportData({ userId: req.user.id, importId: importEntry.id, parsed });
-    const jobs = await store.createJobs({ userId: req.user.id, importId: importEntry.id, items });
+    const initialStatus = req.body?.startProcessing === true ? 'queued' : 'needs_review';
+    const items = await store.upsertImportData({ userId: req.user.id, importId: importEntry.id, parsed, initialStatus });
+    const jobs = initialStatus === 'queued' ? await store.createJobs({ userId: req.user.id, importId: importEntry.id, items }) : [];
 
-    if (req.body?.startProcessing !== false && jobs.length) {
+    if (req.body?.startProcessing === true && jobs.length) {
       startProcessing({ store, userId: req.user.id, importId: importEntry.id, config, shouldDownload: false });
     }
 
@@ -434,25 +641,7 @@ function createApp({ store, config = {} }) {
 
   app.post('/api/search', searchRateLimit, asyncRoute(async (req, res) => {
     const query = String(req.body.query || '').trim().slice(0, 240);
-    let queryEmbedding = null;
-    if (query && config.credentialEncryptionKey && store.supportsSemanticSearch && typeof store.getPreferredProviderCredential === 'function') {
-      try {
-        const embeddingCredential = await store.getPreferredProviderCredential(req.user.id, 'embedding', config.credentialEncryptionKey);
-        if (embeddingCredential) {
-          queryEmbedding = await createOpenRouterEmbedding({
-            apiKey: embeddingCredential.apiKey,
-            model: embeddingCredential.model || config.openRouterEmbeddingModel,
-            input: query,
-            dimensions: config.embeddingDimensions,
-            inputType: 'search_query',
-          });
-        }
-      } catch (error) {
-        console.warn(`Semantic query embedding failed: ${error.message}`);
-      }
-    }
-
-    const results = await store.search(req.user.id, query, req.body.filters || {}, { queryEmbedding });
+    const results = await runSearch({ store, config, userId: req.user.id, query, filters: req.body.filters || {} });
     res.json({ results });
   }));
 

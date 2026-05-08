@@ -36,6 +36,22 @@ export function getItem(id) {
   return request(`/items/${id}`);
 }
 
+export function updateReviewItem(id, payload) {
+  return request(`/items/${id}/review`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approveReviewItem(id, payload = {}) {
+  return request(`/items/${id}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getCredits() {
   return request('/credits');
 }
@@ -81,6 +97,24 @@ export function createCreditCheckout(packageId) {
 
 export function getProviderCredentials() {
   return request('/provider-credentials');
+}
+
+export function getExtensionTokens() {
+  return request('/extension-tokens');
+}
+
+export function createExtensionToken(name = 'Browser extension') {
+  return request('/extension-tokens', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function revokeExtensionToken(id) {
+  return request(`/extension-tokens/${id}`, {
+    method: 'DELETE',
+  });
 }
 
 export function saveProviderCredential(payload) {

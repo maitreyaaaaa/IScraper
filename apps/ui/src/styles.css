@@ -63,8 +63,8 @@
   --muted: oklch(0.12 0 0);
   --muted-foreground: oklch(0.62 0 0);
 
-  /* Magenta accent */
-  --accent: oklch(0.7 0.28 340);
+  /* Orange accent */
+  --accent: oklch(0.74 0.22 48);
   --accent-foreground: oklch(0.98 0 0);
 
   --destructive: oklch(0.65 0.25 27);
@@ -75,7 +75,7 @@
   --ring: oklch(0.92 0.24 130);
 
   --glow: oklch(0.92 0.24 130);
-  --glow-2: oklch(0.7 0.28 340);
+  --glow-2: oklch(0.74 0.22 48);
 
   --font-display: "Space Grotesk", system-ui, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", monospace;

@@ -6,6 +6,7 @@ const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('
 const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/providers');
 const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
 const { normalizeUsername, publicProfile } = require('../services/profiles');
+const { publicExtensionToken } = require('../services/extensionTokens');
 
 const DEFAULT_USER_ID = 'local-dev-user';
 
@@ -43,6 +44,8 @@ function seedFromLegacyIndex(dataPath) {
     adminCreditAdjustments: [],
     feedback: [],
     profiles: [],
+    extensionTokens: [],
+    lensSearchEvents: [],
     items: legacy.map((item) => ({
       ...item,
       userId: DEFAULT_USER_ID,
@@ -93,6 +96,8 @@ function emptyState() {
     adminCreditAdjustments: [],
     feedback: [],
     profiles: [],
+    extensionTokens: [],
+    lensSearchEvents: [],
   };
 }
 
@@ -108,6 +113,8 @@ function normalizeState(state) {
     adminCreditAdjustments: state.adminCreditAdjustments || [],
     feedback: state.feedback || [],
     profiles: state.profiles || [],
+    extensionTokens: state.extensionTokens || [],
+    lensSearchEvents: state.lensSearchEvents || [],
   };
 }
 
@@ -163,6 +170,61 @@ function createLocalStore({ dataPath }) {
       return publicProfile(profile);
     },
 
+    createExtensionToken(userId, { tokenHash, name, scopes, expiresAt }) {
+      const token = {
+        id: `extension-token-${Date.now()}-${state.extensionTokens.length + 1}`,
+        userId,
+        tokenHash,
+        name: String(name || 'Browser extension').trim().slice(0, 80),
+        scopes,
+        createdAt: now(),
+        lastUsedAt: null,
+        expiresAt,
+        revokedAt: null,
+      };
+      state.extensionTokens.push(token);
+      save();
+      return publicExtensionToken(token);
+    },
+
+    listExtensionTokens(userId) {
+      return state.extensionTokens
+        .filter((token) => token.userId === userId)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .map(publicExtensionToken);
+    },
+
+    revokeExtensionToken(userId, id) {
+      const token = state.extensionTokens.find((entry) => entry.userId === userId && entry.id === id);
+      if (!token) return false;
+      token.revokedAt = now();
+      save();
+      return true;
+    },
+
+    getUserForExtensionToken(tokenHash, requiredScope = 'lens:search') {
+      const token = state.extensionTokens.find((entry) => entry.tokenHash === tokenHash);
+      const expired = token?.expiresAt && new Date(token.expiresAt).getTime() <= Date.now();
+      if (!token || token.revokedAt || expired || !(token.scopes || []).includes(requiredScope)) return null;
+      token.lastUsedAt = now();
+      save();
+      const user = state.users.find((entry) => entry.id === token.userId);
+      return { id: token.userId, email: user?.email || '' };
+    },
+
+    recordLensSearchEvent({ userId, queryType, resultCount }) {
+      const entry = {
+        id: `lens-event-${Date.now()}-${state.lensSearchEvents.length + 1}`,
+        userId,
+        queryType,
+        resultCount: Number(resultCount || 0),
+        createdAt: now(),
+      };
+      state.lensSearchEvents.push(entry);
+      save();
+      return entry;
+    },
+
     listPublicFeedback() {
       return [...state.feedback]
         .filter((entry) => entry.status !== 'hidden')
@@ -200,7 +262,7 @@ function createLocalStore({ dataPath }) {
       return entry;
     },
 
-    upsertImportData({ userId, importId, parsed }) {
+    upsertImportData({ userId, importId, parsed, initialStatus = 'queued' }) {
       for (const collection of parsed.collections) {
         const id = `${userId}:${collection.name}`;
         if (!state.collections.find((entry) => entry.id === id)) {
@@ -226,7 +288,7 @@ function createLocalStore({ dataPath }) {
           ...item,
           userId,
           importId,
-          status: 'queued',
+          status: initialStatus,
           analysis: null,
           createdAt: now(),
           updatedAt: now(),
@@ -237,6 +299,31 @@ function createLocalStore({ dataPath }) {
 
       save();
       return items;
+    },
+
+    updateSavedItem(userId, id, patch = {}) {
+      const item = this.getItem(userId, id);
+      if (!item) return null;
+      const allowed = [
+        'importId',
+        'caption',
+        'collections',
+        'sourceTitle',
+        'sourceAuthor',
+        'sourceDescription',
+        'thumbnailUrl',
+        'platform',
+        'platformKey',
+        'sourceId',
+        'status',
+        'error',
+      ];
+      for (const key of allowed) {
+        if (Object.prototype.hasOwnProperty.call(patch, key)) item[key] = patch[key];
+      }
+      item.updatedAt = now();
+      save();
+      return item;
     },
 
     createJobs({ userId, importId, items }) {

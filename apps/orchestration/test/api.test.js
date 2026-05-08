@@ -132,10 +132,144 @@ test('POST /api/saves/link stores one deduped web save', async () => {
     assert.equal(firstResponse.status, 201);
     assert.equal(secondResponse.status, 201);
     assert.equal(first.newItemCount, 1);
-    assert.equal(first.queuedJobCount, 1);
+    assert.equal(first.queuedJobCount, 0);
+    assert.equal(first.item.status, 'needs_review');
     assert.equal(second.newItemCount, 0);
     assert.equal(second.skippedDuplicateCount, 1);
     assert.equal(store.getItems('local-dev-user').length, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/items/:id/approve queues a reviewed web save', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const saveResponse = await fetch(`http://127.0.0.1:${port}/api/saves/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: 'https://x.com/example/status/100',
+        title: 'Draft title',
+        description: 'Original description',
+      }),
+    });
+    const saved = await saveResponse.json();
+
+    const approveResponse = await fetch(`http://127.0.0.1:${port}/api/items/${saved.item.id}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceTitle: 'Clean title',
+        sourceDescription: 'Clean description',
+        collections: ['Research'],
+        startProcessing: false,
+      }),
+    });
+    const approved = await approveResponse.json();
+    const jobs = await store.getJobs('local-dev-user');
+
+    assert.equal(saveResponse.status, 201);
+    assert.equal(approveResponse.status, 200);
+    assert.equal(approved.item.status, 'queued');
+    assert.equal(approved.item.sourceTitle, 'Clean title');
+    assert.deepEqual(approved.item.collections, ['Research']);
+    assert.equal(approved.queuedJobCount, 1);
+    assert.equal(jobs.length, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('extension token can search Lens text and stops after revoke', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    await fetch(`http://127.0.0.1:${port}/api/saves/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: 'https://example.com/security-guide',
+        title: 'SOC 2 compliance checklist',
+        description: 'Security controls and audit readiness',
+      }),
+    });
+    const tokenResponse = await fetch(`http://127.0.0.1:${port}/api/extension-tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Test extension' }),
+    });
+    const tokenBody = await tokenResponse.json();
+
+    const searchResponse = await fetch(`http://127.0.0.1:${port}/api/lens/search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+      body: JSON.stringify({ type: 'text', query: 'SOC 2 security' }),
+    });
+    const searchBody = await searchResponse.json();
+    await fetch(`http://127.0.0.1:${port}/api/extension-tokens/${tokenBody.token.id}`, { method: 'DELETE' });
+    const revokedResponse = await fetch(`http://127.0.0.1:${port}/api/lens/search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+      body: JSON.stringify({ type: 'text', query: 'security' }),
+    });
+
+    assert.equal(tokenResponse.status, 201);
+    assert.match(tokenBody.secret, /^isx_/);
+    assert.equal(searchResponse.status, 200);
+    assert.equal(searchBody.results.length, 1);
+    assert.equal(searchBody.results[0].sourceTitle, 'SOC 2 compliance checklist');
+    assert.equal(revokedResponse.status, 401);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Lens image search rejects invalid crop payloads', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { credentialEncryptionKey: 'dev-encryption-key' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const tokenResponse = await fetch(`http://127.0.0.1:${port}/api/extension-tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Test extension' }),
+    });
+    const tokenBody = await tokenResponse.json();
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/lens/search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+      body: JSON.stringify({ type: 'image', imageDataUrl: 'not-an-image' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.match(body.error, /PNG, JPEG, or WebP/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
