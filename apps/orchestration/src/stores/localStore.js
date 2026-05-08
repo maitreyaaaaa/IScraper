@@ -4,9 +4,10 @@ const { createJobsForImport, isRestartableJob } = require('../services/queue');
 const { searchItems } = require('../services/analyzer');
 const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
 const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/providers');
+const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
+const { normalizeUsername, publicProfile } = require('../services/profiles');
 
 const DEFAULT_USER_ID = 'local-dev-user';
-const FREE_ITEMS_LIMIT = 200;
 
 function now() {
   return new Date().toISOString();
@@ -35,9 +36,13 @@ function seedFromLegacyIndex(dataPath) {
     collections: [],
     jobs: [],
     providerCredentials: [],
+    creditPackages: DEFAULT_CREDIT_PACKAGES,
+    creditPurchases: [],
     creditTransactions: [],
     analysisUsageEvents: [],
+    adminCreditAdjustments: [],
     feedback: [],
+    profiles: [],
     items: legacy.map((item) => ({
       ...item,
       userId: DEFAULT_USER_ID,
@@ -74,9 +79,13 @@ function emptyState() {
     collections: [],
     jobs: [],
     providerCredentials: [],
+    creditPackages: DEFAULT_CREDIT_PACKAGES,
+    creditPurchases: [],
     creditTransactions: [],
     analysisUsageEvents: [],
+    adminCreditAdjustments: [],
     feedback: [],
+    profiles: [],
   };
 }
 
@@ -85,9 +94,13 @@ function normalizeState(state) {
     ...emptyState(),
     ...state,
     providerCredentials: state.providerCredentials || [],
+    creditPackages: (state.creditPackages?.length ? state.creditPackages : DEFAULT_CREDIT_PACKAGES).map(normalizePackage),
+    creditPurchases: state.creditPurchases || [],
     creditTransactions: state.creditTransactions || [],
     analysisUsageEvents: state.analysisUsageEvents || [],
+    adminCreditAdjustments: state.adminCreditAdjustments || [],
     feedback: state.feedback || [],
+    profiles: state.profiles || [],
   };
 }
 
@@ -108,6 +121,40 @@ function createLocalStore({ dataPath }) {
 
   return {
     ensureUser,
+
+    getProfile(userId) {
+      return publicProfile(state.profiles.find((profile) => profile.userId === userId) || null);
+    },
+
+    saveProfile(userId, { username, avatarUrl = '' }) {
+      const normalizedUsername = normalizeUsername(username);
+      const conflicting = state.profiles.find((profile) => profile.username === normalizedUsername && profile.userId !== userId);
+      if (conflicting) {
+        const error = new Error('That username is already taken.');
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const existing = state.profiles.find((profile) => profile.userId === userId);
+      if (existing) {
+        existing.username = normalizedUsername;
+        existing.avatarUrl = avatarUrl;
+        existing.updatedAt = now();
+        save();
+        return publicProfile(existing);
+      }
+
+      const profile = {
+        userId,
+        username: normalizedUsername,
+        avatarUrl,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      state.profiles.push(profile);
+      save();
+      return publicProfile(profile);
+    },
 
     listPublicFeedback() {
       return [...state.feedback]
@@ -154,8 +201,9 @@ function createLocalStore({ dataPath }) {
         }
       }
 
-      const items = parsed.items.map((item) => {
-        const existing = state.items.find((entry) => entry.userId === userId && entry.url === item.url);
+      const items = [];
+      for (const item of parsed.items) {
+        const existing = state.items.find((entry) => entry.userId === userId && (entry.id === item.id || entry.url === item.url));
         if (existing) {
           Object.assign(existing, {
             ...item,
@@ -164,7 +212,7 @@ function createLocalStore({ dataPath }) {
             collections: [...new Set([...(existing.collections || []), ...(item.collections || [])])],
             updatedAt: now(),
           });
-          return existing;
+          continue;
         }
 
         const created = {
@@ -177,8 +225,8 @@ function createLocalStore({ dataPath }) {
           updatedAt: now(),
         };
         state.items.push(created);
-        return created;
-      });
+        items.push(created);
+      }
 
       save();
       return items;
@@ -269,6 +317,68 @@ function createLocalStore({ dataPath }) {
       return searchItems(this.getItems(userId), query, filters);
     },
 
+    listCreditPackages() {
+      return state.creditPackages
+        .map(normalizePackage)
+        .filter((entry) => entry.active);
+    },
+
+    getCreditPackage(packageId) {
+      return state.creditPackages
+        .map(normalizePackage)
+        .find((entry) => entry.id === packageId && entry.active) || null;
+    },
+
+    createCreditPurchase({ userId, packageEntry }) {
+      const purchase = {
+        id: `purchase-${Date.now()}-${state.creditPurchases.length + 1}`,
+        userId,
+        packageId: packageEntry.id,
+        credits: packageEntry.credits,
+        amountCents: packageEntry.amountCents,
+        currency: packageEntry.currency,
+        status: 'pending',
+        stripeCheckoutSessionId: null,
+        stripePaymentIntentId: null,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      state.creditPurchases.push(purchase);
+      save();
+      return purchase;
+    },
+
+    updateCreditPurchaseSession({ purchaseId, checkoutSessionId }) {
+      const purchase = state.creditPurchases.find((entry) => entry.id === purchaseId);
+      if (!purchase) return null;
+      purchase.stripeCheckoutSessionId = checkoutSessionId;
+      purchase.updatedAt = now();
+      save();
+      return purchase;
+    },
+
+    completeCreditPurchase({ purchaseId, checkoutSessionId, paymentIntentId }) {
+      const purchase = state.creditPurchases.find((entry) => (
+        (purchaseId && entry.id === purchaseId) || (checkoutSessionId && entry.stripeCheckoutSessionId === checkoutSessionId)
+      ));
+      if (!purchase) return null;
+      if (purchase.status === 'completed') return purchase;
+
+      purchase.status = 'completed';
+      purchase.stripeCheckoutSessionId = checkoutSessionId || purchase.stripeCheckoutSessionId;
+      purchase.stripePaymentIntentId = paymentIntentId || purchase.stripePaymentIntentId;
+      purchase.completedAt = now();
+      purchase.updatedAt = now();
+      this.addCreditTransaction({
+        userId: purchase.userId,
+        amount: purchase.credits,
+        reason: 'credit_purchase',
+        metadata: { purchaseId: purchase.id, checkoutSessionId: purchase.stripeCheckoutSessionId },
+      });
+      save();
+      return purchase;
+    },
+
     getCredits(userId) {
       const freeItemsUsed = new Set(
         state.analysisUsageEvents
@@ -285,6 +395,8 @@ function createLocalStore({ dataPath }) {
         freeItemsUsed,
         freeItemsRemaining: Math.max(FREE_ITEMS_LIMIT - freeItemsUsed, 0),
         paidCredits,
+        itemCreditCost: 1,
+        totalAvailableCredits: Math.max(FREE_ITEMS_LIMIT - freeItemsUsed, 0) + paidCredits,
       };
     },
 
@@ -305,30 +417,53 @@ function createLocalStore({ dataPath }) {
       };
       state.analysisUsageEvents.push(event);
       if (source === 'paid') {
-        state.creditTransactions.push({
-          id: `credit-${Date.now()}-${state.creditTransactions.length + 1}`,
-          userId,
-          amount: -1,
-          reason: 'item_analysis',
-          itemId,
-          createdAt: now(),
-        });
+        this.addCreditTransaction({ userId, amount: -1, reason: 'item_analysis', itemId });
       }
       save();
       return event;
     },
 
-    addCreditTransaction({ userId, amount, reason = 'manual' }) {
+    addCreditTransaction({ userId, amount, reason = 'manual', itemId = null, metadata = {} }) {
+      const numericAmount = Number(amount || 0);
+      if (!Number.isInteger(numericAmount) || numericAmount === 0) {
+        throw new Error('Credit amount must be a non-zero whole number.');
+      }
+      const nextPaidCredits = this.getCredits(userId).paidCredits + numericAmount;
+      if (nextPaidCredits < 0) throw new Error('Not enough paid credits.');
+
       const transaction = {
         id: `credit-${Date.now()}-${state.creditTransactions.length + 1}`,
         userId,
-        amount,
+        amount: numericAmount,
         reason,
+        itemId,
+        metadata,
         createdAt: now(),
       };
       state.creditTransactions.push(transaction);
       save();
       return transaction;
+    },
+
+    addAdminCreditAdjustment({ userId, amount, reason, adminActor }) {
+      const transaction = this.addCreditTransaction({
+        userId,
+        amount,
+        reason: 'admin_adjustment',
+        metadata: { reason },
+      });
+      const adjustment = {
+        id: `admin-credit-${Date.now()}-${state.adminCreditAdjustments.length + 1}`,
+        userId,
+        amount: transaction.amount,
+        reason,
+        adminActor,
+        transactionId: transaction.id,
+        createdAt: now(),
+      };
+      state.adminCreditAdjustments.push(adjustment);
+      save();
+      return { adjustment, transaction, credits: this.getCredits(userId) };
     },
 
     listProviderCredentials(userId) {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } from 'd3-force';
 import {
   Activity,
   AlertCircle,
@@ -11,6 +12,7 @@ import {
   Check,
   CheckCircle2,
   Database,
+  Download,
   ExternalLink,
   Eye,
   FileText,
@@ -21,7 +23,6 @@ import {
   Loader2,
   Lock,
   Pause,
-  PlayCircle,
   Search,
   Settings,
   ShieldCheck,
@@ -30,16 +31,22 @@ import {
   Upload,
   X,
   Zap,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
 } from 'lucide-react';
 import {
   deleteProviderCredential,
-  getCredits,
+  downloadObsidianGraph,
   getItem,
   getItems,
+  getKnowledgeGraph,
+  getProfile,
   getPublicFeedback,
   getProviderCredentials,
   importInstagramExport,
   restartQueue,
+  saveProfile,
   saveProviderCredential,
   searchItems,
   setApiAccessToken,
@@ -104,8 +111,8 @@ function firstLine(value = '') {
   return String(value).split('\n').find(Boolean)?.slice(0, 90);
 }
 
-function BrandLogo({ className = 'h-8 w-28' }) {
-  return <img src="/logo.png" alt="IScraper" className={`${className} object-contain object-left`} />;
+function BrandLogo({ className = 'h-8 w-28', align = 'left' }) {
+  return <img src="/logo.png" alt="IScraper" className={`${className} object-contain ${align === 'center' ? 'object-center' : 'object-left'}`} />;
 }
 
 function scrollToSection(event, id) {
@@ -114,25 +121,37 @@ function scrollToSection(event, id) {
   window.history.replaceState(null, '', id);
 }
 
+function getRouteFromHash() {
+  if (window.location.hash === '#app') return 'app';
+  if (window.location.hash === '#how-to-use') return 'how-to-use';
+  if (window.location.hash === '#terms') return 'terms';
+  if (window.location.hash === '#privacy') return 'privacy';
+  return 'landing';
+}
+
 export default function App() {
-  const [route, setRoute] = useState(() => (window.location.hash === '#app' ? 'app' : 'landing'));
+  const [route, setRoute] = useState(getRouteFromHash);
 
   const navigate = useCallback((nextRoute) => {
     setRoute(nextRoute);
-    window.location.hash = nextRoute === 'app' ? 'app' : '';
+    window.location.hash = ['app', 'how-to-use', 'terms', 'privacy'].includes(nextRoute) ? nextRoute : '';
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
   useEffect(() => {
-    const onHashChange = () => setRoute(window.location.hash === '#app' ? 'app' : 'landing');
+    const onHashChange = () => setRoute(getRouteFromHash());
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  return route === 'app' ? <Dashboard onBack={() => navigate('landing')} /> : <Landing onOpenApp={() => navigate('app')} />;
+  if (route === 'app') return <Dashboard onBack={() => navigate('landing')} />;
+  if (route === 'how-to-use') return <HowToUsePage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />;
+  if (route === 'terms') return <LegalPage type="terms" onBack={() => navigate('landing')} />;
+  if (route === 'privacy') return <LegalPage type="privacy" onBack={() => navigate('landing')} />;
+  return <Landing onOpenApp={() => navigate('app')} onOpenHowTo={() => navigate('how-to-use')} onOpenTerms={() => navigate('terms')} onOpenPrivacy={() => navigate('privacy')} />;
 }
 
-function Landing({ onOpenApp }) {
+function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
   const root = useRef(null);
   const introRef = useRef(null);
   const cursorRef = useRef(null);
@@ -371,7 +390,7 @@ function Landing({ onOpenApp }) {
   return (
     <div ref={root} className="relative bg-black text-foreground overflow-x-hidden">
       <div ref={introRef} className="fixed inset-0 z-[200] grid place-items-center bg-black">
-        <BrandLogo className="intro-logo h-24 w-80 opacity-0 md:h-32 md:w-[28rem]" />
+        <BrandLogo align="center" className="intro-logo h-24 w-80 opacity-0 md:h-32 md:w-[28rem]" />
       </div>
 
       <div
@@ -381,7 +400,11 @@ function Landing({ onOpenApp }) {
 
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/5 bg-black/60 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <button type="button" className="nav-item flex items-center">
+          <button
+            type="button"
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            className="nav-item flex items-center"
+          >
             <BrandLogo className="h-12 w-44" />
           </button>
           <nav className="hidden items-center gap-8 text-sm text-muted-foreground md:flex">
@@ -434,9 +457,9 @@ function Landing({ onOpenApp }) {
               >
                 Open my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
               </button>
-              <a href="#features" className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
-                <PlayCircle className="h-4 w-4" /> See how it works
-              </a>
+              <button type="button" onClick={onOpenHowTo} className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
+                <FileText className="h-4 w-4" /> How to use
+              </button>
             </div>
           </div>
 
@@ -630,6 +653,256 @@ function Landing({ onOpenApp }) {
           </div>
         </div>
       </section>
+
+      <footer className="border-t border-white/10 px-6 py-8">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between">
+          <BrandLogo className="h-10 w-32" />
+          <div className="flex flex-wrap gap-4">
+            <button type="button" onClick={onOpenTerms} className="transition hover:text-primary">Terms of Service</button>
+            <button type="button" onClick={onOpenPrivacy} className="transition hover:text-primary">Privacy Policy</button>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+const HOW_TO_STEPS = [
+  {
+    image: '/how-to/1000347058.jpg',
+    title: 'Open Instagram settings',
+    copy: 'Go to Instagram settings. Tap the search box at the top.',
+  },
+  {
+    image: '/how-to/1000347059.jpg',
+    title: 'Search export',
+    copy: 'Type "Export Your Information". Tap the result called Export your information.',
+  },
+  {
+    image: '/how-to/1000347060.jpg',
+    title: 'Create the export',
+    copy: 'Tap the blue Create export button.',
+  },
+  {
+    image: '/how-to/1000347061.jpg',
+    title: 'Choose your device',
+    copy: 'Tap Export to device. This means Instagram will make a file you can download.',
+  },
+  {
+    image: '/how-to/1000347062.jpg',
+    title: 'Only choose Saved',
+    copy: 'Tap Customize information. Pick Saved only. Then tap Save.',
+  },
+  {
+    image: '/how-to/1000347063.jpg',
+    title: 'Check the export settings',
+    copy: 'Make sure it says Saved, Last year, and HTML. HTML is the file type this app reads.',
+  },
+  {
+    image: '/how-to/1000347064.jpg',
+    title: 'Start the export',
+    copy: 'Tap Start export. Instagram will prepare your saved posts file.',
+  },
+  {
+    image: '/how-to/1000347065.jpg',
+    title: 'Confirm it is you',
+    copy: 'Instagram may ask for your password. Enter it in Instagram, then wait for the download notification.',
+  },
+];
+
+function HowToUsePage({ onBack, onOpenApp }) {
+  const pageRef = useRef(null);
+
+  useEffect(() => {
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const ctx = gsap.context(() => {
+      if (reduceMotion) {
+        gsap.set(['.howto-reveal', '.howto-shot', '.howto-copy'], { autoAlpha: 1, x: 0, y: 0 });
+        return;
+      }
+
+      gsap.from('.howto-reveal', {
+        autoAlpha: 0,
+        y: 34,
+        duration: 0.75,
+        ease: 'power3.out',
+        stagger: 0.08,
+      });
+
+      gsap.utils.toArray('.howto-step').forEach((step) => {
+        const shot = step.querySelector('.howto-shot');
+        const copy = step.querySelector('.howto-copy');
+        const reverse = step.dataset.reverse === 'true';
+
+        gsap.fromTo(
+          shot,
+          { autoAlpha: 0, x: reverse ? 70 : -70, y: 16 },
+          {
+            autoAlpha: 1,
+            x: 0,
+            y: 0,
+            duration: 0.85,
+            ease: 'power3.out',
+            scrollTrigger: {
+              trigger: step,
+              start: 'top 72%',
+              toggleActions: 'play none none reverse',
+            },
+          },
+        );
+
+        gsap.fromTo(
+          copy,
+          { autoAlpha: 0, x: reverse ? -70 : 70, y: 16 },
+          {
+            autoAlpha: 1,
+            x: 0,
+            y: 0,
+            duration: 0.85,
+            ease: 'power3.out',
+            delay: 0.08,
+            scrollTrigger: {
+              trigger: step,
+              start: 'top 72%',
+              toggleActions: 'play none none reverse',
+            },
+          },
+        );
+      });
+
+      window.setTimeout(() => ScrollTrigger.refresh(), 250);
+    }, pageRef);
+
+    return () => ctx.revert();
+  }, []);
+
+  return (
+    <div ref={pageRef} className="min-h-screen overflow-hidden bg-black text-foreground">
+      <div className="grid-bg radial-fade pointer-events-none fixed inset-0 opacity-40" />
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-black/85 px-5 py-4 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
+          <button type="button" onClick={onBack} className="flex items-center gap-3 transition hover:opacity-80">
+            <ArrowLeft className="h-5 w-5 text-muted-foreground" />
+            <BrandLogo className="h-12 w-40" />
+          </button>
+          <button type="button" onClick={onOpenApp} className="hidden rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02] sm:inline-flex">
+            Open app
+          </button>
+        </div>
+      </header>
+
+      <main className="relative mx-auto max-w-7xl px-5 py-14 md:py-20">
+        <section className="howto-reveal mb-14 max-w-4xl">
+          <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">How to use IScraper</div>
+          <h1 className="font-display text-5xl font-bold tracking-tighter md:text-7xl">
+            Get your Instagram saved posts file.
+          </h1>
+          <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
+            Follow these screenshots from first to last. Think of it like this: Instagram packs your saved posts into a file, then you upload that file here.
+          </p>
+        </section>
+
+        <div className="space-y-6 md:space-y-0">
+          {HOW_TO_STEPS.map((step, index) => (
+            <article
+              key={step.image}
+              data-reverse={index % 2 === 1}
+              className="howto-step grid min-h-[calc(100vh-5rem)] items-center gap-8 py-10 md:grid-cols-2 md:gap-14 md:py-16"
+            >
+              <div className={`howto-shot ${index % 2 === 1 ? 'md:order-2' : ''}`}>
+                <div className="mx-auto max-w-[18rem] overflow-hidden rounded-[1.75rem] shadow-2xl shadow-black/50 md:max-w-[21rem]">
+                  <img src={step.image} alt={`Step ${index + 1}: ${step.title}`} className="max-h-[68vh] w-full object-contain" loading={index < 2 ? 'eager' : 'lazy'} />
+                </div>
+              </div>
+              <div className={`howto-copy flex flex-col justify-center p-2 md:p-10 ${index % 2 === 1 ? 'md:order-1' : ''}`}>
+                <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-primary font-display text-2xl font-bold text-primary-foreground">
+                  {index + 1}
+                </div>
+                <h2 className="font-display text-3xl font-bold tracking-tight md:text-5xl">{step.title}</h2>
+                <p className="mt-5 max-w-xl text-lg leading-8 text-muted-foreground">{step.copy}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <section className="howto-reveal mt-14 rounded-[2rem] border border-primary/30 bg-primary p-6 text-black md:p-10">
+          <h2 className="font-display text-4xl font-bold tracking-tight">After Instagram sends the file</h2>
+          <p className="mt-3 max-w-2xl text-base leading-7">
+            Download the export from Instagram, come back to IScraper, open your library, and upload the saved HTML files.
+          </p>
+          <button type="button" onClick={onOpenApp} className="mt-6 inline-flex items-center gap-3 rounded-full bg-black px-6 py-4 font-semibold text-white transition hover:scale-[1.02]">
+            Open my library <ArrowRight className="h-5 w-5" />
+          </button>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+const LEGAL_CONTENT = {
+  terms: {
+    eyebrow: 'Terms of Service',
+    title: 'Terms of Service',
+    intro: 'These terms explain the rules for using IScraper. They are a practical starting point, not a substitute for advice from your lawyer.',
+    sections: [
+      ['Using IScraper', 'IScraper helps you upload your official Instagram export and turn saved posts into a private searchable library. You are responsible for using the app lawfully and only uploading exports that belong to you.'],
+      ['Accounts', 'You must sign in before importing saved posts. You are responsible for activity on your account and for keeping your login secure. Usernames must be unique and may be changed if they impersonate someone, violate rights, or create abuse.'],
+      ['Your content', 'Your Instagram export, saved links, captions, notes, summaries, graph data, username, and optional profile picture remain your content. You give IScraper permission to process that content only to provide the app features.'],
+      ['Emails and updates', 'We may send account, security, product, billing, import, and support emails to the email address on your account. We may also send product updates or marketing emails where you have opted in or where the law allows it, and those marketing emails must include a way to unsubscribe.'],
+      ['AI processing', 'When indexing is enabled, content may be sent to configured AI providers to create summaries, OCR, transcripts, tags, and search data. AI output can be wrong, incomplete, or outdated, so you should verify important information yourself.'],
+      ['Things you cannot do', 'Do not upload content you do not have rights to use, attack the service, bypass rate limits, scrape or copy other users data, reverse engineer protected parts of the service, or use IScraper for unlawful activity.'],
+      ['Credits and paid features', 'Credit purchases are currently marked as coming soon. If payments are enabled later, pricing, refunds, and billing terms will be shown before purchase.'],
+      ['Service changes', 'We may change, pause, or discontinue features. We will try to avoid disrupting your saved library, but we do not guarantee uninterrupted access.'],
+      ['Disclaimer', 'IScraper is provided as-is without warranties. To the maximum extent allowed by law, we are not responsible for indirect damages, lost data, lost profits, or decisions made from AI-generated output.'],
+      ['Contact', 'For support or legal questions, contact the IScraper operator using the support email that will be published before public launch.'],
+    ],
+  },
+  privacy: {
+    eyebrow: 'Privacy Policy',
+    title: 'Privacy Policy',
+    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Google/Supabase login, Instagram export upload, AI indexing, and private saved libraries.',
+    sections: [
+      ['Information we collect', 'We collect login details from Supabase/Google such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded Instagram export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs.'],
+      ['Google login data', 'Google login is used to authenticate you and create your IScraper account. From Google/Supabase we may receive basic account details such as your user ID, email address, name, and profile image if Google provides them. IScraper does not ask for Gmail, Drive, Calendar, contacts, or other Google account content. Google OAuth configuration must use the Supabase callback URL and must include this privacy policy URL before public launch.'],
+      ['Instagram data', 'IScraper uses official Instagram export files that you upload. We do not ask for your Instagram password and we removed Instagram login scraping. Your export is used to build your searchable library.'],
+      ['AI providers', 'If indexing is enabled, parts of your uploaded content may be sent to configured AI providers such as OpenRouter, Gemini, or your own connected provider key. This is done to generate summaries, transcripts, OCR, tags, and embeddings.'],
+      ['How we use data', 'We use your data to authenticate your account, keep your library separate from other users, process imports, search your saves, build your graph, show anonymous public feedback, prevent abuse, enforce limits, improve reliability, send service messages, respond to support requests, and send product updates or marketing emails only where you have opted in or where legally permitted.'],
+      ['Google data limits', 'We do not sell Google login data, use it to build advertising profiles, or transfer it to unrelated third parties for marketing. We use Google login data only for account access, account communication, security, support, and the email uses described in this policy.'],
+      ['What is public', 'Public feedback is visible to everyone, but it is shown without your name or profile photo. Your saved library, username setup data, provider keys, credits, and imports are not meant to be public.'],
+      ['Security', 'We use Supabase Auth, row-level ownership rules, encrypted provider-key storage, rate limits, upload limits, CORS restrictions, and security headers. No system is perfectly secure, so do not upload highly sensitive data unless you accept that risk.'],
+      ['Retention and deletion', 'Your saved library stays until you delete it or request deletion. Public feedback may remain visible unless removed by an operator. Before public launch, we should add a clear account/data deletion contact or self-serve deletion flow.'],
+      ['Children', 'IScraper is not directed to children under 13. Do not use the service if you are not old enough to consent under your local law.'],
+      ['Contact', 'For privacy requests, contact the IScraper operator using the privacy email that will be published before public launch.'],
+    ],
+  },
+};
+
+function LegalPage({ type, onBack }) {
+  const content = LEGAL_CONTENT[type] || LEGAL_CONTENT.terms;
+  return (
+    <div className="min-h-screen bg-black text-foreground">
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-black/85 px-5 py-4 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
+          <button type="button" onClick={onBack} className="flex items-center gap-3 transition hover:opacity-80">
+            <ArrowLeft className="h-5 w-5 text-muted-foreground" />
+            <BrandLogo className="h-12 w-40" />
+          </button>
+          <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Last updated May 8, 2026</span>
+        </div>
+      </header>
+      <main className="mx-auto max-w-5xl px-5 py-14 md:py-20">
+        <p className="font-mono text-xs uppercase tracking-[0.3em] text-primary">{content.eyebrow}</p>
+        <h1 className="mt-3 font-display text-5xl font-bold tracking-tighter md:text-7xl">{content.title}</h1>
+        <p className="mt-6 max-w-3xl text-base leading-8 text-muted-foreground">{content.intro}</p>
+        <div className="mt-12 space-y-5">
+          {content.sections.map(([title, body]) => (
+            <section key={title} className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+              <h2 className="font-display text-2xl font-bold tracking-tight">{title}</h2>
+              <p className="mt-2 text-sm leading-7 text-muted-foreground">{body}</p>
+            </section>
+          ))}
+        </div>
+      </main>
     </div>
   );
 }
@@ -644,7 +917,6 @@ function Dashboard({ onBack }) {
   const [files, setFiles] = useState([]);
   const [credentials, setCredentials] = useState([]);
   const [credentialOptions, setCredentialOptions] = useState(null);
-  const [credits, setCredits] = useState(null);
   const [credentialForm, setCredentialForm] = useState({
     purpose: 'text',
     provider: 'openrouter',
@@ -652,7 +924,9 @@ function Dashboard({ onBack }) {
     apiKey: '',
   });
   const [session, setSession] = useState(null);
-  const [email, setEmail] = useState('');
+  const [profile, setProfile] = useState(null);
+  const [profileRequired, setProfileRequired] = useState(false);
+  const [profileForm, setProfileForm] = useState({ username: '', avatarUrl: '' });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -666,16 +940,31 @@ function Dashboard({ onBack }) {
   }, []);
 
   const loadControls = useCallback(async () => {
-    const [credentialBody, creditBody] = await Promise.all([getProviderCredentials(), getCredits()]);
+    const credentialBody = await getProviderCredentials();
     setCredentials(credentialBody.credentials || []);
     setCredentialOptions(credentialBody.options || null);
-    setCredits(creditBody.credits || null);
   }, []);
+
+  const applyProfileState = (nextProfile, required) => {
+    setProfile(nextProfile || null);
+    setProfileRequired(Boolean(required));
+    if (nextProfile) {
+      setProfileForm({
+        username: nextProfile.username || '',
+        avatarUrl: nextProfile.avatarUrl || '',
+      });
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
     const initialize = async () => {
       try {
+        if (authEnabled) {
+          const profileBody = await getProfile();
+          applyProfileState(profileBody.profile, profileBody.required);
+          if (profileBody.required) return;
+        }
         await Promise.all([loadItems(), loadControls()]);
       } catch (err) {
         if (!cancelled) setError(err.message);
@@ -739,14 +1028,52 @@ function Dashboard({ onBack }) {
     paused: items.filter((item) => item.status === 'paused' || item.status === 'failed').length,
   }), [items]);
 
-  const handleSignIn = async (event) => {
-    event.preventDefault();
+  const handleGoogleSignIn = async () => {
     setBusy(true);
     setError('');
     try {
-      const { error: signInError } = await supabase.auth.signInWithOtp({ email });
+      const { error: signInError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/#app`,
+        },
+      });
       if (signInError) throw signInError;
-      setNotice('Check your email for the sign-in link.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAvatarFile = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setError('Profile picture must be PNG, JPEG, or WebP.');
+      return;
+    }
+    if (file.size > 250 * 1024) {
+      setError('Profile picture must be smaller than 250 KB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setProfileForm((current) => ({ ...current, avatarUrl: String(reader.result || '') }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleProfileSave = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await saveProfile(profileForm);
+      applyProfileState(body.profile, false);
+      await Promise.all([loadItems(), loadControls()]);
+      setNotice('Profile saved. Your private library is ready.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -782,7 +1109,9 @@ function Dashboard({ onBack }) {
     setNotice('');
     try {
       const result = await importInstagramExport({ files });
-      setNotice(`Imported ${result.itemCount} items. Restart the queue to analyze them.`);
+      const newCount = result.newItemCount ?? result.itemCount ?? 0;
+      const skippedCount = result.skippedDuplicateCount ?? 0;
+      setNotice(`Added ${newCount} new saves. ${skippedCount} already existed. ${result.queuedJobCount ?? result.jobCount ?? 0} queued for indexing.`);
       await loadItems();
     } catch (err) {
       setError(err.message);
@@ -838,39 +1167,74 @@ function Dashboard({ onBack }) {
 
   const providerChoices = useMemo(() => {
     if (!credentialOptions) return [];
-    return Object.entries(credentialForm.purpose === 'media' ? credentialOptions.mediaProviders || {} : credentialOptions.textProviders || {});
+    if (credentialForm.purpose === 'media') return Object.entries(credentialOptions.mediaProviders || {});
+    if (credentialForm.purpose === 'embedding') return Object.entries(credentialOptions.embeddingProviders || {});
+    return Object.entries(credentialOptions.textProviders || {});
   }, [credentialForm.purpose, credentialOptions]);
 
   const applyPurpose = (purpose) => {
     const model = purpose === 'media'
       ? credentialOptions?.defaultAppMediaModel || 'google/gemini-3.1-flash-lite-preview'
-      : credentialOptions?.defaultAppTextModel || 'deepseek/deepseek-v4-pro';
+      : purpose === 'embedding'
+        ? credentialOptions?.defaultEmbeddingModel || 'openai/text-embedding-3-small'
+        : credentialOptions?.defaultAppTextModel || 'deepseek/deepseek-v4-pro';
     setCredentialForm({ purpose, provider: 'openrouter', model, apiKey: '' });
   };
 
   const applyProvider = (provider) => {
-    const group = credentialForm.purpose === 'media' ? credentialOptions?.mediaProviders : credentialOptions?.textProviders;
+    const group = credentialForm.purpose === 'media'
+      ? credentialOptions?.mediaProviders
+      : credentialForm.purpose === 'embedding'
+        ? credentialOptions?.embeddingProviders
+        : credentialOptions?.textProviders;
     setCredentialForm((current) => ({ ...current, provider, model: group?.[provider]?.defaultModel || current.model }));
   };
 
   if (authEnabled && !session) {
     return (
       <div className="grid min-h-screen place-items-center bg-black px-6 text-foreground">
-        <form onSubmit={handleSignIn} className="glow-ring w-full max-w-md rounded-2xl border border-white/10 bg-black p-8">
+        <div className="glow-ring w-full max-w-md rounded-2xl border border-white/10 bg-black p-8">
           <BrandLogo className="mb-8 h-16 w-56" />
           <h1 className="font-display text-4xl font-bold tracking-tight">Open your library</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Keep your saved posts private, searchable, and easy to revisit.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Sign in with Google before importing. Your saved library stays tied to your private account.</p>
+          <button type="button" onClick={handleGoogleSignIn} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Continue with Google
+          </button>
+          <p className="mt-4 text-xs leading-5 text-muted-foreground">By continuing, you agree to the Terms of Service and Privacy Policy.</p>
+          {error && <Banner type="error">{error}</Banner>}
+          {notice && <Banner>{notice}</Banner>}
+        </div>
+      </div>
+    );
+  }
+
+  if (authEnabled && session && profileRequired) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-black px-6 text-foreground">
+        <form onSubmit={handleProfileSave} className="glow-ring w-full max-w-md rounded-2xl border border-white/10 bg-black p-8">
+          <BrandLogo className="mb-8 h-16 w-56" />
+          <h1 className="font-display text-4xl font-bold tracking-tight">Choose your username</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Required before importing. Usernames are unique, so no two users can claim the same one.</p>
+          <label className="mt-6 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Username</label>
           <input
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="you@example.com"
-            className="mt-6 w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+            value={profileForm.username}
+            onChange={(event) => setProfileForm((current) => ({ ...current, username: event.target.value.toLowerCase() }))}
+            placeholder="your_username"
+            pattern="[a-z0-9_]{3,24}"
+            className="mt-2 w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
             required
           />
-          <button className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground">
+          <label className="mt-5 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Profile picture optional</label>
+          <div className="mt-2 flex items-center gap-3">
+            <div className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-white/5">
+              {profileForm.avatarUrl ? <img src={profileForm.avatarUrl} alt="" className="h-full w-full object-cover" /> : <Brain className="h-5 w-5 text-muted-foreground" />}
+            </div>
+            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleAvatarFile} className="min-w-0 text-xs text-muted-foreground file:mr-3 file:rounded-full file:border-0 file:bg-primary file:px-3 file:py-2 file:text-xs file:font-semibold file:text-primary-foreground" />
+          </div>
+          <button disabled={busy} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground disabled:opacity-60">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Send my private link
+            Save profile
           </button>
           {error && <Banner type="error">{error}</Banner>}
           {notice && <Banner>{notice}</Banner>}
@@ -881,6 +1245,7 @@ function Dashboard({ onBack }) {
 
   const navItems = [
     ['library', 'Saved library', Brain],
+    ['graph', 'Graph', GitBranch],
     ['upload', 'Add saves', Upload],
     ['settings', 'Keys & privacy', Settings],
   ];
@@ -892,6 +1257,11 @@ function Dashboard({ onBack }) {
           <ArrowLeft className="h-4 w-4 text-muted-foreground" />
           <BrandLogo className="h-14 w-40" />
         </button>
+        {profile?.username && (
+          <div className="border-b border-white/5 px-5 py-3 text-xs text-muted-foreground">
+            Signed in as <span className="font-semibold text-foreground">@{profile.username}</span>
+          </div>
+        )}
         <nav className="flex-1 space-y-1 p-3">
           {navItems.map(([key, title, Icon]) => (
             <button
@@ -938,6 +1308,20 @@ function Dashboard({ onBack }) {
                     setCollectionFilter={setCollectionFilter}
                     collections={collections}
                     onSelect={openDetail}
+                    onRestart={handleRestart}
+                  />
+                )}
+                {tab === 'graph' && (
+                  <GraphTab
+                    onSelectItem={async (itemId) => {
+                      setError('');
+                      try {
+                        const body = await getItem(itemId);
+                        setSelected(mapItem(body.item));
+                      } catch (err) {
+                        setError(err.message);
+                      }
+                    }}
                   />
                 )}
                 {tab === 'upload' && (
@@ -951,7 +1335,6 @@ function Dashboard({ onBack }) {
                 )}
                 {tab === 'settings' && (
                   <SettingsTab
-                    credits={credits}
                     credentials={credentials}
                     credentialForm={credentialForm}
                     setCredentialForm={setCredentialForm}
@@ -993,9 +1376,10 @@ function MobileTopbar({ onBack, tab, setTab }) {
           <BrandLogo className="h-10 w-36" />
         </button>
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {[
           ['library', 'Library'],
+          ['graph', 'Graph'],
           ['upload', 'Add'],
           ['settings', 'Privacy'],
         ].map(([key, label]) => (
@@ -1025,17 +1409,20 @@ function LibraryTab({
   setCollectionFilter,
   collections,
   onSelect,
+  onRestart,
 }) {
   const boardRef = useRef(null);
   const [visibleCount, setVisibleCount] = useState(80);
   const activeFilters = (statusFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0);
   const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
+  const searchableCount = items.filter((item) => item.status === 'done').length;
+  const indexingNeeded = totalCount > 0 && searchableCount < totalCount;
   const boardStats = useMemo(() => ([
     ['All saves', totalCount],
     ['On this board', items.length],
-    ['Searchable', items.filter((item) => item.status === 'done').length],
+    ['Searchable', searchableCount],
     ['Needs attention', items.filter((item) => item.status === 'failed' || item.status === 'paused').length],
-    ]), [items, totalCount]);
+    ]), [items, searchableCount, totalCount]);
 
   useEffect(() => {
     const cards = boardRef.current?.querySelectorAll('.pin-card');
@@ -1107,6 +1494,29 @@ function LibraryTab({
           </div>
         ))}
       </div>
+
+      {indexingNeeded && (
+        <div className="mt-5 flex flex-col gap-4 rounded-2xl border border-primary/30 bg-primary/5 p-5 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Indexing needed</div>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">
+              {searchableCount} of {totalCount} saves are searchable
+            </h2>
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
+              Search is strongest after OCR, transcript, and summaries are created. Terms like SOC 2 only work reliably once the save has been indexed.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onRestart}
+            disabled={busy}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02] disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
+            Start indexing
+          </button>
+        </div>
+      )}
 
       <div className="sticky top-0 z-20 -mx-4 mt-5 border-y border-white/5 bg-black/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:-mx-10 md:px-10">
         <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
@@ -1298,7 +1708,6 @@ function UploadTab({ files, setFiles, onImport, onRestart, busy }) {
 }
 
 function SettingsTab({
-  credits,
   credentials,
   credentialForm,
   setCredentialForm,
@@ -1314,18 +1723,32 @@ function SettingsTab({
   return (
     <div className="mx-auto max-w-2xl space-y-8 px-6 py-20">
       <div>
-        <h1 className="font-display text-4xl font-bold tracking-tight">Keys & privacy</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Connect optional AI keys when you want richer summaries and deeper media notes.</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="font-display text-4xl font-bold tracking-tight">Keys & privacy</h1>
+          <span className="rounded-full bg-primary px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-primary-foreground">
+            BYOK only
+          </span>
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Connect your own AI keys before indexing. Until payments are live, IScraper does not spend an app-owned OpenRouter key.
+        </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Credit label="Free analyses left" value={credits ? `${credits.freeItemsRemaining}/${credits.freeItemsLimit}` : '200/200'} />
-        <Credit label="Paid credits" value={credits?.paidCredits ?? 0} />
+      <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Credit system status</div>
+          <span className="rounded-full bg-white px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-black">
+            Coming soon
+          </span>
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Paid credits and app-funded indexing are disabled for now. Add a text key for captions/summaries, a media key for reels/images, and an embedding key if you want semantic AI search.
+        </p>
       </div>
 
       <form onSubmit={onSave} className="space-y-4 rounded-2xl border border-white/10 p-5">
-        <div className="grid grid-cols-2 gap-2 rounded-xl border border-white/10 p-1">
-          {['text', 'media'].map((purpose) => (
+        <div className="grid grid-cols-3 gap-2 rounded-xl border border-white/10 p-1">
+          {['text', 'media', 'embedding'].map((purpose) => (
             <button
               key={purpose}
               type="button"
@@ -1387,13 +1810,449 @@ function SettingsTab({
   );
 }
 
-function Credit({ label, value }) {
+function GraphTab({ onSelectItem }) {
+  const [graph, setGraph] = useState(null);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragRef = useRef(null);
+  const touchGestureRef = useRef(null);
+  const prompt = [
+    'I have exported my IScraper Obsidian graph to this path:',
+    '',
+    'PASTE_EXPORTED_GRAPH_ZIP_PATH_HERE',
+    '',
+    'Please import it into my Obsidian vault. Unzip the export if needed, create or update notes, preserve wikilinks, keep the IScraper Items and IScraper Graph folders, and do not delete existing vault files unless I explicitly ask.',
+  ].join('\n');
+
+  useEffect(() => {
+    let cancelled = false;
+    getKnowledgeGraph()
+      .then((body) => {
+        if (!cancelled) setGraph(body.graph);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleExport = async () => {
+    setError('');
+    try {
+      const blob = await downloadObsidianGraph();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'iscraper-obsidian-graph.zip';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleCopyPrompt = async () => {
+    await navigator.clipboard.writeText(prompt);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+
+  const layout = useMemo(() => layoutGraph(graph), [graph]);
+  const conceptNodes = graph?.nodes?.filter((node) => node.type !== 'item') || [];
+  const itemNodes = graph?.nodes?.filter((node) => node.type === 'item') || [];
+  const selectedNode = graph?.nodes?.find((node) => node.id === selectedNodeId) || null;
+  const selectedNeighborIds = useMemo(() => {
+    if (!selectedNodeId || !graph) return new Set();
+    return new Set(graph.links.flatMap((link) => (
+      link.source === selectedNodeId ? [link.target] : link.target === selectedNodeId ? [link.source] : []
+    )));
+  }, [graph, selectedNodeId]);
+  const selectedConnections = useMemo(() => {
+    if (!selectedNodeId || !graph) return [];
+    return graph.links
+      .filter((link) => link.source === selectedNodeId || link.target === selectedNodeId)
+      .map((link) => {
+        const otherId = link.source === selectedNodeId ? link.target : link.source;
+        return graph.nodes.find((node) => node.id === otherId);
+      })
+      .filter(Boolean)
+      .slice(0, 18);
+  }, [graph, selectedNodeId]);
+
+  const clampZoom = (value) => Math.max(0.55, Math.min(2.6, Number(value.toFixed(2))));
+
+  const changeZoom = (delta) => {
+    setZoom((current) => clampZoom(current + delta));
+  };
+
+  const getTouchDistance = (touches) => {
+    const first = touches[0];
+    const second = touches[1];
+    return Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+  };
+
+  const handleGraphTouchStart = (event) => {
+    if (event.touches.length >= 2) {
+      dragRef.current = null;
+      touchGestureRef.current = {
+        mode: 'pinch',
+        distance: getTouchDistance(event.touches),
+        zoom,
+      };
+      return;
+    }
+
+    const touch = event.touches[0];
+    touchGestureRef.current = {
+      mode: 'pan',
+      x: touch.clientX,
+      y: touch.clientY,
+      pan,
+    };
+  };
+
+  const handleGraphTouchMove = (event) => {
+    if (!touchGestureRef.current) return;
+    event.preventDefault();
+
+    if (event.touches.length >= 2) {
+      const gesture = touchGestureRef.current.mode === 'pinch'
+        ? touchGestureRef.current
+        : { mode: 'pinch', distance: getTouchDistance(event.touches), zoom };
+      touchGestureRef.current = gesture;
+      const nextDistance = getTouchDistance(event.touches);
+      setZoom(clampZoom(gesture.zoom * (nextDistance / Math.max(gesture.distance, 1))));
+      return;
+    }
+
+    if (event.touches.length === 1 && touchGestureRef.current.mode === 'pan') {
+      const touch = event.touches[0];
+      setPan({
+        x: touchGestureRef.current.pan.x + touch.clientX - touchGestureRef.current.x,
+        y: touchGestureRef.current.pan.y + touch.clientY - touchGestureRef.current.y,
+      });
+    }
+  };
+
+  const handleGraphTouchEnd = (event) => {
+    if (event.touches.length === 1) {
+      const touch = event.touches[0];
+      touchGestureRef.current = { mode: 'pan', x: touch.clientX, y: touch.clientY, pan };
+      return;
+    }
+    touchGestureRef.current = null;
+  };
+
+  const resetView = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    setSelectedNodeId(null);
+  };
+
+  return (
+    <div className="mx-auto max-w-[1480px] space-y-6 px-4 py-8 sm:px-6 md:px-10 md:py-12">
+      <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+        <div className="max-w-3xl">
+          <p className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Graph brain</p>
+          <h1 className="mt-3 font-display text-4xl font-bold tracking-tight md:text-6xl">Your indexed saves as a knowledge map.</h1>
+          <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground">
+            Nodes are built from indexed titles, topics, tags, brands, people, and collections. Export it when you want Obsidian or an AI agent to work with your saved-library graph.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button onClick={handleExport} className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
+            <Download className="h-4 w-4" />
+            Export Obsidian graph
+          </button>
+          <button onClick={handleCopyPrompt} className="inline-flex items-center gap-2 rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-foreground transition hover:border-primary hover:text-primary">
+            <Check className="h-4 w-4" />
+            {copied ? 'Copied' : 'Copy AI prompt'}
+          </button>
+        </div>
+      </div>
+
+      {error && <Banner type="error">{error}</Banner>}
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <GraphStat label="Indexed saves" value={graph?.stats?.indexedItems ?? 0} />
+        <GraphStat label="Concept nodes" value={graph?.stats?.conceptNodes ?? 0} />
+        <GraphStat label="Graph links" value={graph?.stats?.links ?? 0} />
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="relative min-h-[520px] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
+          <div className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-full border border-white/10 bg-black/80 p-1 backdrop-blur">
+            <button type="button" onClick={() => changeZoom(0.18)} className="rounded-full p-2 text-muted-foreground transition hover:bg-white/10 hover:text-primary" aria-label="Zoom in">
+              <ZoomIn className="h-4 w-4" />
+            </button>
+            <button type="button" onClick={() => changeZoom(-0.18)} className="rounded-full p-2 text-muted-foreground transition hover:bg-white/10 hover:text-primary" aria-label="Zoom out">
+              <ZoomOut className="h-4 w-4" />
+            </button>
+            <button type="button" onClick={resetView} className="rounded-full p-2 text-muted-foreground transition hover:bg-white/10 hover:text-primary" aria-label="Reset graph view">
+              <RotateCcw className="h-4 w-4" />
+            </button>
+            <span className="pr-3 font-mono text-[10px] text-muted-foreground">{Math.round(zoom * 100)}%</span>
+          </div>
+          <div className="absolute bottom-4 left-4 z-10 flex flex-wrap gap-2">
+            {['item', 'topic', 'tag', 'brand', 'tool', 'person', 'collection'].map((type) => (
+              <span key={type} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/70 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ background: graphNodeColor(type) }} />
+                {type}
+              </span>
+            ))}
+          </div>
+          {busy ? (
+            <div className="grid min-h-[520px] place-items-center text-muted-foreground">Loading graph...</div>
+          ) : !graph?.nodes?.length ? (
+            <div className="grid min-h-[520px] place-items-center px-8 text-center text-muted-foreground">
+              No indexed graph yet. Start indexing saves first, then come back here.
+            </div>
+          ) : (
+            <svg
+              viewBox="0 0 1000 620"
+              className="h-full min-h-[520px] w-full touch-none cursor-grab active:cursor-grabbing"
+              onTouchStart={handleGraphTouchStart}
+              onTouchMove={handleGraphTouchMove}
+              onTouchEnd={handleGraphTouchEnd}
+              onTouchCancel={() => {
+                touchGestureRef.current = null;
+              }}
+              onPointerDown={(event) => {
+                if (event.pointerType === 'touch') return;
+                if (event.target.closest?.('[data-graph-node]')) return;
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                dragRef.current = { x: event.clientX, y: event.clientY, pan };
+              }}
+              onPointerMove={(event) => {
+                if (event.pointerType === 'touch') return;
+                if (!dragRef.current) return;
+                const dx = event.clientX - dragRef.current.x;
+                const dy = event.clientY - dragRef.current.y;
+                setPan({ x: dragRef.current.pan.x + dx, y: dragRef.current.pan.y + dy });
+              }}
+              onPointerUp={(event) => {
+                if (event.pointerType === 'touch') return;
+                if (dragRef.current) event.currentTarget.releasePointerCapture?.(event.pointerId);
+                dragRef.current = null;
+              }}
+              onPointerLeave={() => {
+                dragRef.current = null;
+              }}
+            >
+              <rect width="1000" height="620" fill="transparent" />
+              <g transform={`translate(${500 + pan.x} ${310 + pan.y}) scale(${zoom})`}>
+              {graph.links.map((link) => {
+                const source = layout.get(link.source);
+                const target = layout.get(link.target);
+                if (!source || !target) return null;
+                const isActive = selectedNodeId && (link.source === selectedNodeId || link.target === selectedNodeId);
+                return (
+                  <line
+                    key={link.id}
+                    x1={source.x}
+                    y1={source.y}
+                    x2={target.x}
+                    y2={target.y}
+                    stroke={isActive ? 'rgba(165,255,24,0.75)' : 'rgba(165,255,24,0.18)'}
+                    strokeWidth={isActive ? 2 : 0.9}
+                  />
+                );
+              })}
+              {graph.nodes.map((node) => {
+                const point = layout.get(node.id);
+                if (!point) return null;
+                const isItem = node.type === 'item';
+                const isSelected = selectedNodeId === node.id;
+                const isNeighbor = selectedNeighborIds.has(node.id);
+                const dim = selectedNodeId && !isSelected && !isNeighbor;
+                const radius = isItem ? 9 : Math.min(17, 5 + Math.sqrt(node.weight || 1) * 3);
+                const showLabel = isSelected || isNeighbor || isItem || (node.weight || 0) >= 3;
+                const color = graphNodeColor(node.type);
+                return (
+                  <g
+                    key={node.id}
+                    data-graph-node
+                    transform={`translate(${point.x} ${point.y})`}
+                    className="cursor-pointer"
+                    opacity={dim ? 0.22 : 1}
+                    onClick={() => {
+                      setSelectedNodeId((current) => (current === node.id ? null : node.id));
+                    }}
+                  >
+                    <circle r={radius + (isSelected ? 9 : 5)} fill={color} opacity="0.16" />
+                    <circle r={radius} fill={color} stroke={isSelected ? '#ffffff' : 'rgba(0,0,0,0.55)'} strokeWidth={isSelected ? 2 : 1} />
+                    {showLabel && (
+                      <text y={radius + 16} textAnchor="middle" className="pointer-events-none select-none fill-white text-[10px] font-semibold">
+                        {node.label.slice(0, 24)}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
+              </g>
+            </svg>
+          )}
+        </div>
+
+        <div className="space-y-5">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+            <div className="flex items-start gap-3">
+              <span className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ background: graphNodeColor(selectedNode?.type || 'item') }} />
+              <div className="min-w-0">
+                <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">
+                  {selectedNode ? selectedNode.type : 'Selection'}
+                </div>
+                <h2 className="mt-1 line-clamp-2 font-display text-2xl font-bold tracking-tight">
+                  {selectedNode ? selectedNode.label : 'Click a node'}
+                </h2>
+              </div>
+            </div>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">
+              {selectedNode
+                ? selectedNode.type === 'item'
+                  ? selectedNode.summary || 'No summary available.'
+                  : `${selectedNode.itemCount || selectedConnections.length} linked saves or concepts.`
+                : 'Click any node to show details, highlight local connections, and inspect nearby saves.'}
+            </p>
+            {selectedNode?.url && (
+              <a href={selectedNode.url} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-xs text-primary">
+                Open original post <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+            {selectedNode?.type === 'item' && (
+              <button type="button" onClick={() => onSelectItem(selectedNode.itemId)} className="mt-3 inline-flex w-full items-center justify-center rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">
+                Open save detail
+              </button>
+            )}
+            {selectedConnections.length > 0 && (
+              <div className="mt-4">
+                <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Connected nodes</div>
+                <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
+                  {selectedConnections.map((node) => (
+                    <button key={node.id} type="button" onClick={() => setSelectedNodeId(node.id)} className="flex w-full items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-left text-xs transition hover:border-primary">
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: graphNodeColor(node.type) }} />
+                      <span className="min-w-0 flex-1 truncate">{node.label}</span>
+                      <span className="text-[10px] uppercase text-muted-foreground">{node.type}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+            <h2 className="font-display text-2xl font-bold tracking-tight">AI-agent prompt</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">After export, paste the downloaded file path into this prompt before giving it to Claude, Codex, Cursor, or another local-file agent.</p>
+            <textarea readOnly value={prompt} className="mt-4 h-56 w-full resize-none rounded-xl border border-white/10 bg-black p-4 font-mono text-xs leading-5 text-muted-foreground outline-none" />
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+            <h2 className="font-display text-2xl font-bold tracking-tight">Top concepts</h2>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {conceptNodes.slice(0, 24).map((node) => (
+                <span key={node.id} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-muted-foreground">
+                  {node.label}
+                </span>
+              ))}
+              {!conceptNodes.length && <span className="text-sm text-muted-foreground">No concept nodes yet.</span>}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+            <h2 className="font-display text-2xl font-bold tracking-tight">Indexed saves</h2>
+            <div className="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1">
+              {itemNodes.slice(0, 40).map((node) => (
+                <button key={node.id} onClick={() => onSelectItem(node.itemId)} className="block w-full rounded-xl border border-white/10 p-3 text-left transition hover:border-primary">
+                  <div className="line-clamp-1 text-sm font-semibold">{node.label}</div>
+                  <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">{node.summary}</div>
+                </button>
+              ))}
+              {!itemNodes.length && <span className="text-sm text-muted-foreground">No indexed saves yet.</span>}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GraphStat({ label, value }) {
   return (
     <div className="rounded-xl border border-white/10 p-4">
       <div className="font-mono text-xs uppercase tracking-widest text-muted-foreground">{label}</div>
       <div className="mt-2 font-display text-3xl font-bold">{value}</div>
     </div>
   );
+}
+
+function graphNodeColor(type) {
+  const colors = {
+    item: '#f4f4ef',
+    topic: '#a5ff18',
+    tag: '#22d3ee',
+    brand: '#60a5fa',
+    tool: '#f97316',
+    person: '#f472b6',
+    collection: '#c084fc',
+  };
+  return colors[type] || '#a5ff18';
+}
+
+function layoutGraph(graph) {
+  const points = new Map();
+  const nodes = graph?.nodes || [];
+  const links = graph?.links || [];
+  if (!nodes.length) return points;
+
+  const simulationNodes = nodes.map((node, index) => {
+    const angle = (Math.PI * 2 * index) / nodes.length;
+    const radius = node.type === 'item' ? 190 : 80 + ((index * 37) % 130);
+    return {
+      ...node,
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
+    };
+  });
+  const simulationLinks = links.map((link) => ({ source: link.source, target: link.target }));
+  const simulation = forceSimulation(simulationNodes)
+    .force('link', forceLink(simulationLinks).id((node) => node.id).distance((link) => {
+      const source = typeof link.source === 'object' ? link.source : null;
+      const target = typeof link.target === 'object' ? link.target : null;
+      return source?.type === 'item' || target?.type === 'item' ? 82 : 48;
+    }).strength(0.28))
+    .force('charge', forceManyBody().strength((node) => (node.type === 'item' ? -360 : -160)))
+    .force('collide', forceCollide().radius((node) => (node.type === 'item' ? 34 : 20)).strength(0.9))
+    .force('center', forceCenter(0, 0))
+    .stop();
+
+  for (let index = 0; index < 260; index += 1) simulation.tick();
+
+  const xs = simulationNodes.map((node) => node.x);
+  const ys = simulationNodes.map((node) => node.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const scale = Math.min(860 / Math.max(maxX - minX, 1), 500 / Math.max(maxY - minY, 1), 1.6);
+
+  for (const node of simulationNodes) {
+    points.set(node.id, {
+      x: (node.x - (minX + maxX) / 2) * scale,
+      y: (node.y - (minY + maxY) / 2) * scale,
+    });
+  }
+  return points;
 }
 
 function DetailDrawer({ item, onClose }) {

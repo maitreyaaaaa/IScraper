@@ -55,3 +55,27 @@ test('parseInstagramExport links collection names to saved items', () => {
   assert.equal(result.items.length, 1);
   assert.deepEqual(result.items[0].collections, ['AI Tools']);
 });
+
+test('parseInstagramExport canonicalizes Instagram URLs before deduping', () => {
+  const html = `
+    <main>
+      <div class="_a6-g"><table>
+        <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/reel/AAA111/?utm_source=ig_web_copy_link">x</a></div></td></tr>
+        <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">First caption #one</td></tr>
+      </table></div>
+      <div class="_a6-g"><table>
+        <tr><td colspan="2" class="_a6_q">URL<div><a href="https://m.instagram.com/reel/AAA111">x</a></div></td></tr>
+        <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Duplicate caption #two</td></tr>
+      </table></div>
+      <div class="_a6-g"><table>
+        <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/p/BBB222/?igsh=abc">x</a></div></td></tr>
+      </table></div>
+    </main>`;
+
+  const result = parseInstagramExport([{ originalname: 'saved_posts.html', buffer: Buffer.from(html) }]);
+
+  assert.equal(result.items.length, 2);
+  assert.equal(result.items[0].url, 'https://instagram.com/reel/AAA111');
+  assert.equal(result.items[0].id, 'AAA111');
+  assert.equal(result.items[1].url, 'https://instagram.com/p/BBB222');
+});

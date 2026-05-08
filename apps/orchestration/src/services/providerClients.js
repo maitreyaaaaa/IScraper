@@ -8,6 +8,7 @@ const {
   mergeAnalysis,
   parseOpenRouterAnalysisResponse,
 } = require('./analyzer');
+const { createOpenRouterEmbedding } = require('./embeddings');
 const { assertMediaModelAllowed } = require('./providers');
 
 const OPENAI_COMPATIBLE_TEXT_ENDPOINTS = {
@@ -15,6 +16,10 @@ const OPENAI_COMPATIBLE_TEXT_ENDPOINTS = {
   deepseek: 'https://api.deepseek.com/chat/completions',
   glm: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
 };
+
+function appReferer() {
+  return process.env.APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173';
+}
 
 function parseJsonContent(content) {
   return JSON.parse(String(content || '').replace(/```json|```/g, '').trim());
@@ -64,13 +69,23 @@ async function testProviderCredential({ credential, fetchImpl = fetch }) {
   if (!credential?.apiKey) throw new Error('Credential is missing an API key.');
 
   if (credential.provider === 'openrouter') {
+    if (credential.purpose === 'embedding') {
+      await createOpenRouterEmbedding({
+        apiKey: credential.apiKey,
+        model: credential.model,
+        input: 'test search',
+        inputType: 'search_query',
+        fetchImpl,
+      });
+      return true;
+    }
     await simpleOpenAICompatibleRequest({
       apiKey: credential.apiKey,
       model: credential.model,
       endpoint: 'https://openrouter.ai/api/v1/chat/completions',
       fetchImpl,
       headers: {
-        'HTTP-Referer': 'http://localhost:5173',
+        'HTTP-Referer': appReferer(),
         'X-Title': 'Instagram Brain',
       },
     });
@@ -223,7 +238,7 @@ async function analyzeMediaWithOpenRouter({ apiKey, model, mediaPaths, item, fet
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      'HTTP-Referer': 'http://localhost:5173',
+      'HTTP-Referer': appReferer(),
       'X-Title': 'Instagram Brain',
     },
     body: JSON.stringify({

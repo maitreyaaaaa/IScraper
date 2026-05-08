@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001/api';
+const API_BASE = import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '/api');
 let accessToken = '';
 
 export function setApiAccessToken(token) {
@@ -38,6 +38,45 @@ export function getItem(id) {
 
 export function getCredits() {
   return request('/credits');
+}
+
+export function getProfile() {
+  return request('/profile');
+}
+
+export function saveProfile(payload) {
+  return request('/profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getKnowledgeGraph() {
+  return request('/graph');
+}
+
+export async function downloadObsidianGraph() {
+  const headers = new Headers();
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+  const response = await fetch(`${API_BASE}/graph/obsidian-export`, { headers });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || `Request failed: ${response.status}`);
+  }
+  return response.blob();
+}
+
+export function getCreditPackages() {
+  return request('/credit-packages');
+}
+
+export function createCreditCheckout(packageId) {
+  return request('/credits/checkout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ packageId }),
+  });
 }
 
 export function getProviderCredentials() {

@@ -39,6 +39,84 @@ test('searchItems matches exact words and related metadata fields', () => {
   assert.equal(results.length, 1);
 });
 
+test('searchItems ranks exact phrases and ignores loose numeric-only matches', () => {
+  const items = [
+    {
+      id: 'soc2',
+      caption: 'SOC 2 compliance checklist for security audits',
+      analysis: {
+        title: 'SOC 2 compliance checklist',
+        ocrText: 'SOC 2 security controls and audit evidence',
+        topics: ['security compliance'],
+        tags: ['SOC 2'],
+      },
+    },
+    {
+      id: 'promo2',
+      caption: '2 quick ways to improve a promotional reel',
+      analysis: {
+        title: 'Quickshot AI Promotional Reel',
+        summary: 'Marketing content tips',
+        topics: ['content'],
+        tags: ['marketing'],
+      },
+    },
+    {
+      id: 'traffic',
+      caption: 'Free Google traffic for startups',
+      analysis: {
+        title: 'Free Google Traffic for Startups',
+        summary: 'Growth tactic',
+        topics: ['growth'],
+        tags: ['startup'],
+      },
+    },
+  ];
+
+  const results = searchItems(items, 'SOC 2');
+
+  assert.deepEqual(results.map((item) => item.id), ['soc2']);
+});
+
+test('searchItems expands broad security queries to compliance concepts', () => {
+  const items = [
+    {
+      id: 'soc2',
+      caption: 'SOC 2 audit checklist for privacy controls',
+      analysis: {
+        title: 'SOC 2 compliance checklist',
+        ocrText: 'Access controls, audit evidence, data protection',
+        topics: ['compliance'],
+        tags: ['SOC 2'],
+      },
+    },
+    {
+      id: 'design',
+      caption: 'Landing page color palette ideas',
+      analysis: {
+        title: 'Color palette inspiration',
+        summary: 'Branding and visual design ideas',
+        topics: ['design'],
+        tags: ['branding'],
+      },
+    },
+    {
+      id: 'promo2',
+      caption: '2 quick ways to improve a promotional reel',
+      analysis: {
+        title: 'Quickshot AI Promotional Reel',
+        summary: 'Marketing content tips',
+        topics: ['content'],
+        tags: ['marketing'],
+      },
+    },
+  ];
+
+  const results = searchItems(items, 'security');
+
+  assert.deepEqual(results.map((item) => item.id), ['soc2']);
+});
+
 test('buildOpenRouterAnalysisRequest creates a structured JSON chat request without exposing secrets', () => {
   const request = buildOpenRouterAnalysisRequest({
     model: 'deepseek/deepseek-v4-pro',

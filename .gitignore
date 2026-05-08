@@ -23,6 +23,7 @@ coverage/
 
 # Logs and local runtime files
 logs/
+output/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -46,3 +47,9 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+.vercel
+
+# Source asset folders copied into app/public already
+Logo/
+Screenshots/

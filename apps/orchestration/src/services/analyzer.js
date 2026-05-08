@@ -17,6 +17,20 @@ const KNOWN_TECH_TERMS = [
   'Vercel',
 ];
 
+const SEARCH_CONCEPTS = {
+  security: ['security', 'secure', 'soc', 'soc2', 'compliance', 'audit', 'privacy', 'control', 'controls', 'access', 'data', 'protection', 'certification', 'certifications'],
+  compliance: ['compliance', 'soc', 'soc2', 'audit', 'privacy', 'control', 'controls', 'policy', 'policies', 'certification', 'certifications'],
+  privacy: ['privacy', 'data', 'protection', 'security', 'compliance', 'policy', 'policies'],
+  marketing: ['marketing', 'promotion', 'promotional', 'brand', 'campaign', 'growth', 'traffic', 'conversion', 'content'],
+  design: ['design', 'branding', 'palette', 'layout', 'visual', 'creative', 'ui', 'ux'],
+  finance: ['finance', 'money', 'revenue', 'pricing', 'investment', 'investing', 'profit', 'sales'],
+  fitness: ['fitness', 'workout', 'training', 'health', 'exercise', 'gym', 'nutrition'],
+};
+
+function appReferer() {
+  return process.env.APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173';
+}
+
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -150,7 +164,7 @@ async function analyzeTextWithOpenRouter({ apiKey, model, item, baseAnalysis, fe
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      'HTTP-Referer': 'http://localhost:5173',
+      'HTTP-Referer': appReferer(),
       'X-Title': 'Instagram Brain',
     },
     body: JSON.stringify(buildOpenRouterAnalysisRequest({ model, item, baseAnalysis })),
@@ -243,57 +257,92 @@ function mergeAnalyses(analyses) {
   };
 }
 
-function searchableText(item) {
+function searchableFields(item) {
   const analysis = item.analysis || {};
   return [
-    item.caption,
-    item.ownerName,
-    item.ownerUsername,
-    item.url,
-    analysis.title,
-    analysis.summary,
-    analysis.transcript,
-    analysis.ocrText,
-    analysis.visualDescription,
-    ...(analysis.brandsMentioned || []),
-    ...(analysis.toolsMentioned || []),
-    ...(analysis.reposMentioned || []),
-    ...(analysis.peopleMentioned || []),
-    ...(analysis.topics || []),
-    ...(analysis.tags || []),
-  ]
+    { weight: 9, text: analysis.title },
+    { weight: 7, text: analysis.ocrText },
+    { weight: 7, text: analysis.transcript },
+    { weight: 5, text: analysis.summary },
+    { weight: 5, text: item.caption },
+    { weight: 4, text: analysis.visualDescription },
+    { weight: 4, text: [...(analysis.topics || []), ...(analysis.tags || [])].join(' ') },
+    { weight: 4, text: [...(analysis.brandsMentioned || []), ...(analysis.toolsMentioned || [])].join(' ') },
+    { weight: 3, text: [...(analysis.reposMentioned || []), ...(analysis.peopleMentioned || [])].join(' ') },
+    { weight: 1, text: [item.ownerName, item.ownerUsername, item.url].filter(Boolean).join(' ') },
+  ];
+}
+
+function searchableText(item) {
+  return searchableFields(item)
+    .map((field) => field.text)
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
 }
 
-function expandQuery(query) {
-  const terms = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
-  const expanded = new Set(terms);
-  if (terms.includes('repo') || terms.includes('github')) {
-    expanded.add('repository');
-    expanded.add('github');
+function normalizeSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeSearchText(value) {
+  return normalizeSearchText(value).split(' ').filter(Boolean);
+}
+
+function queryGroups(query) {
+  return tokenizeSearchText(query).map((term) => {
+    if (SEARCH_CONCEPTS[term]) {
+      return SEARCH_CONCEPTS[term];
+    }
+    if (term === 'repo' || term === 'github') {
+      return ['repo', 'repository', 'github'];
+    }
+    if (term === 'skills' || term === 'skill' || term === 'agent') {
+      return ['skills', 'skill', 'agent', 'mcp'];
+    }
+    if (term === 'memory') {
+      return ['memory', 'openspace'];
+    }
+    return [term];
+  });
+}
+
+function fieldMatchesGroup(fieldText, group) {
+  const tokens = new Set(tokenizeSearchText(fieldText));
+  return group.some((term) => tokens.has(term));
+}
+
+function haystackMatchesGroup(haystack, group) {
+  const tokens = new Set(tokenizeSearchText(haystack));
+  return group.some((term) => tokens.has(term));
+}
+
+function scoreItem(item, query, groups) {
+  const normalizedQuery = normalizeSearchText(query);
+  const haystack = searchableText(item);
+  if (!groups.every((group) => haystackMatchesGroup(haystack, group))) {
+    return 0;
   }
-  if (terms.includes('skills') || terms.includes('agent')) {
-    expanded.add('agent');
-    expanded.add('mcp');
-  }
-  if (terms.includes('memory')) {
-    expanded.add('openspace');
-  }
-  return [...expanded];
+
+  return searchableFields(item).reduce((total, field) => {
+    const normalizedField = normalizeSearchText(field.text);
+    if (!normalizedField) return total;
+    const groupScore = groups.reduce((sum, group) => sum + (fieldMatchesGroup(normalizedField, group) ? field.weight : 0), 0);
+    const phraseScore = normalizedQuery && normalizedField.includes(normalizedQuery) ? field.weight * 3 : 0;
+    return total + groupScore + phraseScore;
+  }, 0);
 }
 
 function searchItems(items, query, filters = {}) {
-  const terms = expandQuery(query);
-  if (!terms.length) return items;
+  const groups = queryGroups(query);
+  if (!groups.length) return items;
 
   return items
-    .map((item) => {
-      const haystack = searchableText(item);
-      const score = terms.reduce((total, term) => total + (haystack.includes(term) ? 1 : 0), 0);
-      return { item, score };
-    })
+    .map((item) => ({ item, score: scoreItem(item, query, groups) }))
     .filter(({ item, score }) => {
       if (!score) return false;
       if (filters.contentType && item.contentType !== filters.contentType) return false;

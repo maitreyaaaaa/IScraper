@@ -1,8 +1,8 @@
 const { createClient } = require('@supabase/supabase-js');
 const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
 const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/providers');
-
-const FREE_ITEMS_LIMIT = 200;
+const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
+const { normalizeUsername, publicProfile } = require('../services/profiles');
 
 function createSupabaseStore({ url, serviceRoleKey }) {
   if (!url || !serviceRoleKey) {
@@ -32,6 +32,37 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .from('user_credit_accounts')
         .upsert({ user_id: userId, free_items_limit: FREE_ITEMS_LIMIT }, { onConflict: 'user_id' })
         .throwOnError();
+    },
+    async getProfile(userId) {
+      const { data, error } = await client
+        .from('user_profiles')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapProfile(data) : null;
+    },
+    async saveProfile(userId, { username, avatarUrl = '' }) {
+      const { data, error } = await client
+        .from('user_profiles')
+        .upsert(
+          {
+            user_id: userId,
+            username: normalizeUsername(username),
+            avatar_url: avatarUrl || null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' },
+        )
+        .select('*')
+        .single();
+      if (error?.code === '23505') {
+        const conflict = new Error('That username is already taken.');
+        conflict.statusCode = 409;
+        throw conflict;
+      }
+      if (error) throw error;
+      return mapProfile(data);
     },
     async listPublicFeedback() {
       const { data, error } = await client
@@ -67,7 +98,30 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return mapImport(data);
     },
     async upsertImportData({ userId, importId, parsed }) {
-      const items = parsed.items.map((item) => ({
+      if (!parsed.items.length) return [];
+
+      const ids = [...new Set(parsed.items.map((item) => item.id).filter(Boolean))];
+      const urls = [...new Set(parsed.items.map((item) => item.url).filter(Boolean))];
+      const existingKeys = new Set();
+      if (ids.length || urls.length) {
+        const filters = [];
+        if (ids.length) filters.push(`id.in.(${ids.map(escapeSupabaseListValue).join(',')})`);
+        if (urls.length) filters.push(`url.in.(${urls.map(escapeSupabaseListValue).join(',')})`);
+        const { data: existing, error: existingError } = await client
+          .from('saved_items')
+          .select('id,url')
+          .eq('user_id', userId)
+          .or(filters.join(','));
+        if (existingError) throw existingError;
+        for (const row of existing || []) {
+          existingKeys.add(`id:${row.id}`);
+          existingKeys.add(`url:${row.url}`);
+        }
+      }
+
+      const items = parsed.items
+        .filter((item) => !existingKeys.has(`id:${item.id}`) && !existingKeys.has(`url:${item.url}`))
+        .map((item) => ({
         id: item.id,
         user_id: userId,
         import_id: importId,
@@ -82,7 +136,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         status: 'queued',
       }));
       if (!items.length) return [];
-      const { data, error } = await client.from('saved_items').upsert(items, { onConflict: 'user_id,url' }).select('*');
+      const { data, error } = await client.from('saved_items').insert(items).select('*');
       if (error) throw error;
       return data.map(mapItem);
     },
@@ -192,6 +246,62 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     async setItemStatus(userId, itemId, status, error = null) {
       await client.from('saved_items').update({ status, error }).eq('user_id', userId).eq('id', itemId).throwOnError();
     },
+    async listCreditPackages() {
+      const { data, error } = await client
+        .from('credit_packages')
+        .select('*')
+        .eq('active', true)
+        .order('credits', { ascending: true });
+      if (error && error.code === '42P01') return DEFAULT_CREDIT_PACKAGES;
+      if (error) throw error;
+      return (data || []).map(mapCreditPackage);
+    },
+    async getCreditPackage(packageId) {
+      const { data, error } = await client
+        .from('credit_packages')
+        .select('*')
+        .eq('id', packageId)
+        .eq('active', true)
+        .maybeSingle();
+      if (error && error.code === '42P01') return DEFAULT_CREDIT_PACKAGES.find((entry) => entry.id === packageId) || null;
+      if (error) throw error;
+      return data ? mapCreditPackage(data) : null;
+    },
+    async createCreditPurchase({ userId, packageEntry }) {
+      const { data, error } = await client
+        .from('credit_purchases')
+        .insert({
+          user_id: userId,
+          package_id: packageEntry.id,
+          credits: packageEntry.credits,
+          amount_cents: packageEntry.amountCents,
+          currency: packageEntry.currency,
+          status: 'pending',
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return mapCreditPurchase(data);
+    },
+    async updateCreditPurchaseSession({ purchaseId, checkoutSessionId }) {
+      const { data, error } = await client
+        .from('credit_purchases')
+        .update({ stripe_checkout_session_id: checkoutSessionId })
+        .eq('id', purchaseId)
+        .select('*')
+        .single();
+      if (error) throw error;
+      return mapCreditPurchase(data);
+    },
+    async completeCreditPurchase({ purchaseId, checkoutSessionId, paymentIntentId }) {
+      const { data, error } = await client.rpc('complete_credit_purchase', {
+        p_purchase_id: purchaseId || null,
+        p_checkout_session_id: checkoutSessionId || null,
+        p_payment_intent_id: paymentIntentId || null,
+      });
+      if (error) throw error;
+      return data ? mapCreditPurchase(data) : null;
+    },
     async getCredits(userId) {
       await this.ensureCreditAccount(userId);
       const { data: account, error: accountError } = await client
@@ -216,6 +326,8 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         freeItemsUsed,
         freeItemsRemaining: Math.max(freeItemsLimit - freeItemsUsed, 0),
         paidCredits: account.paid_credits || 0,
+        itemCreditCost: 1,
+        totalAvailableCredits: Math.max(freeItemsLimit - freeItemsUsed, 0) + (account.paid_credits || 0),
       };
     },
     async ensureCreditAccount(userId) {
@@ -225,6 +337,16 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .throwOnError();
     },
     async recordUsage({ userId, itemId, source, provider, model }) {
+      const { data: existing, error: existingError } = await client
+        .from('analysis_usage_events')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('item_id', itemId)
+        .eq('source', source)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (existing) return;
+
       const { error } = await client
         .from('analysis_usage_events')
         .upsert({ user_id: userId, item_id: itemId, source, provider, model }, { onConflict: 'user_id,item_id,source' });
@@ -233,19 +355,38 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         await this.addCreditTransaction({ userId, amount: -1, reason: 'item_analysis', itemId });
       }
     },
-    async addCreditTransaction({ userId, amount, reason = 'manual', itemId = null }) {
+    async addCreditTransaction({ userId, amount, reason = 'manual', itemId = null, metadata = {} }) {
+      const numericAmount = Number(amount || 0);
+      if (!Number.isInteger(numericAmount) || numericAmount === 0) {
+        throw new Error('Credit amount must be a non-zero whole number.');
+      }
       const credits = await this.getCredits(userId);
-      const nextPaidCredits = credits.paidCredits + Number(amount || 0);
+      const nextPaidCredits = credits.paidCredits + numericAmount;
       if (nextPaidCredits < 0) throw new Error('Not enough paid credits.');
       await client
         .from('credit_transactions')
-        .insert({ user_id: userId, amount, reason, item_id: itemId })
+        .insert({ user_id: userId, amount: numericAmount, reason, item_id: itemId, metadata })
         .throwOnError();
       await client
         .from('user_credit_accounts')
         .update({ paid_credits: nextPaidCredits })
         .eq('user_id', userId)
         .throwOnError();
+    },
+    async addAdminCreditAdjustment({ userId, amount, reason, adminActor }) {
+      await this.addCreditTransaction({
+        userId,
+        amount,
+        reason: 'admin_adjustment',
+        metadata: { reason, adminActor },
+      });
+      const { data, error } = await client
+        .from('admin_credit_adjustments')
+        .insert({ user_id: userId, amount, reason, admin_actor: adminActor })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return { adjustment: data, credits: await this.getCredits(userId) };
     },
     async listProviderCredentials(userId) {
       const { data, error } = await client
@@ -350,6 +491,10 @@ function mapImport(row) {
   return { id: row.id, userId: row.user_id, source: row.source, mode: row.mode, status: row.status };
 }
 
+function escapeSupabaseListValue(value) {
+  return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 function mapItem(row) {
   return {
     id: row.id,
@@ -451,6 +596,27 @@ function credentialWithSecret(row, encryptionKey) {
   };
 }
 
+function mapCreditPackage(row) {
+  return normalizePackage(row);
+}
+
+function mapCreditPurchase(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    packageId: row.package_id,
+    credits: row.credits,
+    amountCents: row.amount_cents,
+    currency: row.currency,
+    status: row.status,
+    stripeCheckoutSessionId: row.stripe_checkout_session_id,
+    stripePaymentIntentId: row.stripe_payment_intent_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  };
+}
+
 function mapFeedback(row) {
   return {
     id: row.id,
@@ -460,6 +626,16 @@ function mapFeedback(row) {
     status: row.status,
     createdAt: row.created_at,
   };
+}
+
+function mapProfile(row) {
+  return publicProfile({
+    userId: row.user_id,
+    username: row.username,
+    avatarUrl: row.avatar_url || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
 }
 
 function matchesFilters(item, filters = {}) {

@@ -2,6 +2,10 @@ function compactText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function appReferer() {
+  return process.env.APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173';
+}
+
 function buildEmbeddingContent(item, analysis = {}) {
   return [
     compactText(item.caption),
@@ -47,7 +51,7 @@ async function createOpenRouterEmbedding({
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      'HTTP-Referer': 'http://localhost:5173',
+      'HTTP-Referer': appReferer(),
       'X-Title': 'Instagram Brain',
     },
     body: JSON.stringify({

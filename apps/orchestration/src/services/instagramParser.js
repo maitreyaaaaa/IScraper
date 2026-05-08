@@ -11,6 +11,23 @@ function getShortcode(url) {
   return String(url).split('/').filter(Boolean).pop();
 }
 
+function normalizeInstagramUrl(value) {
+  try {
+    const url = new URL(String(value));
+    const hostname = url.hostname.toLowerCase().replace(/^(www|m|mobile|basic)\./, '');
+    if (hostname !== 'instagram.com') return String(value);
+
+    const parts = url.pathname.split('/').filter(Boolean);
+    const type = parts[0] === 'reels' ? 'reel' : parts[0];
+    const shortcode = parts[1];
+    if (!['reel', 'p'].includes(type) || !shortcode) return String(value);
+
+    return `https://instagram.com/${type}/${shortcode}`;
+  } catch (_error) {
+    return String(value);
+  }
+}
+
 function getContentType(url) {
   if (url.includes('/reel/')) return 'reel';
   if (url.includes('/p/')) return 'post';
@@ -50,7 +67,8 @@ function parsePostsHtml(html, sourceName, collectionName = null) {
   const byUrl = new Map();
 
   $('a[href*="instagram.com/"]').each((_, anchor) => {
-    const url = $(anchor).attr('href');
+    const rawUrl = $(anchor).attr('href');
+    const url = normalizeInstagramUrl(rawUrl);
     if (!url || !/instagram\.com\/(reel|p)\//.test(url) || byUrl.has(url)) return;
 
     const record = closestRecord($, anchor);
@@ -154,5 +172,6 @@ function parseInstagramExport(files) {
 
 module.exports = {
   parseInstagramExport,
+  normalizeInstagramUrl,
   normalizeText,
 };

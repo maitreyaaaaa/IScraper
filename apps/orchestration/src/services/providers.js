@@ -1,5 +1,6 @@
 const DEFAULT_APP_TEXT_MODEL = 'deepseek/deepseek-v4-pro';
 const DEFAULT_APP_MEDIA_MODEL = 'google/gemini-3.1-flash-lite-preview';
+const DEFAULT_EMBEDDING_MODEL = 'openai/text-embedding-3-small';
 
 const PURPOSES = ['text', 'media', 'embedding'];
 
@@ -56,6 +57,13 @@ const PROVIDERS_BY_PURPOSE = {
   embedding: ['openrouter'],
 };
 
+const EMBEDDING_PROVIDERS = {
+  openrouter: {
+    label: 'OpenRouter embeddings',
+    defaultModel: DEFAULT_EMBEDDING_MODEL,
+  },
+};
+
 function assertProviderPurpose(provider, purpose) {
   if (!PURPOSES.includes(purpose)) {
     throw new Error(`Unsupported credential purpose: ${purpose}`);
@@ -75,15 +83,19 @@ function credentialOptions() {
   return {
     textProviders: TEXT_PROVIDERS,
     mediaProviders: MEDIA_PROVIDERS,
+    embeddingProviders: EMBEDDING_PROVIDERS,
     mediaModelAllowlist: MEDIA_MODEL_ALLOWLIST,
     defaultAppTextModel: DEFAULT_APP_TEXT_MODEL,
     defaultAppMediaModel: DEFAULT_APP_MEDIA_MODEL,
+    defaultEmbeddingModel: DEFAULT_EMBEDDING_MODEL,
   };
 }
 
 module.exports = {
+  DEFAULT_EMBEDDING_MODEL,
   DEFAULT_APP_MEDIA_MODEL,
   DEFAULT_APP_TEXT_MODEL,
+  EMBEDDING_PROVIDERS,
   MEDIA_MODEL_ALLOWLIST,
   MEDIA_PROVIDERS,
   PURPOSES,

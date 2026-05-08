@@ -50,3 +50,26 @@ test('testProviderCredential performs a lightweight provider request', async () 
   assert.equal(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(JSON.parse(calls[0].options.body).messages[0].content, 'Reply OK.');
 });
+
+test('testProviderCredential uses embeddings endpoint for embedding keys', async () => {
+  const calls = [];
+  await testProviderCredential({
+    credential: {
+      provider: 'openrouter',
+      purpose: 'embedding',
+      model: 'openai/text-embedding-3-small',
+      apiKey: 'sk-test',
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
+      };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://openrouter.ai/api/v1/embeddings');
+  assert.equal(JSON.parse(calls[0].options.body).input, 'test search');
+});

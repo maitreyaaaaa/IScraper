@@ -82,13 +82,10 @@ async function processImportJobs({
         error: null,
       });
 
-      const mediaPlan = await chooseMediaPlan({
+      const analysisPlan = await chooseAnalysisPlan({
         store,
         userId,
         item,
-        openRouterApiKey,
-        openRouterMediaModel,
-        geminiApiKey,
         credentialEncryptionKey,
       });
 
@@ -107,46 +104,38 @@ async function processImportJobs({
         throw new Error('Media file could not be downloaded for analysis.');
       }
 
-      const mediaAnalysis = mediaPlan
+      const mediaAnalysis = analysisPlan.mediaCredential
         ? await analyzeMediaWithCredential({
-            credential: mediaPlan.credential,
+            credential: analysisPlan.mediaCredential,
             mediaPaths,
             item,
           })
         : null;
       const baseAnalysis = buildTextBaseAnalysis(item, mediaAnalysis);
-      const textCredential = await chooseTextCredential({
-        store,
-        userId,
-        openRouterApiKey,
-        openRouterModel,
-        credentialEncryptionKey,
-        source: mediaPlan?.source,
-      });
-      const textAnalysis = textCredential
+      const textAnalysis = analysisPlan.textCredential
         ? await analyzeTextWithCredential({
-            credential: textCredential,
+            credential: analysisPlan.textCredential,
             item,
             baseAnalysis,
           })
         : null;
       const analysis = mergeAnalysis(baseAnalysis, textAnalysis);
       await store.saveAnalysis(userId, item.id, analysis);
-      if (mediaPlan?.source === 'free' || mediaPlan?.source === 'paid') {
+      if (analysisPlan.source === 'free' || analysisPlan.source === 'paid') {
         await store.recordUsage({
           userId,
           itemId: item.id,
-          source: mediaPlan.source,
-          provider: mediaPlan.credential.provider,
-          model: mediaPlan.credential.model,
+          source: analysisPlan.source,
+          provider: analysisPlan.billingCredential.provider,
+          model: analysisPlan.billingCredential.model,
         });
       }
-      if (openRouterApiKey && typeof store.saveEmbedding === 'function') {
+      if (analysisPlan.embeddingCredential && typeof store.saveEmbedding === 'function') {
         try {
           const content = buildEmbeddingContent(item, analysis);
           const embedding = await createOpenRouterEmbedding({
-            apiKey: openRouterApiKey,
-            model: openRouterEmbeddingModel,
+            apiKey: analysisPlan.embeddingCredential.apiKey,
+            model: analysisPlan.embeddingCredential.model || openRouterEmbeddingModel,
             input: content,
             dimensions: embeddingDimensions,
             inputType: 'search_document',
@@ -155,7 +144,7 @@ async function processImportJobs({
             await store.saveEmbedding(userId, item.id, {
               content,
               embedding,
-              model: openRouterEmbeddingModel,
+              model: analysisPlan.embeddingCredential.model || openRouterEmbeddingModel,
             });
           }
         } catch (error) {
@@ -175,8 +164,8 @@ async function processImportJobs({
           userId,
           item,
           job,
-          status: 'paused_api_limit',
-          message: 'Video did not process because your API limit was reached.',
+        status: 'paused_api_limit',
+        message: 'Saved post did not process because your API limit was reached.',
         });
         continue;
       }
@@ -196,51 +185,41 @@ function requiresMediaAnalysis(item) {
   return ['reel', 'post'].includes(item.contentType);
 }
 
-async function chooseMediaPlan({ store, userId, item, openRouterApiKey, openRouterMediaModel, geminiApiKey, credentialEncryptionKey }) {
-  if (!requiresMediaAnalysis(item)) return null;
-  const credits = typeof store.getCredits === 'function' ? await store.getCredits(userId) : { freeItemsRemaining: 0, paidCredits: 0 };
+async function chooseAnalysisPlan({
+  store,
+  userId,
+  item,
+  credentialEncryptionKey,
+}) {
+  const needsMedia = requiresMediaAnalysis(item);
 
-  if (credits.freeItemsRemaining > 0) {
-    const credential = appMediaCredential({ openRouterApiKey, openRouterMediaModel, geminiApiKey });
-    if (!credential) throw pauseError('paused_missing_provider', 'Video did not process because no supported image/video provider is connected.');
-    return { source: 'free', credential };
-  }
-
-  const userCredential =
-    typeof store.getPreferredProviderCredential === 'function' && credentialEncryptionKey
+  const mediaUserCredential =
+    needsMedia && typeof store.getPreferredProviderCredential === 'function' && credentialEncryptionKey
       ? await store.getPreferredProviderCredential(userId, 'media', credentialEncryptionKey)
       : null;
-  if (userCredential) return { source: 'byok', credential: userCredential };
-
-  if (credits.paidCredits > 0) {
-    const credential = appMediaCredential({ openRouterApiKey, openRouterMediaModel, geminiApiKey });
-    if (!credential) throw pauseError('paused_missing_provider', 'Video did not process because no supported image/video provider is connected.');
-    return { source: 'paid', credential };
-  }
-
-  throw pauseError('paused_needs_billing', 'Video did not process because credits are over. Add credits or connect your own API key.');
-}
-
-async function chooseTextCredential({ store, userId, openRouterApiKey, openRouterModel, credentialEncryptionKey, source }) {
-  if (source === 'free' || source === 'paid') {
-    return openRouterApiKey ? { provider: 'openrouter', purpose: 'text', model: openRouterModel, apiKey: openRouterApiKey } : null;
-  }
-  const userCredential =
+  const textUserCredential =
     typeof store.getPreferredProviderCredential === 'function' && credentialEncryptionKey
       ? await store.getPreferredProviderCredential(userId, 'text', credentialEncryptionKey)
       : null;
-  if (userCredential) return userCredential;
-  return openRouterApiKey ? { provider: 'openrouter', purpose: 'text', model: openRouterModel, apiKey: openRouterApiKey } : null;
-}
+  const embeddingCredential =
+    typeof store.getPreferredProviderCredential === 'function' && credentialEncryptionKey
+      ? await store.getPreferredProviderCredential(userId, 'embedding', credentialEncryptionKey)
+      : null;
 
-function appMediaCredential({ openRouterApiKey, openRouterMediaModel, geminiApiKey }) {
-  if (openRouterApiKey) {
-    return { provider: 'openrouter', purpose: 'media', model: openRouterMediaModel, apiKey: openRouterApiKey };
+  if ((needsMedia && mediaUserCredential) || (!needsMedia && textUserCredential)) {
+    return {
+      source: 'byok',
+      mediaCredential: mediaUserCredential,
+      textCredential: textUserCredential,
+      billingCredential: textUserCredential,
+      embeddingCredential,
+    };
   }
-  if (geminiApiKey) {
-    return { provider: 'gemini', purpose: 'media', model: 'gemini-1.5-flash', apiKey: geminiApiKey };
+
+  if (needsMedia) {
+    throw pauseError('paused_missing_provider', 'Saved post did not process because no supported image/video provider key is connected.');
   }
-  return null;
+  throw pauseError('paused_missing_provider', 'Saved post did not process because no text AI provider key is connected.');
 }
 
 function pauseError(status, message) {

@@ -1,13 +1,22 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const crypto = require('crypto');
+const path = require('path');
+const Stripe = require('stripe');
+const JSZip = require('jszip');
 const { parseInstagramExport } = require('./services/instagramParser');
 const { processImportJobs } = require('./services/worker');
 const { createOpenRouterEmbedding } = require('./services/embeddings');
 const { credentialOptions } = require('./services/providers');
 const { testProviderCredential } = require('./services/providerClients');
+const { formatPrice } = require('./services/credits');
+const { buildKnowledgeGraph, buildObsidianFiles } = require('./services/graph');
+const { validateProfileInput } = require('./services/profiles');
 
-const upload = multer({ storage: multer.memoryStorage() });
+const HTML_UPLOAD_EXTENSIONS = new Set(['.html', '.htm']);
+const HTML_UPLOAD_MIME_TYPES = new Set(['text/html', 'application/octet-stream', '']);
+const rateBuckets = new Map();
 
 async function getUser(req, store) {
   const auth = req.header('authorization') || '';
@@ -30,16 +39,156 @@ function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
 
+function assertAdmin(req, config) {
+  if (!config.adminApiKey) {
+    const error = new Error('Admin API is not configured.');
+    error.statusCode = 503;
+    throw error;
+  }
+  const provided = req.header('x-admin-api-key') || '';
+  const expected = String(config.adminApiKey);
+  const validLength = Buffer.byteLength(provided) === Buffer.byteLength(expected);
+  const valid = validLength && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+  if (!valid) {
+    const error = new Error('Admin access denied.');
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+function stripeFor(config) {
+  return config.stripeSecretKey ? new Stripe(config.stripeSecretKey) : null;
+}
+
+async function requireCompletedProfile(req, store) {
+  if (!store.requiresAuth || typeof store.getProfile !== 'function') return;
+  const profile = await store.getProfile(req.user.id);
+  if (!profile?.username) {
+    const error = new Error('Create your username before importing saved posts.');
+    error.statusCode = 428;
+    throw error;
+  }
+}
+
+function clientIp(req) {
+  return String(req.headers['x-forwarded-for'] || req.ip || req.socket?.remoteAddress || 'unknown')
+    .split(',')[0]
+    .trim();
+}
+
+function createRateLimiter({ windowMs, max, name }) {
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = `${name}:${clientIp(req)}`;
+    const current = rateBuckets.get(key);
+    const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + windowMs };
+    bucket.count += 1;
+    rateBuckets.set(key, bucket);
+
+    if (bucket.count > max) {
+      res.setHeader('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)));
+      return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+    }
+
+    if (rateBuckets.size > 5000) {
+      for (const [bucketKey, value] of rateBuckets.entries()) {
+        if (value.resetAt <= now) rateBuckets.delete(bucketKey);
+      }
+    }
+    return next();
+  };
+}
+
+function securityHeaders(_req, res, next) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  next();
+}
+
+function uploadFileFilter(_req, file, callback) {
+  const extension = path.extname(file.originalname || '').toLowerCase();
+  if (!HTML_UPLOAD_EXTENSIONS.has(extension) || !HTML_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
+    return callback(new Error('Only Instagram HTML export files are allowed.'));
+  }
+  return callback(null, true);
+}
+
 function createApp({ store, config = {} }) {
   const app = express();
-  app.use(cors());
-  app.use(express.json());
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    fileFilter: uploadFileFilter,
+    limits: {
+      fileSize: config.maxUploadFileSizeBytes || 25 * 1024 * 1024,
+      files: 20,
+    },
+  });
+  const rateWindowMs = config.rateLimitWindowMs || 15 * 60 * 1000;
+  const generalRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.rateLimitMax || 600, name: 'general' });
+  const feedbackRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.feedbackRateLimitMax || 20, name: 'feedback' });
+  const importRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.importRateLimitMax || 10, name: 'import' });
+  const searchRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.searchRateLimitMax || 180, name: 'search' });
+  const checkoutRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.checkoutRateLimitMax || 10, name: 'checkout' });
+  const allowedOrigins = new Set((config.corsOrigins || []).map((origin) => String(origin).replace(/\/$/, '')));
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
+  app.use(securityHeaders);
+  app.use(generalRateLimit);
+  app.use(cors({
+    origin(origin, callback) {
+      if (!origin || !allowedOrigins.size || allowedOrigins.has(String(origin).replace(/\/$/, ''))) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
+  }));
+
+  app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), asyncRoute(async (req, res) => {
+    const stripe = stripeFor(config);
+    if (!stripe || !config.stripeWebhookSecret) {
+      return res.status(503).json({ error: 'Stripe webhook is not configured.' });
+    }
+
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, req.header('stripe-signature'), config.stripeWebhookSecret);
+    } catch (_error) {
+      return res.status(400).json({ error: 'Invalid Stripe signature.' });
+    }
+
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      await store.completeCreditPurchase({
+        purchaseId: session.metadata?.purchaseId,
+        checkoutSessionId: session.id,
+        paymentIntentId: typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id,
+      });
+    }
+
+    return res.json({ received: true });
+  }));
+
+  app.use(express.json({ limit: config.jsonBodyLimit || '1mb' }));
+
+  app.get('/api/credit-packages', asyncRoute(async (_req, res) => {
+    const packages = await store.listCreditPackages();
+    res.json({
+      checkoutEnabled: Boolean(config.enableCreditCheckout && config.stripeSecretKey),
+      packages: packages.map((entry) => ({
+        ...entry,
+        priceLabel: formatPrice(entry),
+      })),
+    });
+  }));
 
   app.get('/api/feedback', asyncRoute(async (_req, res) => {
     res.json({ feedback: await store.listPublicFeedback() });
   }));
 
-  app.post('/api/feedback', asyncRoute(async (req, res) => {
+  app.post('/api/feedback', feedbackRateLimit, asyncRoute(async (req, res) => {
     const message = String(req.body?.message || '').trim();
     const feature = String(req.body?.feature || '').trim();
     if (message.length < 3) return res.status(400).json({ error: 'Feedback must be at least 3 characters.' });
@@ -47,6 +196,26 @@ function createApp({ store, config = {} }) {
 
     const feedback = await store.createPublicFeedback({ feature, message });
     return res.status(201).json({ feedback });
+  }));
+
+  app.get('/api/admin/credits/:userId', asyncRoute(async (req, res) => {
+    assertAdmin(req, config);
+    res.json({ credits: await store.getCredits(req.params.userId) });
+  }));
+
+  app.post('/api/admin/credits/adjust', asyncRoute(async (req, res) => {
+    assertAdmin(req, config);
+    const userId = String(req.body?.userId || '').trim();
+    const amount = Number(req.body?.amount);
+    const reason = String(req.body?.reason || '').trim().slice(0, 240);
+    const adminActor = String(req.header('x-admin-actor') || 'admin-api').trim().slice(0, 120);
+
+    if (!userId) return res.status(400).json({ error: 'userId is required.' });
+    if (!Number.isInteger(amount) || amount === 0) return res.status(400).json({ error: 'amount must be a non-zero whole number.' });
+    if (!reason) return res.status(400).json({ error: 'reason is required.' });
+
+    const result = await store.addAdminCreditAdjustment({ userId, amount, reason, adminActor });
+    return res.status(201).json(result);
   }));
 
   app.use(asyncRoute(async (req, _res, next) => {
@@ -74,6 +243,81 @@ function createApp({ store, config = {} }) {
 
   app.get('/api/credits', asyncRoute(async (req, res) => {
     res.json({ credits: await store.getCredits(req.user.id) });
+  }));
+
+  app.get('/api/profile', asyncRoute(async (req, res) => {
+    const profile = typeof store.getProfile === 'function' ? await store.getProfile(req.user.id) : null;
+    res.json({ profile, required: Boolean(store.requiresAuth && !profile?.username) });
+  }));
+
+  app.post('/api/profile', asyncRoute(async (req, res) => {
+    const input = validateProfileInput({
+      username: req.body?.username,
+      avatarUrl: req.body?.avatarUrl,
+    });
+    const profile = await store.saveProfile(req.user.id, input);
+    res.json({ profile });
+  }));
+
+  app.get('/api/graph', asyncRoute(async (req, res) => {
+    const items = await store.getItems(req.user.id);
+    res.json({ graph: buildKnowledgeGraph(items) });
+  }));
+
+  app.get('/api/graph/obsidian-export', asyncRoute(async (req, res) => {
+    const items = await store.getItems(req.user.id);
+    const graph = buildKnowledgeGraph(items);
+    const files = buildObsidianFiles(graph);
+    const zip = new JSZip();
+    for (const file of files) {
+      zip.file(file.path, file.content);
+    }
+    const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="iscraper-obsidian-graph.zip"');
+    res.send(buffer);
+  }));
+
+  app.post('/api/credits/checkout', checkoutRateLimit, asyncRoute(async (req, res) => {
+    if (!config.enableCreditCheckout) return res.status(503).json({ error: 'Credit checkout is coming soon.' });
+
+    const stripe = stripeFor(config);
+    if (!stripe) return res.status(503).json({ error: 'Stripe is not configured yet.' });
+
+    const packageId = String(req.body?.packageId || '').trim();
+    const packageEntry = await store.getCreditPackage(packageId);
+    if (!packageEntry) return res.status(404).json({ error: 'Credit package not found.' });
+
+    const purchase = await store.createCreditPurchase({ userId: req.user.id, packageEntry });
+    const appUrl = String(config.appUrl || req.get('origin') || 'http://localhost:5173').replace(/\/$/, '');
+    const lineItem = packageEntry.stripePriceId
+      ? { price: packageEntry.stripePriceId, quantity: 1 }
+      : {
+          price_data: {
+            currency: packageEntry.currency,
+            unit_amount: packageEntry.amountCents,
+            product_data: { name: `${packageEntry.credits} IScraper credits` },
+          },
+          quantity: 1,
+        };
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      client_reference_id: req.user.id,
+      customer_email: req.user.email,
+      line_items: [lineItem],
+      success_url: `${appUrl}/?checkout=success#app`,
+      cancel_url: `${appUrl}/?checkout=cancelled#app`,
+      metadata: {
+        purchaseId: purchase.id,
+        userId: req.user.id,
+        packageId: packageEntry.id,
+        credits: String(packageEntry.credits),
+      },
+    });
+
+    await store.updateCreditPurchaseSession({ purchaseId: purchase.id, checkoutSessionId: session.id });
+    return res.json({ url: session.url, sessionId: session.id });
   }));
 
   app.get('/api/provider-credentials', asyncRoute(async (req, res) => {
@@ -107,7 +351,8 @@ function createApp({ store, config = {} }) {
     return res.json({ ok: true, provider: credential.provider, purpose: credential.purpose, model: credential.model });
   }));
 
-  app.post('/api/imports', upload.array('exportFiles', 20), asyncRoute(async (req, res) => {
+  app.post('/api/imports', importRateLimit, upload.array('exportFiles', 20), asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
     if (!files.length) return res.status(400).json({ error: 'Upload saved_posts.html and optionally saved_collections.html.' });
 
@@ -123,8 +368,12 @@ function createApp({ store, config = {} }) {
 
     res.json({
       import: importEntry,
-      itemCount: items.length,
+      itemCount: parsed.items.length,
+      totalItemCount: parsed.items.length,
+      newItemCount: items.length,
+      skippedDuplicateCount: Math.max(parsed.items.length - items.length, 0),
       collectionCount: parsed.collections.length,
+      queuedJobCount: jobs.length,
       jobCount: jobs.length,
     });
   }));
@@ -157,18 +406,21 @@ function createApp({ store, config = {} }) {
     return res.json({ job });
   }));
 
-  app.post('/api/search', asyncRoute(async (req, res) => {
-    const query = req.body.query || '';
+  app.post('/api/search', searchRateLimit, asyncRoute(async (req, res) => {
+    const query = String(req.body.query || '').trim().slice(0, 240);
     let queryEmbedding = null;
-    if (query && config.openRouterApiKey && store.supportsSemanticSearch) {
+    if (query && config.credentialEncryptionKey && store.supportsSemanticSearch && typeof store.getPreferredProviderCredential === 'function') {
       try {
-        queryEmbedding = await createOpenRouterEmbedding({
-          apiKey: config.openRouterApiKey,
-          model: config.openRouterEmbeddingModel,
-          input: query,
-          dimensions: config.embeddingDimensions,
-          inputType: 'search_query',
-        });
+        const embeddingCredential = await store.getPreferredProviderCredential(req.user.id, 'embedding', config.credentialEncryptionKey);
+        if (embeddingCredential) {
+          queryEmbedding = await createOpenRouterEmbedding({
+            apiKey: embeddingCredential.apiKey,
+            model: embeddingCredential.model || config.openRouterEmbeddingModel,
+            input: query,
+            dimensions: config.embeddingDimensions,
+            inputType: 'search_query',
+          });
+        }
       } catch (error) {
         console.warn(`Semantic query embedding failed: ${error.message}`);
       }
@@ -179,8 +431,9 @@ function createApp({ store, config = {} }) {
   }));
 
   app.use((error, _req, res, _next) => {
-    console.error(error);
-    res.status(error.statusCode || 500).json({ error: error.message });
+    const statusCode = error.statusCode || (error instanceof multer.MulterError || /Only Instagram HTML export/.test(error.message) ? 400 : 500);
+    if (statusCode >= 500) console.error(error);
+    res.status(statusCode).json({ error: error.message });
   });
 
   return app;
