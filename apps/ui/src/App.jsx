@@ -40,19 +40,16 @@ import {
 } from 'lucide-react';
 import {
   approveReviewItem,
-  createExtensionToken,
   deleteProviderCredential,
   downloadObsidianGraph,
   getItem,
   getItems,
   getKnowledgeGraph,
   getProfile,
-  getExtensionTokens,
   getPublicFeedback,
   getProviderCredentials,
   importInstagramExport,
   restartQueue,
-  revokeExtensionToken,
   saveLink,
   saveProfile,
   saveProviderCredential,
@@ -81,7 +78,6 @@ const STATUS_META = {
 
 const STATUSES = ['all', 'needs_review', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
-const EXTENSION_INSTALL_URL = import.meta.env.VITE_EXTENSION_INSTALL_URL || '';
 const HERO_PLATFORMS = [
   { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
   { name: 'X', src: '/platforms/x.svg', bg: '#fff' },
@@ -150,10 +146,6 @@ function scrollToSection(event, id) {
 function scrollToLandingSection(id) {
   document.querySelector(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   window.history.replaceState(null, '', id);
-}
-
-function openExternalUrl(url) {
-  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function RotatingPlatformLogo() {
@@ -238,11 +230,6 @@ function itemIdFromHash() {
   return new URLSearchParams(hash.slice('#app?'.length)).get('item') || '';
 }
 
-function extensionConnectFromHash() {
-  const hash = window.location.hash || '';
-  return hash.startsWith('#app?') && new URLSearchParams(hash.slice('#app?'.length)).get('connectExtension') === '1';
-}
-
 function rememberPendingSave() {
   const pending = pendingSaveFromHash();
   if (!pending) return;
@@ -297,7 +284,6 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHel
   const introRef = useRef(null);
   const cursorRef = useRef(null);
   const heroTitle = useRef(null);
-  const [showExtensionPopup, setShowExtensionPopup] = useState(false);
   const [launchOfferDismissed, setLaunchOfferDismissed] = useState(() => window.localStorage.getItem('iscraper.launchOffer.dismissed') === '1');
   const [feedback, setFeedback] = useState([]);
   const [feedbackForm, setFeedbackForm] = useState({ feature: 'Search', message: '' });
@@ -315,29 +301,9 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHel
       .catch(() => setFeedback([]));
   }, []);
 
-  useEffect(() => {
-    if (window.localStorage.getItem('iscraper.extensionPromo.dismissed') === '1') return undefined;
-    const timer = window.setTimeout(() => setShowExtensionPopup(true), 15000);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  const dismissExtensionPopup = () => {
-    window.localStorage.setItem('iscraper.extensionPromo.dismissed', '1');
-    setShowExtensionPopup(false);
-  };
-
   const dismissLaunchOffer = () => {
     window.localStorage.setItem('iscraper.launchOffer.dismissed', '1');
     setLaunchOfferDismissed(true);
-  };
-
-  const openExtensionSection = () => {
-    if (EXTENSION_INSTALL_URL) {
-      openExternalUrl(EXTENSION_INSTALL_URL);
-    } else {
-      scrollToLandingSection('#extension');
-    }
-    dismissExtensionPopup();
   };
 
   const handleFeedbackSubmit = async (event) => {
@@ -725,7 +691,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHel
               [Tag, 'Organized without the cleanup', 'Group saves by themes like travel, food, fitness, shopping, home, business, or inspiration.'],
               [Lock, 'Private by default', 'Your saved export starts on your machine, so your personal taste and plans stay yours.'],
               [ShieldCheck, 'Built around official export', 'Use Instagram export files to build your library without handing over your Instagram login.'],
-              [KeyRound, 'Browser extension ready', 'Use the extension to send the current tab into IScraper without giving the extension your account token.'],
+              [KeyRound, 'Browser extension coming soon', 'The extension will let you send the current tab into IScraper after the browser store release.'],
             ].map(([Icon, title, description], index) => (
               <div
                 key={title}
@@ -749,27 +715,20 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHel
       <section id="extension" className="relative border-y border-white/10 bg-black px-6 py-24 md:py-32">
         <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
           <div data-reveal>
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension</div>
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension - coming soon</div>
             <h2 className="max-w-4xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
-              Save and search while you browse.
+              Extension support is coming soon.
             </h2>
             <p className="mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-              The IScraper extension lets you save the page you are on, run Lens search on selected text, or drag over an image area and search your private brain.
+              The IScraper extension is not available for users yet. When the browser-store listing is approved, it will let you save pages and run Lens search from your browser.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <button
                 type="button"
-                onClick={openExtensionSection}
-                className="inline-flex items-center gap-2 rounded-full bg-primary px-6 py-4 text-sm font-semibold text-primary-foreground transition hover:scale-[1.03]"
+                disabled
+                className="inline-flex cursor-not-allowed items-center gap-2 rounded-full bg-primary px-6 py-4 text-sm font-semibold text-primary-foreground opacity-70"
               >
-                {EXTENSION_INSTALL_URL ? 'Install extension' : 'Chrome Store page coming'} <ArrowRight className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={onOpenApp}
-                className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5"
-              >
-                <KeyRound className="h-4 w-4" /> Connect token
+                Coming soon
               </button>
               <button
                 type="button"
@@ -780,21 +739,16 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHel
               </button>
             </div>
             <p className="mt-5 text-sm leading-6 text-muted-foreground">
-              Works today on Chromium browsers like Chrome, Edge, Brave, Arc, and Opera. Firefox and Safari need their own store packages before we call them fully supported.
+              Planned for Chromium browsers like Chrome, Edge, Brave, Arc, and Opera after store approval.
             </p>
-            {!EXTENSION_INSTALL_URL && (
-              <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                Chrome Web Store listing is being prepared. Once approval is live, this button will open the public install page.
-              </p>
-            )}
           </div>
 
           <div data-reveal className="grid gap-4 sm:grid-cols-2">
             {[
-              [KeyRound, 'Limited token', 'The extension stores only a revokable Lens token, not your Google login.'],
-              [Search, 'Selected text search', 'Highlight text on any normal web page and search it across your saved library.'],
-              [Eye, 'Image crop Lens', 'Drag over text or an object in an image and search the closest saved posts.'],
-              [ShieldCheck, 'Store-ready behavior', 'No background scraping, no automatic page scanning, and no remote extension code.'],
+              [KeyRound, 'Limited token - coming soon', 'The planned extension will use a revokable Lens token, not your Google login.'],
+              [Search, 'Selected text search - coming soon', 'You will be able to highlight text on a page and search it across your saved library.'],
+              [Eye, 'Image crop Lens - coming soon', 'You will be able to drag over text or an object in an image and search matching saves.'],
+              [ShieldCheck, 'Store review - coming soon', 'The extension needs browser-store approval before normal users can install it.'],
             ].map(([Icon, title, description]) => (
               <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
                 <Icon className="h-6 w-6 text-primary" />
@@ -940,49 +894,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHel
         </div>
       </footer>
 
-      <ExtensionInstallPopup
-        visible={showExtensionPopup}
-        onInstall={openExtensionSection}
-        onOpenHowTo={onOpenHowTo}
-        onDismiss={dismissExtensionPopup}
-        hasInstallUrl={Boolean(EXTENSION_INSTALL_URL)}
-      />
     </div>
-  );
-}
-
-function ExtensionInstallPopup({ visible, onInstall, onOpenHowTo, onDismiss, hasInstallUrl }) {
-  return (
-    <aside
-      aria-live="polite"
-      className={`fixed bottom-5 right-5 z-[120] w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-primary/50 bg-black p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55)] transition duration-500 ${
-        visible ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-10 opacity-0'
-      }`}
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Browser extension</div>
-          <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Take IScraper with you.</h3>
-        </div>
-        <button type="button" onClick={onDismiss} className="rounded-full border border-white/10 p-2 text-muted-foreground transition hover:text-foreground" aria-label="Close extension popup">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <p className="mt-3 text-sm leading-6 text-muted-foreground">
-        Save pages, Lens-search selected text, and search image crops from Chrome, Edge, Brave, Arc, and other Chromium browsers.
-      </p>
-      <div className="mt-5 flex flex-wrap gap-3">
-        <button type="button" onClick={onInstall} className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground">
-          {hasInstallUrl ? 'Install extension' : 'See extension'} <ArrowRight className="h-4 w-4" />
-        </button>
-        <button type="button" onClick={onOpenHowTo} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 px-4 py-3 text-sm text-foreground transition hover:bg-white/5">
-          <FileText className="h-4 w-4" /> How to use
-        </button>
-        <button type="button" onClick={onDismiss} className="rounded-full border border-white/10 px-4 py-3 text-sm text-muted-foreground transition hover:text-foreground">
-          Later
-        </button>
-      </div>
-    </aside>
   );
 }
 
@@ -1033,7 +945,7 @@ const HOW_TO_GUIDES = [
   { key: 'instagram', icon: Upload, title: 'Instagram export', copy: 'Get your saved posts file from Instagram and upload it into IScraper.', status: 'Guide ready' },
   { key: 'api-keys', icon: KeyRound, title: 'API keys', copy: 'Add your own AI keys for summaries, media reading, and semantic search.', status: 'Coming soon' },
   { key: 'pinterest', icon: ExternalLink, title: 'Pinterest export', copy: 'Bring saved pins into your library when Pinterest import support is ready.', status: 'Coming soon' },
-  { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Save pages, use Lens search, and open results from your browser.', status: 'Coming soon' },
+  { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Coming soon: save pages, use Lens search, and open results from your browser.', status: 'Coming soon' },
 ];
 
 function HowToUsePage({ onBack, onOpenApp }) {
@@ -1123,10 +1035,10 @@ function HowToUsePage({ onBack, onOpenApp }) {
         <section className="howto-reveal mb-14 max-w-4xl">
           <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">How to use IScraper</div>
           <h1 className="font-display text-5xl font-bold tracking-tighter md:text-7xl">
-            Guides for imports, API keys, and the extension.
+            Guides for imports, API keys, and upcoming features.
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
-            Start with Instagram export today. We will keep adding simple guides here for API keys, Pinterest, the browser extension, and other import flows.
+            Start with Instagram export today. We will keep adding simple guides here for API keys, Pinterest, the browser extension, and other import flows as they become available.
           </p>
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
             {HOW_TO_GUIDES.map(({ key, icon: Icon, title, copy, status }) => (
@@ -1163,13 +1075,26 @@ function HowToUsePage({ onBack, onOpenApp }) {
           </section>
         )}
 
-        {activeGuide && activeGuide !== 'instagram' && (
+        {activeGuide && activeGuide !== 'instagram' && activeGuide !== 'extension' && (
           <section className="howto-reveal rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 md:p-10">
             <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">{activeGuideDetails?.status}</div>
             <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">{activeGuideDetails?.title}</h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
               This guide will live here next. For now, use the Help Center or email us if you get stuck.
             </p>
+          </section>
+        )}
+
+        {activeGuide === 'extension' && (
+          <section className="howto-reveal rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 md:p-10">
+            <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Browser extension - coming soon</div>
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight md:text-5xl">The extension guide is coming soon.</h2>
+            <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground">
+              The extension is not available for users yet. Once the browser-store listing is approved, this page will show the install and setup steps.
+            </p>
+            <span className="mt-8 inline-flex rounded-full bg-white/10 px-5 py-3 text-sm font-semibold text-muted-foreground">
+              Coming soon
+            </span>
           </section>
         )}
 
@@ -1220,7 +1145,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
 }
 
 const SUPPORT_EMAIL = 'itsallover.2006@gmail.com';
-const SUPPORT_TOPIC_OPTIONS = ['Import help', 'Login or account', 'Extension', 'Search results', 'Billing or credits', 'Other'];
+const SUPPORT_TOPIC_OPTIONS = ['Import help', 'Login or account', 'Extension coming soon', 'Search results', 'Billing or credits', 'Other'];
 
 function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
   const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('IScraper support request')}`;
@@ -1233,7 +1158,7 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
     [Upload, 'Import help', 'Use the Instagram export guide if you are stuck getting your saved posts file.'],
     [KeyRound, 'AI keys', 'IScraper is BYOK right now. Add your own text, media, and embedding keys in Keys & privacy.'],
     [Search, 'Search problems', 'If results feel wrong, make sure the saves were indexed. Search improves after summaries, OCR, and tags exist.'],
-    [LifeBuoy, 'Account support', 'Email us if Google login, usernames, profile setup, or extension tokens are not working.'],
+    [LifeBuoy, 'Account support', 'Email us if Google login, usernames, profile setup, or imports are not working.'],
   ];
 
   const handleSupportSubmit = (event) => {
@@ -1267,7 +1192,7 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
           <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">Help Center</div>
           <h1 className="font-display text-5xl font-bold tracking-tighter md:text-7xl">Need help with IScraper?</h1>
           <p className="mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-            If something breaks, you cannot import, or the extension feels confusing, email us and include what you were trying to do.
+            If something breaks, you cannot import, or an upcoming feature feels confusing, email us and include what you were trying to do.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <a
@@ -1352,7 +1277,7 @@ const LEGAL_CONTENT = {
       ['Your content', 'Your Instagram export, saved links, captions, notes, summaries, graph data, username, and optional profile picture remain your content. You give IScraper permission to process that content only to provide the app features.'],
       ['Emails and updates', 'We may send account, security, product, billing, import, and support emails to the email address on your account. We may also send product updates or marketing emails where you have opted in or where the law allows it, and those marketing emails must include a way to unsubscribe.'],
       ['AI processing', 'When indexing is enabled, content may be sent to configured AI providers to create summaries, OCR, transcripts, tags, and search data. AI output can be wrong, incomplete, or outdated, so you should verify important information yourself.'],
-      ['Browser extension', 'The IScraper browser extension is optional. It can save the active page, search selected text, or send a small user-selected screenshot crop to IScraper Lens. It must be used only on pages and content you are allowed to process.'],
+      ['Browser extension coming soon', 'The IScraper browser extension is not available for users yet. When released, it will be optional and must be used only on pages and content you are allowed to process.'],
       ['Things you cannot do', 'Do not upload content you do not have rights to use, attack the service, bypass rate limits, scrape or copy other users data, reverse engineer protected parts of the service, or use IScraper for unlawful activity.'],
       ['Credits and paid features', 'The first 200 imported saved items are currently included without paid IScraper credits, subject to abuse prevention and fair-use limits. Credit purchases are currently marked as coming soon. If payments are enabled later, pricing, refunds, and billing terms will be shown before purchase.'],
       ['Service changes', 'We may change, pause, or discontinue features. We will try to avoid disrupting your saved library, but we do not guarantee uninterrupted access.'],
@@ -1363,13 +1288,13 @@ const LEGAL_CONTENT = {
   privacy: {
     eyebrow: 'Privacy Policy',
     title: 'Privacy Policy',
-    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Google/Supabase login, Instagram export upload, saved links, optional browser extension, AI indexing, and private saved libraries.',
+    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Google/Supabase login, Instagram export upload, saved links, AI indexing, private saved libraries, and the browser extension that is coming soon.',
     sections: [
-      ['Information we collect', 'We collect login details from Supabase/Google such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded Instagram export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, extension token records, credit records, and basic technical logs.'],
+      ['Information we collect', 'We collect login details from Supabase/Google such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded Instagram export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs. Extension token records may be added when the extension launches.'],
       ['Google login data', 'Google login is used to authenticate you and create your IScraper account. From Google/Supabase we may receive basic account details such as your user ID, email address, name, and profile image if Google provides them. IScraper does not ask for Gmail, Drive, Calendar, contacts, or other Google account content. Google OAuth configuration must use the Supabase callback URL and must include this privacy policy URL before public launch.'],
       ['Instagram data', 'IScraper uses official Instagram export files that you upload. We do not ask for your Instagram password and we removed Instagram login scraping. Your export is used to build your searchable library.'],
       ['AI providers', 'If indexing is enabled, parts of your uploaded content may be sent to configured AI providers such as OpenRouter, Gemini, or your own connected provider key. This is done to generate summaries, transcripts, OCR, tags, and embeddings.'],
-      ['Browser extension data', 'The extension runs only when you click it. For saving, it sends the current page URL, title, page metadata, and your optional note to IScraper. For Lens search, it sends selected text or a small screenshot crop that you choose. Screenshot crops are not stored by default; they are used to produce a search query and then discarded.'],
+      ['Browser extension data - coming soon', 'The browser extension is not available for users yet. When released, it is planned to run only after you click it and use limited data such as the current page URL, selected text, or a user-selected screenshot crop.'],
       ['How we use data', 'We use your data to authenticate your account, keep your library separate from other users, process imports, search your saves, build your graph, show anonymous public feedback, prevent abuse, enforce limits, improve reliability, send service messages, respond to support requests, and send product updates or marketing emails only where you have opted in or where legally permitted.'],
       ['Google data limits', 'We do not sell Google login data, use it to build advertising profiles, or transfer it to unrelated third parties for marketing. We use Google login data only for account access, account communication, security, support, and the email uses described in this policy.'],
       ['What is public', 'Public feedback is visible to everyone, but it is shown without your name or profile photo. Your saved library, username setup data, provider keys, credits, and imports are not meant to be public.'],
@@ -1387,7 +1312,7 @@ const LEGAL_CONTENT = {
       ['Account protection', 'IScraper uses Supabase Auth and Google sign-in for account access. Users must complete profile setup before importing saved content. Keep your Google account secure because it controls access to your IScraper account.'],
       ['Data separation', 'Production data is stored in Supabase with user ownership checks and row-level security policies. The backend uses the service role only on server-side routes, never in browser code.'],
       ['API keys', 'User AI provider keys are encrypted before storage. Until paid credits are live, IScraper is BYOK-only, so users control the AI providers used for indexing.'],
-      ['Extension security', 'The browser extension uses a limited, revokable Lens token instead of your main login token. It does not scan pages in the background and only runs after you click it.'],
+      ['Extension security - coming soon', 'The browser extension is planned to use a limited, revokable Lens token instead of your main login token. It will not be available to users until browser-store release.'],
       ['Abuse prevention', 'IScraper uses upload limits, rate limits, URL safety checks, CORS restrictions, and security headers to reduce common abuse and accidental exposure.'],
       ['Report a security issue', `Email ${SUPPORT_EMAIL} with the subject "IScraper security report". Include the affected page, steps to reproduce, and impact. Do not publicly disclose an issue until we have had a chance to fix it.`],
     ],
@@ -1398,7 +1323,7 @@ const LEGAL_CONTENT = {
     intro: 'Use this page to request deletion of your IScraper account data, saved library, feedback, and connected settings.',
     sections: [
       ['How to request deletion', `Email ${SUPPORT_EMAIL} from the email address connected to your IScraper account. Use the subject "Delete my IScraper data". Include your username if you have one.`],
-      ['What we delete', 'We can delete your account profile, saved items, imports, generated summaries, OCR/transcripts, graph data, provider key records, extension tokens, and credit records tied to your account where deletion is legally and technically allowed.'],
+      ['What we delete', 'We can delete your account profile, saved items, imports, generated summaries, OCR/transcripts, graph data, provider key records, future extension tokens, and credit records tied to your account where deletion is legally and technically allowed.'],
       ['Public feedback', 'Anonymous public feedback may be harder to identify if it was not tied to your account. If you want a specific feedback item removed, include the exact text or a screenshot.'],
       ['Timing', 'We will review deletion requests as soon as practical. Some logs, backups, or legal records may remain for a limited time where required for security, fraud prevention, accounting, or legal compliance.'],
       ['Before deletion', 'Export anything you want to keep before requesting deletion. Once data is deleted, we may not be able to restore it.'],
@@ -1599,8 +1524,6 @@ function Dashboard({ onBack, onOpenHowTo }) {
   const [files, setFiles] = useState([]);
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
   const [credentials, setCredentials] = useState([]);
-  const [extensionTokens, setExtensionTokens] = useState([]);
-  const [newExtensionSecret, setNewExtensionSecret] = useState('');
   const [credentialOptions, setCredentialOptions] = useState(null);
   const [credentialForm, setCredentialForm] = useState({
     purpose: 'text',
@@ -1619,7 +1542,6 @@ function Dashboard({ onBack, onOpenHowTo }) {
   const sidebarRef = useRef(null);
   const pendingSaveHandledRef = useRef(false);
   const pendingItemHandledRef = useRef(false);
-  const extensionConnectHandledRef = useRef(false);
   const authEnabled = Boolean(supabase);
 
   const loadItems = useCallback(async () => {
@@ -1628,13 +1550,9 @@ function Dashboard({ onBack, onOpenHowTo }) {
   }, []);
 
   const loadControls = useCallback(async () => {
-    const [credentialBody, extensionBody] = await Promise.all([
-      getProviderCredentials(),
-      getExtensionTokens(),
-    ]);
+    const credentialBody = await getProviderCredentials();
     setCredentials(credentialBody.credentials || []);
     setCredentialOptions(credentialBody.options || null);
-    setExtensionTokens(extensionBody.tokens || []);
   }, []);
 
   const applyProfileState = (nextProfile, required) => {
@@ -1861,17 +1779,6 @@ function Dashboard({ onBack, onOpenHowTo }) {
     return () => window.clearTimeout(timer);
   }, [authEnabled, loading, profileRequired, session]);
 
-  useEffect(() => {
-    if (extensionConnectHandledRef.current || loading || (authEnabled && (!session || profileRequired))) return;
-    if (!extensionConnectFromHash()) return;
-    extensionConnectHandledRef.current = true;
-    const timer = window.setTimeout(() => {
-      setTab('settings');
-      setNotice('Create a Lens token here, then paste it into the extension.');
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [authEnabled, loading, profileRequired, session]);
-
   const handleImport = async () => {
     if (!files.length) {
       setError('Upload saved_posts.html and optionally saved_collections.html.');
@@ -1968,38 +1875,6 @@ function Dashboard({ onBack, onOpenHowTo }) {
     } catch (err) {
       setError(saved ? `Key saved, but test failed: ${err.message}` : err.message);
       await loadControls().catch(() => {});
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleCreateExtensionToken = async () => {
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      const body = await createExtensionToken('IScraper Lens extension');
-      setNewExtensionSecret(body.secret || '');
-      await loadControls();
-      setNotice('Lens token created. Paste it into the browser extension once.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleRevokeExtensionToken = async (id) => {
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      await revokeExtensionToken(id);
-      if (newExtensionSecret) setNewExtensionSecret('');
-      await loadControls();
-      setNotice('Lens token revoked.');
-    } catch (err) {
-      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -2194,8 +2069,6 @@ function Dashboard({ onBack, onOpenHowTo }) {
                 {tab === 'settings' && (
                   <SettingsTab
                     credentials={credentials}
-                    extensionTokens={extensionTokens}
-                    newExtensionSecret={newExtensionSecret}
                     credentialForm={credentialForm}
                     setCredentialForm={setCredentialForm}
                     providerChoices={providerChoices}
@@ -2212,9 +2085,6 @@ function Dashboard({ onBack, onOpenHowTo }) {
                       await testProviderCredential(id).then(() => setNotice('Provider key works.')).catch((err) => setError(err.message));
                       setBusy(false);
                     }}
-                    onCreateExtensionToken={handleCreateExtensionToken}
-                    onRevokeExtensionToken={handleRevokeExtensionToken}
-                    onClearExtensionSecret={() => setNewExtensionSecret('')}
                     busy={busy}
                     authEnabled={authEnabled}
                     onOpenHowTo={onOpenHowTo}
@@ -2793,8 +2663,6 @@ function ReviewCard({ item, busy, onSelect, onUpdate, onApprove }) {
 
 function SettingsTab({
   credentials,
-  extensionTokens,
-  newExtensionSecret,
   credentialForm,
   setCredentialForm,
   providerChoices,
@@ -2803,9 +2671,6 @@ function SettingsTab({
   onSave,
   onDelete,
   onTest,
-  onCreateExtensionToken,
-  onRevokeExtensionToken,
-  onClearExtensionSecret,
   busy,
   authEnabled,
   onOpenHowTo,
@@ -2848,74 +2713,15 @@ function SettingsTab({
       <section className="space-y-4 rounded-2xl border border-white/10 p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Browser Lens</div>
-            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Connect the extension</h2>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Browser extension</div>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Coming soon</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              This creates a limited token for Lens search only. It is not your Google login token, and you can revoke it anytime.
+              Extension tokens and Lens search from the browser will be available after the extension is published in the browser stores.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onCreateExtensionToken}
-            disabled={busy}
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-            Create Lens token
-          </button>
-        </div>
-
-        {newExtensionSecret && (
-          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
-            <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Copy once</div>
-            <p className="mb-3 text-xs leading-5 text-muted-foreground">
-              Paste this into the extension. For safety, it will not be shown again after you clear it.
-            </p>
-            <div className="flex gap-2">
-              <input
-                readOnly
-                value={newExtensionSecret}
-                className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black px-3 py-2 font-mono text-xs outline-none"
-              />
-              <button
-                type="button"
-                onClick={() => navigator.clipboard.writeText(newExtensionSecret)}
-                className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
-              >
-                Copy
-              </button>
-              <button
-                type="button"
-                onClick={onClearExtensionSecret}
-                className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold"
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="space-y-2">
-          {extensionTokens.map((token) => (
-            <div key={token.id} className="flex items-center gap-3 rounded-xl border border-white/10 bg-black p-3">
-              <div className="min-w-0 flex-1">
-                <div className="font-semibold">{token.name}</div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {token.revokedAt ? 'Revoked' : 'Active'} - {token.scopes.join(', ')} - last used {token.lastUsedAt ? new Date(token.lastUsedAt).toLocaleDateString() : 'never'}
-                </div>
-              </div>
-              {!token.revokedAt && (
-                <button
-                  type="button"
-                  onClick={() => onRevokeExtensionToken(token.id)}
-                  className="rounded-lg border border-white/10 p-2 text-destructive"
-                  aria-label="Revoke Lens token"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          ))}
+          <span className="inline-flex shrink-0 items-center justify-center rounded-full bg-white/10 px-5 py-3 text-sm font-semibold text-muted-foreground">
+            Coming soon
+          </span>
         </div>
       </section>
 

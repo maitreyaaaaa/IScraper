@@ -2,6 +2,8 @@
 
 Browser extension for saving the current tab and running IScraper Lens search.
 
+Status: coming soon for normal users. This folder is for development and browser-store submission work only.
+
 ## Browser Support
 
 This package targets Manifest V3 Chromium browsers:
@@ -16,8 +18,12 @@ Firefox and Safari should be treated as future packages. The extension logic is 
 
 ## Install Locally
 
+Normal users should install from the Chrome Web Store or Edge Add-ons once the listing is approved. Until then, the extension is coming soon.
+
+For developer testing only:
+
 1. Open Chrome or Edge.
-2. Go to `chrome://extensions`.
+2. Go to `chrome://extensions` or `edge://extensions`.
 3. Turn on Developer mode.
 4. Click Load unpacked.
 5. Select this folder: `extensions/save-to-iscraper`.
