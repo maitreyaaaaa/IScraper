@@ -32,6 +32,7 @@ function getConfig() {
     importRateLimitMax: Number(process.env.IMPORT_RATE_LIMIT_MAX || 10),
     searchRateLimitMax: Number(process.env.SEARCH_RATE_LIMIT_MAX || 180),
     checkoutRateLimitMax: Number(process.env.CHECKOUT_RATE_LIMIT_MAX || 10),
+    adminRateLimitMax: Number(process.env.ADMIN_RATE_LIMIT_MAX || 30),
     stripeSecretKey: process.env.STRIPE_SECRET_KEY,
     stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
     enableCreditCheckout: process.env.ENABLE_CREDIT_CHECKOUT === 'true',

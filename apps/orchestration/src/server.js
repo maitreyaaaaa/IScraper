@@ -239,6 +239,7 @@ function createApp({ store, config = {} }) {
   const importRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.importRateLimitMax || 10, name: 'import', namespace: rateLimitNamespace });
   const searchRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.searchRateLimitMax || 180, name: 'search', namespace: rateLimitNamespace });
   const checkoutRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.checkoutRateLimitMax || 10, name: 'checkout', namespace: rateLimitNamespace });
+  const adminRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.adminRateLimitMax || 30, name: 'admin', namespace: rateLimitNamespace });
   const allowedOrigins = new Set((config.corsOrigins || []).map((origin) => String(origin).replace(/\/$/, '')));
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
@@ -305,12 +306,12 @@ function createApp({ store, config = {} }) {
     return res.status(201).json({ feedback });
   }));
 
-  app.get('/api/admin/credits/:userId', asyncRoute(async (req, res) => {
+  app.get('/api/admin/credits/:userId', adminRateLimit, asyncRoute(async (req, res) => {
     assertAdmin(req, config);
     res.json({ credits: await store.getCredits(req.params.userId) });
   }));
 
-  app.post('/api/admin/credits/adjust', asyncRoute(async (req, res) => {
+  app.post('/api/admin/credits/adjust', adminRateLimit, asyncRoute(async (req, res) => {
     assertAdmin(req, config);
     const userId = String(req.body?.userId || '').trim();
     const amount = Number(req.body?.amount);

@@ -136,3 +136,87 @@ test('processing one saved item uses the user key without consuming app credits'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('processing one saved item uses app OpenRouter key and consumes free allowance', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const userId = 'u1';
+  const originalFetch = global.fetch;
+
+  global.fetch = async (url) => {
+    if (String(url).includes('/embeddings')) {
+      return {
+        ok: true,
+        json: async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                title: 'App indexed idea',
+                summary: 'A useful save indexed by the app key.',
+                transcript: '',
+                ocrText: '',
+                visualDescription: '',
+                brandsMentioned: [],
+                toolsMentioned: [],
+                reposMentioned: [],
+                peopleMentioned: [],
+                topics: ['saved'],
+                tags: ['saved'],
+                whyUseful: 'It is worth finding again.',
+              }),
+            },
+          },
+        ],
+      }),
+    };
+  };
+
+  try {
+    store.ensureUser(userId, 'u1@example.com');
+    const entry = store.createImport({ userId, source: 'instagram-export', fileNames: ['saved_posts.html'] });
+    const items = store.upsertImportData({
+      userId,
+      importId: entry.id,
+      parsed: {
+        collections: [],
+        items: [
+          {
+            id: 'item-2',
+            url: 'https://www.instagram.com/p/item-2/',
+            contentType: 'unknown',
+            caption: 'Saved garden idea',
+            hashtags: [],
+            collections: [],
+          },
+        ],
+      },
+    });
+    store.createJobs({ userId, importId: entry.id, items });
+
+    await processImportJobs({
+      store,
+      userId,
+      importId: entry.id,
+      videoDir: path.join(dir, 'videos'),
+      shouldDownload: false,
+      openRouterApiKey: 'app-openrouter-key',
+      credentialEncryptionKey: 'dev-encryption-key',
+    });
+
+    const credits = store.getCredits(userId);
+    const item = store.getItem(userId, 'item-2');
+
+    assert.equal(item.status, 'done');
+    assert.equal(credits.freeItemsUsed, 1);
+    assert.equal(credits.freeItemsRemaining, 199);
+  } finally {
+    global.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

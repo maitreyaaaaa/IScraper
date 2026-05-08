@@ -87,6 +87,10 @@ async function processImportJobs({
         userId,
         item,
         credentialEncryptionKey,
+        openRouterApiKey,
+        openRouterModel,
+        openRouterMediaModel,
+        openRouterEmbeddingModel,
       });
 
       let mediaPaths = [];
@@ -190,6 +194,10 @@ async function chooseAnalysisPlan({
   userId,
   item,
   credentialEncryptionKey,
+  openRouterApiKey = null,
+  openRouterModel = 'deepseek/deepseek-v4-pro',
+  openRouterMediaModel = DEFAULT_APP_MEDIA_MODEL,
+  openRouterEmbeddingModel = 'openai/text-embedding-3-small',
 }) {
   const needsMedia = requiresMediaAnalysis(item);
 
@@ -216,10 +224,53 @@ async function chooseAnalysisPlan({
     };
   }
 
+  const appTextCredential = openRouterApiKey
+    ? appOpenRouterCredential({ purpose: 'text', apiKey: openRouterApiKey, model: openRouterModel })
+    : null;
+  const appMediaCredential = openRouterApiKey
+    ? appOpenRouterCredential({ purpose: 'media', apiKey: openRouterApiKey, model: openRouterMediaModel })
+    : null;
+  const appEmbeddingCredential = openRouterApiKey
+    ? appOpenRouterCredential({ purpose: 'embedding', apiKey: openRouterApiKey, model: openRouterEmbeddingModel })
+    : null;
+
+  if ((!needsMedia || appMediaCredential) && appTextCredential && typeof store.getCredits === 'function') {
+    const credits = await store.getCredits(userId);
+    if (credits.freeItemsRemaining > 0) {
+      return {
+        source: 'free',
+        mediaCredential: needsMedia ? appMediaCredential : null,
+        textCredential: appTextCredential,
+        billingCredential: appTextCredential,
+        embeddingCredential: appEmbeddingCredential,
+      };
+    }
+    if (credits.paidCredits > 0) {
+      return {
+        source: 'paid',
+        mediaCredential: needsMedia ? appMediaCredential : null,
+        textCredential: appTextCredential,
+        billingCredential: appTextCredential,
+        embeddingCredential: appEmbeddingCredential,
+      };
+    }
+    throw pauseError('paused_needs_billing', 'Saved post did not process because the free indexing allowance is used up.');
+  }
+
   if (needsMedia) {
     throw pauseError('paused_missing_provider', 'Saved post did not process because no supported image/video provider key is connected.');
   }
   throw pauseError('paused_missing_provider', 'Saved post did not process because no text AI provider key is connected.');
+}
+
+function appOpenRouterCredential({ purpose, apiKey, model }) {
+  return {
+    id: `app-openrouter-${purpose}`,
+    provider: 'openrouter',
+    purpose,
+    model,
+    apiKey,
+  };
 }
 
 function pauseError(status, message) {

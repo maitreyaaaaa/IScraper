@@ -1060,7 +1060,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
             {[
               [Zap, 'Save from any platform', 'Paste a link from Pinterest, X, TikTok, YouTube, Instagram, or any site and keep it in the same searchable brain.'],
               [Brain, 'Know why you saved it', 'Each save can get a plain-English summary, so old posts become useful again instead of forgotten.'],
-              [CheckCircle2, 'First 200 saves included', 'Start with 200 imported saves covered by IScraper before paid credits matter.'],
+              [CheckCircle2, 'First 200 saves included', 'Start with 200 imported saves covered by IScraper before paid credits matter. No API key needed for that first allowance.'],
               [Tag, 'Organized without the cleanup', 'Group saves by themes like travel, food, fitness, shopping, home, business, or inspiration.'],
               [Lock, 'Private by default', 'Your saved export starts on your machine, so your personal taste and plans stay yours.'],
               [ShieldCheck, 'Built around official export', 'Use Instagram export files to build your library without handing over your Instagram login.'],
@@ -1663,7 +1663,12 @@ function HowToUsePage({ onBack, onOpenApp }) {
         {activeGuide === 'pinterest' && (
           <>
             <section className="howto-reveal mb-6">
-              <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Pinterest export</div>
+              <div className="flex items-center gap-3 font-mono text-xs uppercase tracking-[0.3em] text-primary">
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#e60023]">
+                  <img src="/platforms/pinterest.svg" alt="" className="h-5 w-5" />
+                </span>
+                Pinterest export
+              </div>
               <h2 className="mt-3 font-display text-3xl font-bold tracking-tight md:text-5xl">Request and download your Pinterest data.</h2>
             </section>
 
@@ -1709,7 +1714,9 @@ function HowToUsePage({ onBack, onOpenApp }) {
 
             <section className="howto-reveal mt-14 rounded-[2rem] border border-primary/30 bg-primary p-6 text-black md:p-10">
               <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-full bg-white">
-                <img src="/platforms/pinterest.svg" alt="" className="h-8 w-8" />
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[#e60023]">
+                  <img src="/platforms/pinterest.svg" alt="" className="h-5 w-5" />
+                </span>
               </div>
               <h2 className="font-display text-4xl font-bold tracking-tight">Upload your files here</h2>
               <p className="mt-3 max-w-2xl text-base leading-7">
@@ -1735,7 +1742,12 @@ function HowToUsePage({ onBack, onOpenApp }) {
         {activeGuide === 'instagram' && (
           <>
             <section className="howto-reveal mb-6">
-              <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Instagram export</div>
+              <div className="flex items-center gap-3 font-mono text-xs uppercase tracking-[0.3em] text-primary">
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white">
+                  <img src="/platforms/instagram.svg" alt="" className="h-6 w-6" />
+                </span>
+                Instagram export
+              </div>
               <h2 className="mt-3 font-display text-3xl font-bold tracking-tight md:text-5xl">Get your Instagram saved posts file.</h2>
             </section>
 
@@ -1763,6 +1775,9 @@ function HowToUsePage({ onBack, onOpenApp }) {
             </div>
 
             <section className="howto-reveal mt-14 rounded-[2rem] border border-primary/30 bg-primary p-6 text-black md:p-10">
+              <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-full bg-white">
+                <img src="/platforms/instagram.svg" alt="" className="h-9 w-9" />
+              </div>
               <h2 className="font-display text-4xl font-bold tracking-tight">After Instagram sends the file</h2>
               <p className="mt-3 max-w-2xl text-base leading-7">
                 Download the export from Instagram, come back to IScraper, open your library, and upload the saved HTML files.
@@ -1945,7 +1960,7 @@ const LEGAL_CONTENT = {
     sections: [
       ['Account protection', 'IScraper uses Supabase Auth and Google sign-in for account access. Users must complete profile setup before importing saved content. Keep your Google account secure because it controls access to your IScraper account.'],
       ['Data separation', 'Production data is stored in Supabase with user ownership checks and row-level security policies. The backend uses the service role only on server-side routes, never in browser code.'],
-      ['API keys', 'User AI provider keys are encrypted before storage. Until paid credits are live, IScraper is BYOK-only, so users control the AI providers used for indexing.'],
+      ['API keys', 'User AI provider keys are encrypted before storage. The first included indexing allowance can use IScraper provider keys; users can still add their own keys when they want provider control.'],
       ['Extension security - coming soon', 'The browser extension is planned to use a limited, revokable Lens token instead of your main login token. It will not be available to users until browser-store release.'],
       ['Abuse prevention', 'IScraper uses upload limits, rate limits, URL safety checks, CORS restrictions, and security headers to reduce common abuse and accidental exposure.'],
       ['Report a security issue', `Email ${SUPPORT_EMAIL} with the subject "IScraper security report". Include the affected page, steps to reproduce, and impact. Do not publicly disclose an issue until we have had a chance to fix it.`],
@@ -3458,7 +3473,7 @@ function SettingsTab({
           </span>
         </div>
         <p className="mt-2 text-sm text-muted-foreground">
-          Your first 200 imported saves are included without paid IScraper credits. You still need your own provider credits, usually $1-$3 on OpenRouter, because AI providers charge for usage.
+          Your first 200 imported saves are included without paid IScraper credits. You can add your own provider key later if you want provider control or higher personal limits.
         </p>
       </div>
 
