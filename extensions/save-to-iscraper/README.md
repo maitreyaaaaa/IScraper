@@ -14,4 +14,4 @@ Phase 1 browser extension for saving the current tab into IScraper.
 
 The extension does not store Supabase auth tokens.
 
-When the user clicks Save to brain, it opens IScraper with the current tab URL, title, and optional note. The logged-in web app then saves the link using the normal user session.
+When the user clicks Save to brain, it opens IScraper with the current tab URL, title, platform, Open Graph description, thumbnail, author, and optional note. The logged-in web app then saves the link using the normal user session.

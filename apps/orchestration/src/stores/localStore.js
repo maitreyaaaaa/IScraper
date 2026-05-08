@@ -48,6 +48,13 @@ function seedFromLegacyIndex(dataPath) {
       userId: DEFAULT_USER_ID,
       importId: null,
       contentType: item.url?.includes('/reel/') ? 'reel' : 'post',
+      platform: 'Instagram',
+      platformKey: 'instagram',
+      sourceId: item.id || '',
+      sourceTitle: item.title || '',
+      sourceAuthor: item.ownerUsername || item.ownerName || '',
+      sourceDescription: item.caption || item.description || '',
+      thumbnailUrl: '',
       status: item.error ? 'failed' : 'done',
       collections: item.collections || [],
       analysis: item.title

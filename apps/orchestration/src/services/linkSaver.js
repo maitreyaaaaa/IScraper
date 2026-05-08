@@ -16,16 +16,16 @@ const TRACKING_PARAMS = new Set([
 ]);
 
 const PLATFORM_HOSTS = [
-  ['pinterest.', 'Pinterest'],
-  ['pin.it', 'Pinterest'],
-  ['twitter.com', 'X / Twitter'],
-  ['x.com', 'X / Twitter'],
-  ['tiktok.com', 'TikTok'],
-  ['youtube.com', 'YouTube'],
-  ['youtu.be', 'YouTube'],
-  ['instagram.com', 'Instagram'],
-  ['linkedin.com', 'LinkedIn'],
-  ['reddit.com', 'Reddit'],
+  ['pinterest.', { key: 'pinterest', label: 'Pinterest' }],
+  ['pin.it', { key: 'pinterest', label: 'Pinterest' }],
+  ['twitter.com', { key: 'x-twitter', label: 'X / Twitter' }],
+  ['x.com', { key: 'x-twitter', label: 'X / Twitter' }],
+  ['tiktok.com', { key: 'tiktok', label: 'TikTok' }],
+  ['youtube.com', { key: 'youtube', label: 'YouTube' }],
+  ['youtu.be', { key: 'youtube', label: 'YouTube' }],
+  ['instagram.com', { key: 'instagram', label: 'Instagram' }],
+  ['linkedin.com', { key: 'linkedin', label: 'LinkedIn' }],
+  ['reddit.com', { key: 'reddit', label: 'Reddit' }],
 ];
 
 function normalizeSavedUrl(value) {
@@ -53,7 +53,10 @@ function buildManualSavedItem(input = {}) {
   const title = cleanText(input.title, 160) || parsed.hostname;
   const description = cleanText(input.description, 500);
   const note = cleanText(input.note, 500);
-  const platform = cleanText(input.platform, 60) || detectPlatform(parsed.hostname);
+  const detected = detectPlatform(url);
+  const platform = cleanText(input.platform, 60) || detected.label;
+  const sourceAuthor = cleanText(input.author, 120);
+  const thumbnailUrl = safeExternalUrl(input.thumbnailUrl || input.thumbnail, 1000);
   const savedAt = new Date().toISOString();
   const caption = [
     title,
@@ -74,6 +77,13 @@ function buildManualSavedItem(input = {}) {
     savedAt,
     collections: ['Web saves'],
     sourceName: 'manual-link',
+    platform,
+    platformKey: detected.key,
+    sourceId: detected.sourceId,
+    sourceTitle: title,
+    sourceAuthor,
+    sourceDescription: description,
+    thumbnailUrl,
   };
 }
 
@@ -84,6 +94,8 @@ function parseManualLinkPayload(body = {}) {
     description: body.description,
     note: body.note,
     platform: body.platform,
+    author: body.author,
+    thumbnailUrl: body.thumbnailUrl,
   });
   return {
     collections: [{ name: 'Web saves', sourceName: 'manual-link', itemUrls: [item.url] }],
@@ -91,10 +103,48 @@ function parseManualLinkPayload(body = {}) {
   };
 }
 
-function detectPlatform(hostname) {
-  const lower = String(hostname || '').toLowerCase();
-  const match = PLATFORM_HOSTS.find(([needle]) => lower.includes(needle));
-  return match ? match[1] : lower;
+function detectPlatform(value) {
+  const parsed = new URL(String(value || 'https://unknown.invalid'));
+  const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const match = PLATFORM_HOSTS.find(([needle]) => hostname.includes(needle));
+  const platform = match ? match[1] : { key: 'web', label: hostname };
+  return {
+    ...platform,
+    sourceId: sourceIdFor(platform.key, parsed),
+  };
+}
+
+function sourceIdFor(platformKey, url) {
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (platformKey === 'pinterest') {
+    const pinIndex = parts.findIndex((part) => part === 'pin');
+    return pinIndex >= 0 ? parts[pinIndex + 1] || '' : parts.at(-1) || '';
+  }
+  if (platformKey === 'x-twitter') {
+    const statusIndex = parts.findIndex((part) => part === 'status' || part === 'statuses');
+    return statusIndex >= 0 ? parts[statusIndex + 1] || '' : parts.at(-1) || '';
+  }
+  if (platformKey === 'youtube') {
+    return url.searchParams.get('v') || parts[0] || '';
+  }
+  if (platformKey === 'tiktok') {
+    const videoIndex = parts.findIndex((part) => part === 'video');
+    return videoIndex >= 0 ? parts[videoIndex + 1] || '' : parts.at(-1) || '';
+  }
+  if (platformKey === 'instagram') {
+    return parts[1] || parts.at(-1) || '';
+  }
+  return parts.at(-1) || url.hostname;
+}
+
+function safeExternalUrl(value, maxLength) {
+  const raw = cleanText(value, maxLength);
+  if (!raw) return '';
+  try {
+    return normalizeSavedUrl(raw);
+  } catch (_error) {
+    return '';
+  }
 }
 
 function cleanText(value, maxLength) {
@@ -135,4 +185,5 @@ module.exports = {
   buildManualSavedItem,
   normalizeSavedUrl,
   parseManualLinkPayload,
+  detectPlatform,
 };

@@ -97,6 +97,13 @@ function mapItem(item) {
     topics: analysis.topics || [],
     tags: unique([...(analysis.tags || []), ...(item.hashtags || [])]),
     collection: item.collections?.[0] || 'Unsorted',
+    platform: item.platform || 'Instagram',
+    platformKey: item.platformKey || 'instagram',
+    sourceId: item.sourceId || item.id,
+    sourceTitle: item.sourceTitle || '',
+    sourceAuthor: item.sourceAuthor || '',
+    sourceDescription: item.sourceDescription || '',
+    thumbnailUrl: item.thumbnailUrl || '',
     saved: item.savedAt || '',
     status: normalizeStatus(item.status || 'queued'),
     sourceStatus: item.status || 'queued',
@@ -1014,6 +1021,7 @@ function Dashboard({ onBack }) {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [collectionFilter, setCollectionFilter] = useState('all');
+  const [platformFilter, setPlatformFilter] = useState('all');
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
@@ -1116,14 +1124,16 @@ function Dashboard({ onBack }) {
   }, [tab]);
 
   const collections = useMemo(() => ['all', ...unique(items.map((item) => item.collection))], [items]);
+  const platforms = useMemo(() => ['all', ...unique(items.map((item) => item.platform))], [items]);
 
   const filtered = useMemo(() => {
     return items.filter((item) => {
       if (statusFilter !== 'all' && item.status !== statusFilter) return false;
       if (collectionFilter !== 'all' && item.collection !== collectionFilter) return false;
+      if (platformFilter !== 'all' && item.platform !== platformFilter) return false;
       return true;
     });
-  }, [collectionFilter, items, statusFilter]);
+  }, [collectionFilter, items, platformFilter, statusFilter]);
 
   const stats = useMemo(() => ({
     total: items.length,
@@ -1463,6 +1473,9 @@ function Dashboard({ onBack }) {
                     collectionFilter={collectionFilter}
                     setCollectionFilter={setCollectionFilter}
                     collections={collections}
+                    platformFilter={platformFilter}
+                    setPlatformFilter={setPlatformFilter}
+                    platforms={platforms}
                     onSelect={openDetail}
                     onRestart={handleRestart}
                   />
@@ -1567,12 +1580,15 @@ function LibraryTab({
   collectionFilter,
   setCollectionFilter,
   collections,
+  platformFilter,
+  setPlatformFilter,
+  platforms,
   onSelect,
   onRestart,
 }) {
   const boardRef = useRef(null);
   const [visibleCount, setVisibleCount] = useState(80);
-  const activeFilters = (statusFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0);
+  const activeFilters = (statusFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
   const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
   const searchableCount = items.filter((item) => item.status === 'done').length;
   const indexingNeeded = totalCount > 0 && searchableCount < totalCount;
@@ -1599,14 +1615,14 @@ function LibraryTab({
       { autoAlpha: 1, y: 0, scale: 1, duration: 0.5, ease: 'power3.out', stagger: 0.035, clearProps: 'transform,opacity,visibility' },
     );
     return undefined;
-  }, [collectionFilter, items, statusFilter, visibleCount]);
+  }, [collectionFilter, items, platformFilter, statusFilter, visibleCount]);
 
   return (
     <div className="mx-auto max-w-[1480px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
       <div className="mb-7 flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
         <div className="max-w-2xl">
           <p className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Saved board</p>
-          <h1 className="mt-3 font-display text-4xl font-bold tracking-tight md:text-6xl">Your Instagram saves, laid out like ideas.</h1>
+          <h1 className="mt-3 font-display text-4xl font-bold tracking-tight md:text-6xl">Your saves, laid out like ideas.</h1>
           <p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground">
             Browse visually first, then open any save for the summary, tags, transcript, source link, and notes.
           </p>
@@ -1695,6 +1711,16 @@ function LibraryTab({
               </select>
             </label>
             <select
+              value={platformFilter}
+              onChange={(event) => {
+                setVisibleCount(80);
+                setPlatformFilter(event.target.value);
+              }}
+              className="rounded-full border border-white/10 bg-black px-3 py-2 outline-none"
+            >
+              {platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
+            </select>
+            <select
               value={collectionFilter}
               onChange={(event) => {
                 setVisibleCount(80);
@@ -1751,9 +1777,10 @@ function PinCard({ item, index, onClick }) {
   const meta = STATUS_META[item.sourceStatus] || STATUS_META[item.status] || STATUS_META.queued;
   const Icon = meta.icon;
   const highlight = [item.collection, item.tags[0], item.topics[0], item.brands[0], item.tools[0]].filter(Boolean).slice(0, 3);
-  const preview = item.visual || item.summary || item.caption || 'Open this save to see what was captured.';
+  const preview = item.sourceDescription || item.visual || item.summary || item.caption || 'Open this save to see what was captured.';
   const backdrop = PIN_BACKDROPS[index % PIN_BACKDROPS.length];
   const height = PIN_HEIGHTS[index % PIN_HEIGHTS.length];
+  const cardTitle = item.sourceTitle || item.title;
 
   return (
     <button
@@ -1762,10 +1789,11 @@ function PinCard({ item, index, onClick }) {
       className="pin-card group mb-5 block w-full break-inside-avoid overflow-hidden rounded-[1.75rem] border border-white/10 bg-white/[0.035] text-left shadow-2xl shadow-black/30 transition duration-300 hover:-translate-y-1 hover:border-primary/60 hover:bg-white/[0.055]"
     >
       <div className={`relative flex ${height} flex-col justify-between overflow-hidden p-5 text-black`} style={{ background: backdrop }}>
+        {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-50 mix-blend-multiply" loading="lazy" /> : null}
         <div className="absolute inset-0 opacity-25 grid-bg" />
         <div className="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-white/45 blur-2xl" />
         <div className="relative flex items-center justify-between gap-3">
-          <span className="rounded-full bg-black/75 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-white">{item.collection}</span>
+          <span className="rounded-full bg-black/75 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-white">{item.platform}</span>
           <span className="rounded-full bg-white/70 p-2 text-black">
             <Eye className="h-4 w-4" />
           </span>
@@ -1778,12 +1806,12 @@ function PinCard({ item, index, onClick }) {
               </span>
             ))}
           </div>
-          <h3 className="line-clamp-4 font-display text-3xl font-bold leading-[0.95] tracking-tight md:text-4xl">{item.title}</h3>
+          <h3 className="line-clamp-4 font-display text-3xl font-bold leading-[0.95] tracking-tight md:text-4xl">{cardTitle}</h3>
         </div>
       </div>
       <div className="p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <span className="font-mono text-xs text-primary">{item.user}</span>
+          <span className="truncate font-mono text-xs text-primary">{item.sourceAuthor || item.user}</span>
           <span className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider ${meta.color}`}>
             <Icon className={`h-3 w-3 ${['downloading', 'analyzing'].includes(item.status) ? 'animate-spin' : ''}`} />
             {item.sourceStatus}
@@ -1825,7 +1853,7 @@ function UploadTab({ files, setFiles, linkForm, setLinkForm, onSaveLink, onImpor
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save from any platform</div>
           <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Add a Pinterest pin, tweet, video, post, or article</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Phase 1 stores the link and indexes the page title, description, note, and source. Browser extension saves land here too.
+            Phase 2 detects the platform, source ID, title, author, and thumbnail when the extension can capture them.
           </p>
         </div>
         <input
@@ -2467,14 +2495,20 @@ function DetailDrawer({ item, onClose }) {
         </div>
         <div className="space-y-8 p-8">
           <div>
-            <div className="mb-2 font-mono text-xs text-primary">{item.user}</div>
-            <h2 className="mb-3 font-display text-3xl font-bold tracking-tight">{item.title}</h2>
+            <div className="mb-2 flex flex-wrap gap-2 font-mono text-xs text-primary">
+              <span>{item.platform}</span>
+              {item.sourceAuthor ? <span className="text-muted-foreground">/ {item.sourceAuthor}</span> : null}
+            </div>
+            {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="mb-5 max-h-64 w-full rounded-2xl object-cover" /> : null}
+            <h2 className="mb-3 font-display text-3xl font-bold tracking-tight">{item.sourceTitle || item.title}</h2>
             <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-primary">
-              Open original post <ExternalLink className="h-3 w-3" />
+              Open original save <ExternalLink className="h-3 w-3" />
             </a>
           </div>
 
           {item.error && <Section icon={AlertCircle} label="Error">{item.error}</Section>}
+          <Section icon={ExternalLink} label="Source">{[item.platform, item.sourceId].filter(Boolean).join(' / ')}</Section>
+          <Section icon={FileText} label="Source description">{item.sourceDescription}</Section>
           <Section icon={Sparkles} label="Summary">{item.summary}</Section>
         <Section icon={Brain} label="Why you saved it">{item.why}</Section>
           <Section icon={FileText} label="Caption" mono>{item.caption}</Section>

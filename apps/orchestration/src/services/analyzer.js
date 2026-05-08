@@ -265,6 +265,7 @@ function searchableFields(item) {
     { weight: 7, text: analysis.transcript },
     { weight: 5, text: analysis.summary },
     { weight: 5, text: item.caption },
+    { weight: 5, text: [item.platform, item.platformKey, item.sourceTitle, item.sourceAuthor, item.sourceDescription].filter(Boolean).join(' ') },
     { weight: 4, text: analysis.visualDescription },
     { weight: 4, text: [...(analysis.topics || []), ...(analysis.tags || [])].join(' ') },
     { weight: 4, text: [...(analysis.brandsMentioned || []), ...(analysis.toolsMentioned || [])].join(' ') },

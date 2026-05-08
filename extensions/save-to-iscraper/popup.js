@@ -9,6 +9,7 @@ const saveUrlEl = document.getElementById('save-url');
 const statusEl = document.getElementById('status');
 
 let activeTab = null;
+let pageMeta = {};
 
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -20,10 +21,40 @@ async function getAppUrl() {
   return String(stored.appUrl || DEFAULT_APP_URL).replace(/\/$/, '');
 }
 
+function detectPlatform(url) {
+  const host = new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  if (host.includes('pinterest.') || host === 'pin.it') return 'Pinterest';
+  if (host === 'x.com' || host.includes('twitter.com')) return 'X / Twitter';
+  if (host.includes('tiktok.com')) return 'TikTok';
+  if (host.includes('youtube.com') || host === 'youtu.be') return 'YouTube';
+  if (host.includes('instagram.com')) return 'Instagram';
+  return host;
+}
+
+async function readPageMeta(tabId) {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const meta = (selector) => document.querySelector(selector)?.getAttribute('content') || '';
+      return {
+        title: meta('meta[property="og:title"]') || meta('meta[name="twitter:title"]') || document.title || '',
+        description: meta('meta[property="og:description"]') || meta('meta[name="description"]') || meta('meta[name="twitter:description"]') || '',
+        thumbnailUrl: meta('meta[property="og:image"]') || meta('meta[name="twitter:image"]') || '',
+        author: meta('meta[name="author"]') || meta('meta[property="article:author"]') || '',
+      };
+    },
+  });
+  return result?.result || {};
+}
+
 function saveUrlFor(tab, appUrl) {
   const params = new URLSearchParams({
     url: tab.url || '',
-    title: tab.title || '',
+    title: pageMeta.title || tab.title || '',
+    description: pageMeta.description || '',
+    thumbnailUrl: pageMeta.thumbnailUrl || '',
+    author: pageMeta.author || '',
+    platform: detectPlatform(tab.url || ''),
     note: noteEl.value || '',
     autoSave: '1',
   });
@@ -50,7 +81,11 @@ async function init() {
   activeTab = await getActiveTab();
   const appUrl = await getAppUrl();
   appUrlEl.value = appUrl;
-  titleEl.textContent = activeTab?.title || 'No active tab found.';
+  if (activeTab?.id && /^https?:\/\//i.test(activeTab.url || '')) {
+    pageMeta = await readPageMeta(activeTab.id).catch(() => ({}));
+  }
+  const platform = activeTab?.url && /^https?:\/\//i.test(activeTab.url) ? detectPlatform(activeTab.url) : '';
+  titleEl.textContent = activeTab?.title ? `${platform ? `${platform}: ` : ''}${pageMeta.title || activeTab.title}` : 'No active tab found.';
 }
 
 saveEl.addEventListener('click', openSaveUrl);

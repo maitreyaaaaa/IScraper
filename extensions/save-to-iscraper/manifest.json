@@ -2,10 +2,10 @@
   "manifest_version": 3,
   "name": "Save to IScraper",
   "description": "Save the current tab into your IScraper brain.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "action": {
     "default_title": "Save to IScraper",
     "default_popup": "popup.html"
   },
-  "permissions": ["activeTab", "storage", "tabs"]
+  "permissions": ["activeTab", "scripting", "storage", "tabs"]
 }

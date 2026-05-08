@@ -133,6 +133,13 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         owner_username: item.ownerUsername,
         saved_at_text: item.savedAt,
         collections: item.collections,
+        platform: item.platform || 'Instagram',
+        platform_key: item.platformKey || 'instagram',
+        source_id: item.sourceId || item.id,
+        source_title: item.sourceTitle || '',
+        source_author: item.sourceAuthor || item.ownerUsername || item.ownerName || '',
+        source_description: item.sourceDescription || '',
+        thumbnail_url: item.thumbnailUrl || '',
         status: 'queued',
       }));
       if (!items.length) return [];
@@ -508,6 +515,13 @@ function mapItem(row) {
     ownerUsername: row.owner_username,
     savedAt: row.saved_at_text,
     collections: row.collections || [],
+    platform: row.platform || 'Instagram',
+    platformKey: row.platform_key || 'instagram',
+    sourceId: row.source_id || row.id,
+    sourceTitle: row.source_title || '',
+    sourceAuthor: row.source_author || '',
+    sourceDescription: row.source_description || '',
+    thumbnailUrl: row.thumbnail_url || '',
     status: row.status,
     error: row.error,
   };

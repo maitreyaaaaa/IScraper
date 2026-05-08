@@ -90,6 +90,13 @@ function parsePostsHtml(html, sourceName, collectionName = null) {
       savedAt,
       collections: collectionName ? [collectionName] : [],
       sourceName,
+      platform: 'Instagram',
+      platformKey: 'instagram',
+      sourceId: id,
+      sourceTitle: caption ? caption.slice(0, 160) : '',
+      sourceAuthor: ownerUsername || ownerName,
+      sourceDescription: caption,
+      thumbnailUrl: '',
     });
   });
 

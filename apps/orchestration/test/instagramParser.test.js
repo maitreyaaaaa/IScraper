@@ -33,6 +33,10 @@ test('parseInstagramExport extracts every saved post with owner, hashtags, and d
   assert.match(result.items[0].caption, /Claude/);
   assert.deepEqual(result.items[0].hashtags, ['ai', 'github']);
   assert.equal(result.items[0].ownerUsername, 'tech.builder');
+  assert.equal(result.items[0].platform, 'Instagram');
+  assert.equal(result.items[0].platformKey, 'instagram');
+  assert.equal(result.items[0].sourceId, 'AAA111');
+  assert.equal(result.items[0].sourceAuthor, 'tech.builder');
   assert.equal(result.items[1].contentType, 'post');
 });
 
