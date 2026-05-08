@@ -21,8 +21,10 @@ import {
   GitBranch,
   Hash,
   KeyRound,
+  LifeBuoy,
   Loader2,
   Lock,
+  Mail,
   Pause,
   Search,
   Settings,
@@ -80,6 +82,14 @@ const STATUS_META = {
 const STATUSES = ['all', 'needs_review', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 const EXTENSION_INSTALL_URL = import.meta.env.VITE_EXTENSION_INSTALL_URL || '';
+const HERO_PLATFORMS = [
+  { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
+  { name: 'X', src: '/platforms/x.svg', bg: '#fff' },
+  { name: 'Facebook', src: '/platforms/facebook.svg', bg: '#1877f2' },
+  { name: 'Pinterest', src: '/platforms/pinterest.svg', bg: '#e60023' },
+  { name: 'TikTok', src: '/platforms/tiktok.svg', bg: '#000' },
+  { name: 'YouTube', src: '/platforms/youtube.svg', bg: '#ff0033' },
+];
 
 function normalizeStatus(status = 'queued') {
   return String(status).startsWith('paused') ? 'paused' : status;
@@ -146,12 +156,63 @@ function openExternalUrl(url) {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+function RotatingPlatformLogo() {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const logoRef = useRef(null);
+
+  useEffect(() => {
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion) return undefined;
+
+    const timer = window.setInterval(() => {
+      const target = logoRef.current;
+      if (!target) {
+        setActiveIndex((current) => (current + 1) % HERO_PLATFORMS.length);
+        return;
+      }
+
+      gsap.timeline()
+        .to(target, { yPercent: -115, autoAlpha: 0, duration: 0.35, ease: 'power2.in' })
+        .add(() => setActiveIndex((current) => (current + 1) % HERO_PLATFORMS.length))
+        .set(target, { yPercent: 115 })
+        .to(target, { yPercent: 0, autoAlpha: 1, duration: 0.45, ease: 'power3.out' });
+    }, 1600);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const platform = HERO_PLATFORMS[activeIndex];
+
+  return (
+    <span className="hero-platform-ticker ml-[0.12em] inline-grid translate-y-[0.08em] overflow-hidden rounded-full align-baseline">
+      <span
+        ref={logoRef}
+        className="inline-flex h-[0.86em] w-[0.86em] items-center justify-center rounded-full shadow-[0_0_36px_rgba(255,106,0,0.24)]"
+        style={{ background: platform.bg }}
+        aria-label={platform.name}
+      >
+        <img
+          src={platform.src}
+          alt=""
+          className="h-[0.56em] w-[0.56em] object-contain"
+          style={{ transform: `scale(${platform.scale || 1})` }}
+          draggable="false"
+        />
+      </span>
+    </span>
+  );
+}
+
 function getRouteFromHash() {
   const hash = window.location.hash || '';
   if (hash === '#app' || hash.startsWith('#app?')) return 'app';
   if (window.location.hash === '#how-to-use') return 'how-to-use';
   if (window.location.hash === '#terms') return 'terms';
   if (window.location.hash === '#privacy') return 'privacy';
+  if (window.location.hash === '#help') return 'help';
+  if (window.location.hash === '#security') return 'security';
+  if (window.location.hash === '#data-deletion') return 'data-deletion';
+  if (window.location.hash === '#cookies') return 'cookies';
   return 'landing';
 }
 
@@ -196,7 +257,7 @@ export default function App() {
 
   const navigate = useCallback((nextRoute) => {
     setRoute(nextRoute);
-    window.location.hash = ['app', 'how-to-use', 'terms', 'privacy'].includes(nextRoute) ? nextRoute : '';
+    window.location.hash = ['app', 'how-to-use', 'terms', 'privacy', 'help', 'security', 'data-deletion', 'cookies'].includes(nextRoute) ? nextRoute : '';
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
@@ -209,19 +270,35 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  if (route === 'app') return <Dashboard onBack={() => navigate('landing')} />;
+  if (route === 'app') return <Dashboard onBack={() => navigate('landing')} onOpenHowTo={() => navigate('how-to-use')} />;
   if (route === 'how-to-use') return <HowToUsePage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />;
   if (route === 'terms') return <LegalPage type="terms" onBack={() => navigate('landing')} />;
   if (route === 'privacy') return <LegalPage type="privacy" onBack={() => navigate('landing')} />;
-  return <Landing onOpenApp={() => navigate('app')} onOpenHowTo={() => navigate('how-to-use')} onOpenTerms={() => navigate('terms')} onOpenPrivacy={() => navigate('privacy')} />;
+  if (route === 'security') return <LegalPage type="security" onBack={() => navigate('landing')} />;
+  if (route === 'data-deletion') return <LegalPage type="dataDeletion" onBack={() => navigate('landing')} />;
+  if (route === 'cookies') return <LegalPage type="cookies" onBack={() => navigate('landing')} />;
+  if (route === 'help') return <HelpCenterPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} onOpenHowTo={() => navigate('how-to-use')} />;
+  return (
+    <Landing
+      onOpenApp={() => navigate('app')}
+      onOpenHowTo={() => navigate('how-to-use')}
+      onOpenTerms={() => navigate('terms')}
+      onOpenPrivacy={() => navigate('privacy')}
+      onOpenHelp={() => navigate('help')}
+      onOpenSecurity={() => navigate('security')}
+      onOpenDataDeletion={() => navigate('data-deletion')}
+      onOpenCookies={() => navigate('cookies')}
+    />
+  );
 }
 
-function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
+function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHelp, onOpenSecurity, onOpenDataDeletion, onOpenCookies }) {
   const root = useRef(null);
   const introRef = useRef(null);
   const cursorRef = useRef(null);
   const heroTitle = useRef(null);
   const [showExtensionPopup, setShowExtensionPopup] = useState(false);
+  const [launchOfferDismissed, setLaunchOfferDismissed] = useState(() => window.localStorage.getItem('iscraper.launchOffer.dismissed') === '1');
   const [feedback, setFeedback] = useState([]);
   const [feedbackForm, setFeedbackForm] = useState({ feature: 'Search', message: '' });
   const [feedbackBusy, setFeedbackBusy] = useState(false);
@@ -247,6 +324,11 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
   const dismissExtensionPopup = () => {
     window.localStorage.setItem('iscraper.extensionPromo.dismissed', '1');
     setShowExtensionPopup(false);
+  };
+
+  const dismissLaunchOffer = () => {
+    window.localStorage.setItem('iscraper.launchOffer.dismissed', '1');
+    setLaunchOfferDismissed(true);
   };
 
   const openExtensionSection = () => {
@@ -476,7 +558,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
     return () => ctx.revert();
   }, []);
 
-  const heroWords = ['Never', 'Lose', 'A', 'Saved', 'Post.'];
+  const heroWords = ['Never', 'Lose', 'a', 'Post', 'Saved', 'on'];
 
   return (
     <div ref={root} className="relative bg-black text-foreground overflow-x-hidden">
@@ -489,32 +571,55 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
         className="pointer-events-none fixed left-0 top-0 z-[100] hidden h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary mix-blend-difference md:block"
       />
 
-      <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/5 bg-black/60 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+      {!launchOfferDismissed && (
+        <div className="fixed left-0 right-0 top-0 z-[70] bg-orange-500 px-4 py-2 text-black shadow-[0_14px_40px_rgba(249,115,22,0.28)]">
+          <div className="mx-auto flex max-w-7xl items-center gap-3">
+            <span className="shrink-0 rounded-full bg-black px-3 py-1 font-mono text-[11px] font-black uppercase tracking-[0.16em] text-orange-500">
+              Launch offer
+            </span>
+            <p className="min-w-0 flex-1 truncate text-base font-bold text-black">
+              <span>Your first 200 imported saves are on us.</span>
+              <span className="hidden font-semibold text-black/80 sm:inline"> Build your first searchable library before paying IScraper credits.</span>
+            </p>
+            <button
+              type="button"
+              onClick={dismissLaunchOffer}
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-black/15 text-black transition hover:bg-black hover:text-orange-500"
+              aria-label="Dismiss launch offer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <header className={`pointer-events-none fixed left-0 right-0 z-50 px-4 transition-[top] ${launchOfferDismissed ? 'top-4' : 'top-[4.15rem]'}`}>
+        <div className="mx-auto grid max-w-7xl grid-cols-[auto_1fr_auto] items-center gap-4">
           <button
             type="button"
             onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-            className="nav-item flex items-center"
+            className="nav-item pointer-events-auto flex items-center"
           >
-            <BrandLogo className="h-12 w-44" />
+            <BrandLogo className="h-16 w-52 md:h-20 md:w-64" />
           </button>
-          <nav className="hidden items-center gap-8 text-sm text-muted-foreground md:flex">
-            <a href="#features" onClick={(event) => scrollToSection(event, '#features')} className="nav-item transition hover:text-foreground">Features</a>
-            <a href="#extension" onClick={(event) => scrollToSection(event, '#extension')} className="nav-item transition hover:text-foreground">Extension</a>
-            <a href="#why" onClick={(event) => scrollToSection(event, '#why')} className="nav-item transition hover:text-foreground">Why</a>
-            <a href="#feedback" onClick={(event) => scrollToSection(event, '#feedback')} className="nav-item transition hover:text-foreground">Feedback</a>
+          <nav className="pointer-events-auto hidden justify-self-center rounded-full border border-white/10 bg-black/75 p-1 text-sm font-semibold text-muted-foreground shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl md:flex">
+            <a href="#features" onClick={(event) => scrollToSection(event, '#features')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Features</a>
+            <a href="#extension" onClick={(event) => scrollToSection(event, '#extension')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Extension</a>
+            <a href="#why" onClick={(event) => scrollToSection(event, '#why')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Why</a>
+            <a href="#feedback" onClick={(event) => scrollToSection(event, '#feedback')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Feedback</a>
+            <button type="button" onClick={onOpenHowTo} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">How to Use</button>
           </nav>
           <button
             type="button"
             onClick={onOpenApp}
-            className="nav-item group inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:scale-[1.03]"
+            className="nav-item pointer-events-auto group inline-flex items-center gap-2 justify-self-end rounded-full bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow-[0_16px_55px_rgba(164,255,18,0.22)] transition hover:scale-[1.03]"
           >
             Open library <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
           </button>
         </div>
       </header>
 
-      <section className="landing-hero relative flex min-h-screen items-center overflow-x-hidden overflow-y-visible bg-black pt-24">
+      <section className={`landing-hero relative flex min-h-screen items-center overflow-hidden bg-black ${launchOfferDismissed ? 'pt-36' : 'pt-48'}`}>
         <div className="parallax-grid radial-fade grid-bg absolute inset-0 opacity-60" />
         <div
           className="parallax-glow-primary absolute -left-20 -top-32 h-[480px] w-[480px] rounded-full opacity-40 blur-[120px]"
@@ -528,11 +633,22 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
         <div className="hero-content relative mx-auto w-full max-w-[100rem] overflow-visible px-6 pr-16 md:px-10 md:pr-20 xl:px-14 xl:pr-24">
           <h1
             ref={heroTitle}
-            className="overflow-visible text-balance font-display text-[clamp(3rem,10.5vw,11rem)] font-bold leading-[0.85] tracking-tighter"
+            className="overflow-visible text-balance font-display text-[clamp(3rem,10.5vw,11rem)] font-bold leading-[0.95] tracking-tighter"
           >
             {heroWords.map((word, index) => (
               <span key={word} className="mr-[0.18em] inline-block overflow-visible">
-                <span className={`word inline-block ${index === 4 ? 'rounded-[5px] bg-orange-500 px-[0.08em] italic text-black' : ''}`}>{word}</span>
+                <span className={`word inline-block ${word === 'Lose' ? 'relative isolate' : ''} ${word === 'Post' ? 'rounded-[5px] bg-orange-500 px-[0.08em] italic text-black' : ''}`}>
+                  {word === 'Lose' && (
+                    <img
+                      src="/hero/lose-circle.png"
+                      alt=""
+                      className="pointer-events-none absolute left-1/2 top-1/2 z-0 h-[1.2em] max-w-none -translate-x-1/2 -translate-y-[45%] rotate-[-5deg] opacity-95"
+                      draggable="false"
+                    />
+                  )}
+                  <span className={word === 'Lose' ? 'relative z-10' : ''}>{word}</span>
+                </span>
+                {index === heroWords.length - 1 && <RotatingPlatformLogo />}
               </span>
             ))}
           </h1>
@@ -553,18 +669,6 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
                 <FileText className="h-4 w-4" /> How to use
               </button>
             </div>
-          </div>
-
-          <div className="hero-fade mt-8 inline-flex max-w-full flex-wrap items-center gap-3 rounded-2xl border border-primary/40 bg-primary/10 px-5 py-4">
-            <span className="rounded-full bg-primary px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-primary-foreground">
-              Launch offer
-            </span>
-            <span className="text-sm font-semibold text-foreground">
-              Your first 200 imported saves are on us.
-            </span>
-            <span className="text-sm text-muted-foreground">
-              Build your first searchable library before paying IScraper credits.
-            </span>
           </div>
 
           <div className="hero-fade mt-24 grid grid-cols-2 gap-6 text-sm md:grid-cols-4">
@@ -666,6 +770,13 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
                 className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5"
               >
                 <KeyRound className="h-4 w-4" /> Connect token
+              </button>
+              <button
+                type="button"
+                onClick={onOpenHowTo}
+                className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5"
+              >
+                <FileText className="h-4 w-4" /> How to use
               </button>
             </div>
             <p className="mt-5 text-sm leading-6 text-muted-foreground">
@@ -795,13 +906,20 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
             Your best saves are already there. <br />Make them <span className="text-glow italic text-primary">useful</span>.
           </h2>
           <p data-reveal className="mx-auto mt-8 max-w-xl text-lg text-muted-foreground">Paste one link or upload an export, then turn saved posts into a library you can come back to.</p>
-          <div data-reveal className="mt-12 flex items-center justify-center gap-4">
+          <div data-reveal className="mt-12 flex flex-wrap items-center justify-center gap-4">
             <button
               type="button"
               onClick={onOpenApp}
               className="glow-ring group inline-flex items-center gap-3 rounded-full bg-primary px-9 py-5 text-lg font-semibold text-primary-foreground transition hover:scale-[1.03]"
             >
               Build my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+            </button>
+            <button
+              type="button"
+              onClick={onOpenHowTo}
+              className="inline-flex items-center gap-3 rounded-full border border-white/15 px-7 py-5 text-base font-semibold text-foreground transition hover:bg-white/5"
+            >
+              <FileText className="h-5 w-5" /> How to Use
             </button>
           </div>
         </div>
@@ -811,8 +929,13 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
         <div className="mx-auto flex max-w-7xl flex-col gap-4 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between">
           <BrandLogo className="h-10 w-32" />
           <div className="flex flex-wrap gap-4">
+            <button type="button" onClick={onOpenHowTo} className="transition hover:text-primary">How to Use</button>
+            <button type="button" onClick={onOpenHelp} className="transition hover:text-primary">Help Center</button>
             <button type="button" onClick={onOpenTerms} className="transition hover:text-primary">Terms of Service</button>
             <button type="button" onClick={onOpenPrivacy} className="transition hover:text-primary">Privacy Policy</button>
+            <button type="button" onClick={onOpenSecurity} className="transition hover:text-primary">Security</button>
+            <button type="button" onClick={onOpenDataDeletion} className="transition hover:text-primary">Data Deletion</button>
+            <button type="button" onClick={onOpenCookies} className="transition hover:text-primary">Cookies</button>
           </div>
         </div>
       </footer>
@@ -820,6 +943,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
       <ExtensionInstallPopup
         visible={showExtensionPopup}
         onInstall={openExtensionSection}
+        onOpenHowTo={onOpenHowTo}
         onDismiss={dismissExtensionPopup}
         hasInstallUrl={Boolean(EXTENSION_INSTALL_URL)}
       />
@@ -827,7 +951,7 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
   );
 }
 
-function ExtensionInstallPopup({ visible, onInstall, onDismiss, hasInstallUrl }) {
+function ExtensionInstallPopup({ visible, onInstall, onOpenHowTo, onDismiss, hasInstallUrl }) {
   return (
     <aside
       aria-live="polite"
@@ -847,9 +971,12 @@ function ExtensionInstallPopup({ visible, onInstall, onDismiss, hasInstallUrl })
       <p className="mt-3 text-sm leading-6 text-muted-foreground">
         Save pages, Lens-search selected text, and search image crops from Chrome, Edge, Brave, Arc, and other Chromium browsers.
       </p>
-      <div className="mt-5 flex gap-3">
+      <div className="mt-5 flex flex-wrap gap-3">
         <button type="button" onClick={onInstall} className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground">
           {hasInstallUrl ? 'Install extension' : 'See extension'} <ArrowRight className="h-4 w-4" />
+        </button>
+        <button type="button" onClick={onOpenHowTo} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 px-4 py-3 text-sm text-foreground transition hover:bg-white/5">
+          <FileText className="h-4 w-4" /> How to use
         </button>
         <button type="button" onClick={onDismiss} className="rounded-full border border-white/10 px-4 py-3 text-sm text-muted-foreground transition hover:text-foreground">
           Later
@@ -902,8 +1029,17 @@ const HOW_TO_STEPS = [
   },
 ];
 
+const HOW_TO_GUIDES = [
+  { key: 'instagram', icon: Upload, title: 'Instagram export', copy: 'Get your saved posts file from Instagram and upload it into IScraper.', status: 'Guide ready' },
+  { key: 'api-keys', icon: KeyRound, title: 'API keys', copy: 'Add your own AI keys for summaries, media reading, and semantic search.', status: 'Coming soon' },
+  { key: 'pinterest', icon: ExternalLink, title: 'Pinterest export', copy: 'Bring saved pins into your library when Pinterest import support is ready.', status: 'Coming soon' },
+  { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Save pages, use Lens search, and open results from your browser.', status: 'Coming soon' },
+];
+
 function HowToUsePage({ onBack, onOpenApp }) {
   const pageRef = useRef(null);
+  const [activeGuide, setActiveGuide] = useState(null);
+  const activeGuideDetails = HOW_TO_GUIDES.find((guide) => guide.key === activeGuide);
 
   useEffect(() => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -966,7 +1102,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
     }, pageRef);
 
     return () => ctx.revert();
-  }, []);
+  }, [activeGuide]);
 
   return (
     <div ref={pageRef} className="min-h-screen overflow-hidden bg-black text-foreground">
@@ -987,44 +1123,221 @@ function HowToUsePage({ onBack, onOpenApp }) {
         <section className="howto-reveal mb-14 max-w-4xl">
           <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">How to use IScraper</div>
           <h1 className="font-display text-5xl font-bold tracking-tighter md:text-7xl">
-            Get your Instagram saved posts file.
+            Guides for imports, API keys, and the extension.
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
-            Follow these screenshots from first to last. Think of it like this: Instagram packs your saved posts into a file, then you upload that file here.
+            Start with Instagram export today. We will keep adding simple guides here for API keys, Pinterest, the browser extension, and other import flows.
           </p>
+          <div className="mt-8 grid gap-3 sm:grid-cols-2">
+            {HOW_TO_GUIDES.map(({ key, icon: Icon, title, copy, status }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveGuide((current) => (current === key ? null : key))}
+                className={`group rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 ${
+                  activeGuide === key ? 'border-primary bg-primary/10' : 'border-white/10 bg-white/[0.03] hover:border-primary/60'
+                }`}
+              >
+                <Icon className="h-5 w-5 text-primary" />
+                <div className="mt-4 flex items-center justify-between gap-3">
+                  <h2 className="font-display text-xl font-bold tracking-tight">{title}</h2>
+                  <span className={`rounded-full px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.16em] ${
+                    activeGuide === key || status === 'Guide ready' ? 'bg-primary text-primary-foreground' : 'bg-white/10 text-muted-foreground'
+                  }`}>
+                    {status}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{copy}</p>
+              </button>
+            ))}
+          </div>
         </section>
 
-        <div className="space-y-6 md:space-y-0">
-          {HOW_TO_STEPS.map((step, index) => (
-            <article
-              key={step.image}
-              data-reverse={index % 2 === 1}
-              className="howto-step grid min-h-[calc(100vh-5rem)] items-center gap-8 py-10 md:grid-cols-2 md:gap-14 md:py-16"
+        {!activeGuide && (
+          <section className="howto-reveal rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 md:p-10">
+            <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Choose a guide</div>
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">Click Instagram export to see the import steps.</h2>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+              We will add the API key, Pinterest, and extension walkthroughs here as those flows are finalized.
+            </p>
+          </section>
+        )}
+
+        {activeGuide && activeGuide !== 'instagram' && (
+          <section className="howto-reveal rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 md:p-10">
+            <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">{activeGuideDetails?.status}</div>
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">{activeGuideDetails?.title}</h2>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+              This guide will live here next. For now, use the Help Center or email us if you get stuck.
+            </p>
+          </section>
+        )}
+
+        {activeGuide === 'instagram' && (
+          <>
+            <section className="howto-reveal mb-6">
+              <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Instagram export</div>
+              <h2 className="mt-3 font-display text-3xl font-bold tracking-tight md:text-5xl">Get your Instagram saved posts file.</h2>
+            </section>
+
+            <div className="space-y-6 md:space-y-0">
+              {HOW_TO_STEPS.map((step, index) => (
+                <article
+                  key={step.image}
+                  data-reverse={index % 2 === 1}
+                  className="howto-step grid min-h-[calc(100vh-5rem)] items-center gap-8 py-10 md:grid-cols-2 md:gap-14 md:py-16"
+                >
+                  <div className={`howto-shot ${index % 2 === 1 ? 'md:order-2' : ''}`}>
+                    <div className="mx-auto max-w-[18rem] overflow-hidden rounded-[1.75rem] shadow-2xl shadow-black/50 md:max-w-[21rem]">
+                      <img src={step.image} alt={`Step ${index + 1}: ${step.title}`} className="max-h-[68vh] w-full object-contain" loading={index < 2 ? 'eager' : 'lazy'} />
+                    </div>
+                  </div>
+                  <div className={`howto-copy flex flex-col justify-center p-2 md:p-10 ${index % 2 === 1 ? 'md:order-1' : ''}`}>
+                    <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-primary font-display text-2xl font-bold text-primary-foreground">
+                      {index + 1}
+                    </div>
+                    <h2 className="font-display text-3xl font-bold tracking-tight md:text-5xl">{step.title}</h2>
+                    <p className="mt-5 max-w-xl text-lg leading-8 text-muted-foreground">{step.copy}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <section className="howto-reveal mt-14 rounded-[2rem] border border-primary/30 bg-primary p-6 text-black md:p-10">
+              <h2 className="font-display text-4xl font-bold tracking-tight">After Instagram sends the file</h2>
+              <p className="mt-3 max-w-2xl text-base leading-7">
+                Download the export from Instagram, come back to IScraper, open your library, and upload the saved HTML files.
+              </p>
+              <button type="button" onClick={onOpenApp} className="mt-6 inline-flex items-center gap-3 rounded-full bg-black px-6 py-4 font-semibold text-white transition hover:scale-[1.02]">
+                Open my library <ArrowRight className="h-5 w-5" />
+              </button>
+            </section>
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
+const SUPPORT_EMAIL = 'itsallover.2006@gmail.com';
+
+function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
+  const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('IScraper support request')}`;
+  const [supportForm, setSupportForm] = useState({
+    email: '',
+    topic: 'Import help',
+    message: '',
+  });
+  const helpTopics = [
+    [Upload, 'Import help', 'Use the Instagram export guide if you are stuck getting your saved posts file.'],
+    [KeyRound, 'AI keys', 'IScraper is BYOK right now. Add your own text, media, and embedding keys in Keys & privacy.'],
+    [Search, 'Search problems', 'If results feel wrong, make sure the saves were indexed. Search improves after summaries, OCR, and tags exist.'],
+    [LifeBuoy, 'Account support', 'Email us if Google login, usernames, profile setup, or extension tokens are not working.'],
+  ];
+
+  const handleSupportSubmit = (event) => {
+    event.preventDefault();
+    const body = [
+      `Reply-to email: ${supportForm.email}`,
+      `Topic: ${supportForm.topic}`,
+      '',
+      supportForm.message,
+    ].join('\n');
+    window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(`IScraper support: ${supportForm.topic}`)}&body=${encodeURIComponent(body)}`;
+  };
+
+  return (
+    <div className="min-h-screen bg-black text-foreground">
+      <div className="grid-bg radial-fade pointer-events-none fixed inset-0 opacity-40" />
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-black/85 px-5 py-4 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
+          <button type="button" onClick={onBack} className="flex items-center gap-3 transition hover:opacity-80">
+            <ArrowLeft className="h-5 w-5 text-muted-foreground" />
+            <BrandLogo className="h-12 w-40" />
+          </button>
+          <button type="button" onClick={onOpenApp} className="hidden rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02] sm:inline-flex">
+            Open app
+          </button>
+        </div>
+      </header>
+
+      <main className="relative mx-auto max-w-6xl px-5 py-16 md:py-24">
+        <section className="max-w-4xl">
+          <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">Help Center</div>
+          <h1 className="font-display text-5xl font-bold tracking-tighter md:text-7xl">Need help with IScraper?</h1>
+          <p className="mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">
+            If something breaks, you cannot import, or the extension feels confusing, email us and include what you were trying to do.
+          </p>
+          <div className="mt-8 flex flex-wrap gap-3">
+            <a
+              href={mailto}
+              className="inline-flex items-center gap-2 rounded-full bg-primary px-6 py-4 text-sm font-semibold text-primary-foreground transition hover:scale-[1.03]"
             >
-              <div className={`howto-shot ${index % 2 === 1 ? 'md:order-2' : ''}`}>
-                <div className="mx-auto max-w-[18rem] overflow-hidden rounded-[1.75rem] shadow-2xl shadow-black/50 md:max-w-[21rem]">
-                  <img src={step.image} alt={`Step ${index + 1}: ${step.title}`} className="max-h-[68vh] w-full object-contain" loading={index < 2 ? 'eager' : 'lazy'} />
-                </div>
-              </div>
-              <div className={`howto-copy flex flex-col justify-center p-2 md:p-10 ${index % 2 === 1 ? 'md:order-1' : ''}`}>
-                <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-primary font-display text-2xl font-bold text-primary-foreground">
-                  {index + 1}
-                </div>
-                <h2 className="font-display text-3xl font-bold tracking-tight md:text-5xl">{step.title}</h2>
-                <p className="mt-5 max-w-xl text-lg leading-8 text-muted-foreground">{step.copy}</p>
-              </div>
+              <Mail className="h-4 w-4" /> Email support
+            </a>
+            <button
+              type="button"
+              onClick={onOpenHowTo}
+              className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5"
+            >
+              <FileText className="h-4 w-4" /> Instagram export guide
+            </button>
+          </div>
+        </section>
+
+        <section className="mt-16 grid gap-5 md:grid-cols-2">
+          {helpTopics.map(([Icon, title, copy]) => (
+            <article key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+              <Icon className="h-6 w-6 text-primary" />
+              <h2 className="mt-6 font-display text-2xl font-bold tracking-tight">{title}</h2>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">{copy}</p>
             </article>
           ))}
-        </div>
+        </section>
 
-        <section className="howto-reveal mt-14 rounded-[2rem] border border-primary/30 bg-primary p-6 text-black md:p-10">
-          <h2 className="font-display text-4xl font-bold tracking-tight">After Instagram sends the file</h2>
-          <p className="mt-3 max-w-2xl text-base leading-7">
-            Download the export from Instagram, come back to IScraper, open your library, and upload the saved HTML files.
+        <section className="mt-10 rounded-2xl border border-primary/30 bg-primary/5 p-6">
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Contact</div>
+          <h2 className="mt-2 font-display text-3xl font-bold tracking-tight">Support email</h2>
+          <a href={mailto} className="mt-4 inline-flex break-all text-lg font-semibold text-primary hover:underline">
+            {SUPPORT_EMAIL}
+          </a>
+          <p className="mt-4 text-sm leading-6 text-muted-foreground">
+            Best message format: your account email, what you clicked, what you expected, and a screenshot if possible.
           </p>
-          <button type="button" onClick={onOpenApp} className="mt-6 inline-flex items-center gap-3 rounded-full bg-black px-6 py-4 font-semibold text-white transition hover:scale-[1.02]">
-            Open my library <ArrowRight className="h-5 w-5" />
-          </button>
+
+          <form onSubmit={handleSupportSubmit} className="mt-6 grid gap-3">
+            <input
+              type="email"
+              value={supportForm.email}
+              onChange={(event) => setSupportForm((current) => ({ ...current, email: event.target.value }))}
+              placeholder="Your email so we can reply"
+              required
+              className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm outline-none focus:border-primary"
+            />
+            <select
+              value={supportForm.topic}
+              onChange={(event) => setSupportForm((current) => ({ ...current, topic: event.target.value }))}
+              className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm outline-none focus:border-primary"
+            >
+              <option>Import help</option>
+              <option>Login or account</option>
+              <option>Extension</option>
+              <option>Search results</option>
+              <option>Billing or credits</option>
+              <option>Other</option>
+            </select>
+            <textarea
+              value={supportForm.message}
+              onChange={(event) => setSupportForm((current) => ({ ...current, message: event.target.value }))}
+              placeholder="Tell us what happened."
+              maxLength={1200}
+              required
+              className="min-h-36 w-full resize-none rounded-xl border border-white/10 bg-black px-4 py-3 text-sm leading-6 outline-none focus:border-primary"
+            />
+            <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
+              <Mail className="h-4 w-4" /> Send to support email
+            </button>
+          </form>
         </section>
       </main>
     </div>
@@ -1047,7 +1360,7 @@ const LEGAL_CONTENT = {
       ['Credits and paid features', 'The first 200 imported saved items are currently included without paid IScraper credits, subject to abuse prevention and fair-use limits. Credit purchases are currently marked as coming soon. If payments are enabled later, pricing, refunds, and billing terms will be shown before purchase.'],
       ['Service changes', 'We may change, pause, or discontinue features. We will try to avoid disrupting your saved library, but we do not guarantee uninterrupted access.'],
       ['Disclaimer', 'IScraper is provided as-is without warranties. To the maximum extent allowed by law, we are not responsible for indirect damages, lost data, lost profits, or decisions made from AI-generated output.'],
-      ['Contact', 'For support or legal questions, contact the IScraper operator using the support email that will be published before public launch.'],
+      ['Contact', `For support or legal questions, contact us at ${SUPPORT_EMAIL}.`],
     ],
   },
   privacy: {
@@ -1066,7 +1379,44 @@ const LEGAL_CONTENT = {
       ['Security', 'We use Supabase Auth, row-level ownership rules, encrypted provider-key storage, rate limits, upload limits, CORS restrictions, and security headers. No system is perfectly secure, so do not upload highly sensitive data unless you accept that risk.'],
       ['Retention and deletion', 'Your saved library stays until you delete it or request deletion. Public feedback may remain visible unless removed by an operator. Before public launch, we should add a clear account/data deletion contact or self-serve deletion flow.'],
       ['Children', 'IScraper is not directed to children under 13. Do not use the service if you are not old enough to consent under your local law.'],
-      ['Contact', 'For privacy requests, contact the IScraper operator using the privacy email that will be published before public launch.'],
+      ['Contact', `For privacy requests, contact us at ${SUPPORT_EMAIL}.`],
+    ],
+  },
+  security: {
+    eyebrow: 'Security',
+    title: 'Security',
+    intro: 'This page explains the practical security controls IScraper uses and how to report a security issue.',
+    sections: [
+      ['Account protection', 'IScraper uses Supabase Auth and Google sign-in for account access. Users must complete profile setup before importing saved content. Keep your Google account secure because it controls access to your IScraper account.'],
+      ['Data separation', 'Production data is stored in Supabase with user ownership checks and row-level security policies. The backend uses the service role only on server-side routes, never in browser code.'],
+      ['API keys', 'User AI provider keys are encrypted before storage. Until paid credits are live, IScraper is BYOK-only, so users control the AI providers used for indexing.'],
+      ['Extension security', 'The browser extension uses a limited, revokable Lens token instead of your main login token. It does not scan pages in the background and only runs after you click it.'],
+      ['Abuse prevention', 'IScraper uses upload limits, rate limits, URL safety checks, CORS restrictions, and security headers to reduce common abuse and accidental exposure.'],
+      ['Report a security issue', `Email ${SUPPORT_EMAIL} with the subject "IScraper security report". Include the affected page, steps to reproduce, and impact. Do not publicly disclose an issue until we have had a chance to fix it.`],
+    ],
+  },
+  dataDeletion: {
+    eyebrow: 'Data Deletion',
+    title: 'Data Deletion',
+    intro: 'Use this page to request deletion of your IScraper account data, saved library, feedback, and connected settings.',
+    sections: [
+      ['How to request deletion', `Email ${SUPPORT_EMAIL} from the email address connected to your IScraper account. Use the subject "Delete my IScraper data". Include your username if you have one.`],
+      ['What we delete', 'We can delete your account profile, saved items, imports, generated summaries, OCR/transcripts, graph data, provider key records, extension tokens, and credit records tied to your account where deletion is legally and technically allowed.'],
+      ['Public feedback', 'Anonymous public feedback may be harder to identify if it was not tied to your account. If you want a specific feedback item removed, include the exact text or a screenshot.'],
+      ['Timing', 'We will review deletion requests as soon as practical. Some logs, backups, or legal records may remain for a limited time where required for security, fraud prevention, accounting, or legal compliance.'],
+      ['Before deletion', 'Export anything you want to keep before requesting deletion. Once data is deleted, we may not be able to restore it.'],
+    ],
+  },
+  cookies: {
+    eyebrow: 'Cookie Notice',
+    title: 'Cookie Notice',
+    intro: 'This page explains the simple storage IScraper currently uses in the browser.',
+    sections: [
+      ['Essential storage', 'IScraper may use browser storage and Supabase Auth session storage to keep you signed in and remember app state. This is needed for the app to work.'],
+      ['Local preferences', 'The site may remember small preferences such as dismissed popups, pending save links, and temporary UI state in local storage.'],
+      ['Analytics and ads', 'IScraper does not currently use advertising cookies or third-party ad tracking cookies. If analytics are added later, this notice should be updated before public use.'],
+      ['Browser controls', 'You can clear cookies and local storage from your browser settings. Doing this may sign you out or reset app preferences.'],
+      ['Contact', `Questions about cookies or browser storage can be sent to ${SUPPORT_EMAIL}.`],
     ],
   },
 };
@@ -1171,7 +1521,77 @@ function AnimatedFeatureSelect({ value, onChange }) {
   );
 }
 
-function Dashboard({ onBack }) {
+function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, icon: Icon }) {
+  const [open, setOpen] = useState(false);
+  const selectRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOnOutside = (event) => {
+      if (!selectRef.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={selectRef} className="relative">
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        className={`group flex min-w-36 items-center gap-2 rounded-full border bg-black px-3 py-2 text-left transition duration-200 ${
+          open ? 'border-primary shadow-[0_0_0_4px_rgba(165,255,24,0.12)]' : 'border-white/10 hover:border-primary/70'
+        }`}
+      >
+        {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover:text-primary" />}
+        <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-foreground">{value}</span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition duration-200 ${open ? 'rotate-180 text-primary' : 'group-hover:text-primary'}`} />
+      </button>
+
+      <div
+        role="listbox"
+        className={`absolute right-0 top-[calc(100%+0.5rem)] z-50 max-h-72 min-w-full overflow-y-auto rounded-2xl border border-primary/40 bg-black/95 p-2 shadow-[0_24px_80px_rgba(0,0,0,0.65)] backdrop-blur transition duration-200 ${
+          open ? 'pointer-events-auto translate-y-0 scale-100 opacity-100' : 'pointer-events-none -translate-y-2 scale-[0.98] opacity-0'
+        }`}
+      >
+        {options.map((option) => {
+          const selected = option === value;
+          return (
+            <button
+              key={option}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              onClick={() => {
+                onChange(option);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center justify-between gap-3 whitespace-nowrap rounded-xl px-3 py-2.5 text-left text-xs transition duration-150 ${
+                selected ? 'bg-orange-500 text-black' : 'text-foreground hover:bg-orange-500/15 hover:text-orange-300'
+              }`}
+            >
+              <span>{option}</span>
+              {selected && <Check className="h-4 w-4" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Dashboard({ onBack, onOpenHowTo }) {
   const [tab, setTab] = useState('library');
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -1697,6 +2117,13 @@ function Dashboard({ onBack }) {
               <Icon className="h-4 w-4" /> {title}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={onOpenHowTo}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
+          >
+            <FileText className="h-4 w-4" /> How to Use
+          </button>
         </nav>
         <div className="border-t border-white/5 p-4 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
           {stats.total} saves · {stats.done} searchable
@@ -1706,7 +2133,7 @@ function Dashboard({ onBack }) {
       <main className="min-w-0 flex-1">
         <div className="dash-panel min-h-screen overflow-auto">
           <div className="dash-panel-inner">
-            <MobileTopbar onBack={onBack} tab={tab} setTab={setTab} />
+            <MobileTopbar onBack={onBack} tab={tab} setTab={setTab} onOpenHowTo={onOpenHowTo} />
             {(error || notice) && (
               <div className="mx-auto max-w-6xl px-6 pt-6 md:px-12">
                 {error && <Banner type="error">{error}</Banner>}
@@ -1764,6 +2191,7 @@ function Dashboard({ onBack }) {
                     onUpdateReview={handleUpdateReview}
                     onSelect={openDetail}
                     busy={busy}
+                    onOpenHowTo={onOpenHowTo}
                   />
                 )}
                 {tab === 'settings' && (
@@ -1792,6 +2220,7 @@ function Dashboard({ onBack }) {
                     onClearExtensionSecret={() => setNewExtensionSecret('')}
                     busy={busy}
                     authEnabled={authEnabled}
+                    onOpenHowTo={onOpenHowTo}
                   />
                 )}
               </>
@@ -1805,7 +2234,7 @@ function Dashboard({ onBack }) {
   );
 }
 
-function MobileTopbar({ onBack, tab, setTab }) {
+function MobileTopbar({ onBack, tab, setTab, onOpenHowTo }) {
   return (
     <div className="sticky top-0 z-30 border-b border-white/10 bg-black/90 p-3 backdrop-blur md:hidden">
       <div className="mb-3 flex items-center justify-between">
@@ -1830,6 +2259,13 @@ function MobileTopbar({ onBack, tab, setTab }) {
           </button>
         ))}
       </div>
+      <button
+        type="button"
+        onClick={onOpenHowTo}
+        className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-muted-foreground"
+      >
+        <FileText className="h-3.5 w-3.5" /> How to Use
+      </button>
     </div>
   );
 }
@@ -1963,39 +2399,37 @@ function LibraryTab({
         <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
           <span>{visibleItems.length} showing from {items.length} matching saves</span>
           <div className="flex flex-wrap gap-2">
-            <label className="flex items-center gap-2 rounded-full border border-white/10 bg-black px-3 py-2">
-              <Filter className="h-3.5 w-3.5" />
-              <select
-                value={statusFilter}
-                onChange={(event) => {
+            <DashboardFilterSelect
+              label="Status"
+              ariaLabel="Filter by status"
+              icon={Filter}
+              value={statusFilter}
+              options={STATUSES}
+              onChange={(nextStatus) => {
                   setVisibleCount(80);
-                  setStatusFilter(event.target.value);
+                  setStatusFilter(nextStatus);
                 }}
-                className="bg-black outline-none"
-              >
-                {STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
-              </select>
-            </label>
-            <select
+            />
+            <DashboardFilterSelect
+              label="Platform"
+              ariaLabel="Filter by platform"
               value={platformFilter}
-              onChange={(event) => {
-                setVisibleCount(80);
-                setPlatformFilter(event.target.value);
-              }}
-              className="rounded-full border border-white/10 bg-black px-3 py-2 outline-none"
-            >
-              {platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
-            </select>
-            <select
+              options={platforms}
+              onChange={(nextPlatform) => {
+                  setVisibleCount(80);
+                  setPlatformFilter(nextPlatform);
+                }}
+            />
+            <DashboardFilterSelect
+              label="Collection"
+              ariaLabel="Filter by collection"
               value={collectionFilter}
-              onChange={(event) => {
-                setVisibleCount(80);
-                setCollectionFilter(event.target.value);
-              }}
-              className="rounded-full border border-white/10 bg-black px-3 py-2 outline-none"
-            >
-              {collections.map((collection) => <option key={collection} value={collection}>{collection}</option>)}
-            </select>
+              options={collections}
+              onChange={(nextCollection) => {
+                  setVisibleCount(80);
+                  setCollectionFilter(nextCollection);
+                }}
+            />
             {activeFilters > 0 && <span className="rounded-full bg-primary px-3 py-2 text-primary-foreground">{activeFilters} active</span>}
           </div>
         </div>
@@ -2118,13 +2552,23 @@ function UploadTab({
   onUpdateReview,
   onSelect,
   busy,
+  onOpenHowTo,
 }) {
   const [dragging, setDragging] = useState(false);
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-6 py-20">
-      <div>
-        <h1 className="font-display text-4xl font-bold tracking-tight">Add your saved posts</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Paste any link now, review the capture, then approve indexing when it is worth spending AI usage.</p>
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h1 className="font-display text-4xl font-bold tracking-tight">Add your saved posts</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Paste any link now, review the capture, then approve indexing when it is worth spending AI usage.</p>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenHowTo}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5"
+        >
+          <FileText className="h-4 w-4" /> How to Use
+        </button>
       </div>
 
       <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
@@ -2229,6 +2673,14 @@ function UploadTab({
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
         <h3 className="mb-2 font-display text-xl font-bold">Drop your export files here</h3>
         <p className="mb-6 font-mono text-xs text-muted-foreground">saved_posts.html · saved_collections.html</p>
+        <button
+          type="button"
+          onClick={onOpenHowTo}
+          className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-xs text-muted-foreground transition hover:text-foreground"
+        >
+          <FileText className="h-3.5 w-3.5" /> Need the export steps?
+        </button>
+        <br />
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
           Choose export files
           <input type="file" multiple accept=".html" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
@@ -2359,19 +2811,29 @@ function SettingsTab({
   onClearExtensionSecret,
   busy,
   authEnabled,
+  onOpenHowTo,
 }) {
   return (
     <div className="mx-auto max-w-2xl space-y-8 px-6 py-20">
-      <div>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="font-display text-4xl font-bold tracking-tight">Keys & privacy</h1>
-          <span className="rounded-full bg-primary px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-primary-foreground">
-            BYOK only
-          </span>
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="font-display text-4xl font-bold tracking-tight">Keys & privacy</h1>
+            <span className="rounded-full bg-primary px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-primary-foreground">
+              BYOK only
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Connect your own AI keys before indexing. Until payments are live, IScraper does not spend an app-owned OpenRouter key.
+          </p>
         </div>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Connect your own AI keys before indexing. Until payments are live, IScraper does not spend an app-owned OpenRouter key.
-        </p>
+        <button
+          type="button"
+          onClick={onOpenHowTo}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5"
+        >
+          <FileText className="h-4 w-4" /> How to Use
+        </button>
       </div>
 
       <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">

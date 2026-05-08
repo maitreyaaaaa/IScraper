@@ -88,12 +88,44 @@
 
 @layer base {
   * { border-color: var(--color-border); }
-  html, body {
+  html {
+    overflow-x: hidden;
+    background-color: #000;
+    scrollbar-color: rgba(255, 255, 255, 0.45) #000;
+  }
+  body {
+    margin: 0;
+    display: block;
+    width: 100%;
+    min-width: 320px;
+    min-height: 100vh;
+    overflow-x: hidden;
     background-color: #000;
     color: var(--color-foreground);
     font-family: var(--font-display);
     -webkit-font-smoothing: antialiased;
     scroll-behavior: smooth;
+  }
+  #root {
+    width: 100%;
+    min-height: 100vh;
+    overflow-x: hidden;
+    background-color: #000;
+  }
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #000;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.38);
+    border: 3px solid #000;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.55);
   }
   ::selection {
     background: var(--color-primary);
