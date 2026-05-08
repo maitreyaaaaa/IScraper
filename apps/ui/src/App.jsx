@@ -162,6 +162,11 @@ function Landing({ onOpenApp, onOpenHowTo, onOpenTerms, onOpenPrivacy }) {
   const [feedbackNotice, setFeedbackNotice] = useState('');
 
   useEffect(() => {
+    window.history.scrollRestoration = 'manual';
+    window.scrollTo(0, 0);
+  }, []);
+
+  useEffect(() => {
     getPublicFeedback()
       .then((body) => setFeedback(body.feedback || []))
       .catch(() => setFeedback([]));
