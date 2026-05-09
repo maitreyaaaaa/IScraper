@@ -87,7 +87,7 @@ const STATUS_META = {
 const STATUSES = ['all', 'needs_review', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 const DIRECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
-const IMPORT_UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
+const IMPORT_UPLOAD_CHUNK_BYTES = 1024 * 1024;
 const HERO_PLATFORMS = [
   { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
   { name: 'X', src: '/platforms/x.svg', bg: '#fff' },
