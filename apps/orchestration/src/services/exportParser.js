@@ -4,6 +4,24 @@ const { parseInstagramExport } = require('./instagramParser');
 const { parsePinterestExport } = require('./pinterestParser');
 
 const INSTAGRAM_EXPORT_EXTENSIONS = new Set(['.html', '.htm', '.json']);
+const INSTAGRAM_SAVED_EXPORT_NAMES = new Set([
+  'saved_posts.html',
+  'saved_posts.htm',
+  'saved_posts.json',
+  'saved_post.html',
+  'saved_post.htm',
+  'saved_post.json',
+  'saved_collections.html',
+  'saved_collections.htm',
+  'saved_collections.json',
+]);
+
+function isInstagramSavedExportFile(sourceName = '') {
+  const normalized = String(sourceName || '').replace(/\\/g, '/').toLowerCase();
+  const fileName = path.basename(normalized);
+  if (!INSTAGRAM_SAVED_EXPORT_NAMES.has(fileName)) return false;
+  return normalized.includes('/your_instagram_activity/saved/') || normalized.includes('your_instagram_activity/saved/') || !normalized.includes('/');
+}
 
 function mergeParsedResults(results) {
   const collections = [];
@@ -38,7 +56,7 @@ async function instagramFilesFromUploads(files = []) {
     const sourceName = file.originalname || file.filename || 'instagram-export';
     const extension = path.extname(sourceName).toLowerCase();
 
-    if (INSTAGRAM_EXPORT_EXTENSIONS.has(extension)) {
+    if (INSTAGRAM_EXPORT_EXTENSIONS.has(extension) && isInstagramSavedExportFile(sourceName)) {
       instagramFiles.push(file);
       continue;
     }
@@ -50,6 +68,7 @@ async function instagramFilesFromUploads(files = []) {
       if (entry.dir) continue;
       const entryExtension = path.extname(entry.name || '').toLowerCase();
       if (!INSTAGRAM_EXPORT_EXTENSIONS.has(entryExtension)) continue;
+      if (!isInstagramSavedExportFile(entry.name)) continue;
       const buffer = await entry.async('nodebuffer');
       instagramFiles.push({
         ...file,

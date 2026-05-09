@@ -1,6 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { getExistingSavedItemKeys } = require('../src/stores/supabaseStore');
+const { cleanDbText, getExistingSavedItemKeys } = require('../src/stores/supabaseStore');
+
+test('cleanDbText removes broken Unicode surrogates but keeps valid emoji', () => {
+  assert.equal(cleanDbText('valid 👩🏻‍💻 text'), 'valid 👩🏻‍💻 text');
+  assert.equal(cleanDbText(`bad high ${String.fromCharCode(0xD83D)} text`), 'bad high  text');
+  assert.equal(cleanDbText(`bad low ${String.fromCharCode(0xDC00)} text`), 'bad low  text');
+});
 
 test('getExistingSavedItemKeys batches duplicate lookups to avoid huge request URLs', async () => {
   const calls = [];

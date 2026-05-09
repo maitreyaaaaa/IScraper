@@ -8,6 +8,10 @@ function normalizeText(value = '') {
     .trim();
 }
 
+function truncateText(value = '', maxLength = 160) {
+  return Array.from(String(value || '')).slice(0, maxLength).join('');
+}
+
 function getShortcode(url) {
   return String(url).split('/').filter(Boolean).pop();
 }
@@ -117,7 +121,7 @@ function parsePostsHtml(html, sourceName, collectionName = null) {
       platform: 'Instagram',
       platformKey: 'instagram',
       sourceId: id,
-      sourceTitle: caption ? caption.slice(0, 160) : '',
+      sourceTitle: truncateText(caption, 160),
       sourceAuthor: ownerUsername || ownerName,
       sourceDescription: caption,
       thumbnailUrl: '',
@@ -203,7 +207,7 @@ function itemFromJsonUrl(url, sourceName, record = {}, collectionName = null) {
     platform: 'Instagram',
     platformKey: 'instagram',
     sourceId: id,
-    sourceTitle: caption ? caption.slice(0, 160) : '',
+    sourceTitle: truncateText(caption, 160),
     sourceAuthor: ownerUsername || ownerName,
     sourceDescription: caption,
     thumbnailUrl: '',
@@ -292,4 +296,5 @@ module.exports = {
   parseInstagramExport,
   normalizeInstagramUrl,
   normalizeText,
+  truncateText,
 };

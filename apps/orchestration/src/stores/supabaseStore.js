@@ -224,24 +224,24 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       const items = parsed.items
         .filter((item) => !existingKeys.has(`id:${item.id}`) && !existingKeys.has(`url:${item.url}`))
         .map((item) => ({
-        id: item.id,
+        id: cleanDbText(item.id),
         user_id: userId,
         import_id: importId,
-        url: item.url,
-        content_type: item.contentType,
-        caption: item.caption,
-        hashtags: item.hashtags,
-        owner_name: item.ownerName,
-        owner_username: item.ownerUsername,
-        saved_at_text: item.savedAt,
-        collections: item.collections,
-        platform: item.platform || 'Instagram',
-        platform_key: item.platformKey || 'instagram',
-        source_id: item.sourceId || item.id,
-        source_title: item.sourceTitle || '',
-        source_author: item.sourceAuthor || item.ownerUsername || item.ownerName || '',
-        source_description: item.sourceDescription || '',
-        thumbnail_url: item.thumbnailUrl || '',
+        url: cleanDbText(item.url),
+        content_type: cleanDbText(item.contentType),
+        caption: cleanDbText(item.caption),
+        hashtags: cleanTextArray(item.hashtags),
+        owner_name: cleanDbText(item.ownerName),
+        owner_username: cleanDbText(item.ownerUsername),
+        saved_at_text: cleanDbText(item.savedAt),
+        collections: cleanTextArray(item.collections),
+        platform: cleanDbText(item.platform || 'Instagram'),
+        platform_key: cleanDbText(item.platformKey || 'instagram'),
+        source_id: cleanDbText(item.sourceId || item.id),
+        source_title: cleanDbText(item.sourceTitle || ''),
+        source_author: cleanDbText(item.sourceAuthor || item.ownerUsername || item.ownerName || ''),
+        source_description: cleanDbText(item.sourceDescription || ''),
+        thumbnail_url: cleanDbText(item.thumbnailUrl || ''),
         status: initialStatus,
       }));
       if (!items.length) return [];
@@ -838,6 +838,31 @@ async function getExistingSavedItemKeys(client, { userId, ids = [], urls = [] })
   return existingKeys;
 }
 
+function cleanDbText(value) {
+  if (value == null) return value;
+  const text = String(value);
+  let clean = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        clean += text[index] + text[index + 1];
+        index += 1;
+      }
+      continue;
+    }
+    if (code >= 0xDC00 && code <= 0xDFFF) continue;
+    clean += text[index];
+  }
+  return clean;
+}
+
+function cleanTextArray(values) {
+  if (!Array.isArray(values)) return [];
+  return values.map((value) => cleanDbText(value)).filter(Boolean);
+}
+
 async function countRows(client, table, apply = null) {
   let query = client.from(table).select('*', { count: 'exact', head: true });
   if (apply) query = apply(query);
@@ -1146,4 +1171,5 @@ function mergeSearchResults({ items, keywordResults, semanticMatches, filters = 
 module.exports = {
   createSupabaseStore,
   getExistingSavedItemKeys,
+  cleanDbText,
 };

@@ -1,7 +1,14 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { parseInstagramExport } = require('../src/services/instagramParser');
+const { parseInstagramExport, truncateText } = require('../src/services/instagramParser');
+
+test('truncateText does not split emoji surrogate pairs', () => {
+  const text = `${'a'.repeat(159)}👩🏻‍💻`;
+  const truncated = truncateText(text, 160);
+  assert.equal(truncated, `${'a'.repeat(159)}👩`);
+  assert.doesNotMatch(truncated, /[\uD800-\uDBFF]$/);
+});
 
 test('parseInstagramExport extracts every saved post with owner, hashtags, and date', () => {
   const savedPostsHtml = `
