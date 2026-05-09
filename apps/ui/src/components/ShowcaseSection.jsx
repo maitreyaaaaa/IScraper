@@ -31,13 +31,13 @@ const SHOWCASE_ITEMS = [
     label: '02',
     eyebrow: 'Obsidian export',
     title: 'Push the good saves into notes you can reuse.',
-    summary: 'Each useful post becomes a clean note instead of staying trapped in Instagram.',
+    summary: 'Each useful save becomes a clean note instead of staying trapped inside an app.',
     detail:
       'IScraper can turn the saved post into note-ready output with title, summary, transcript, tags, and linked context so the material survives beyond the app.',
     chips: ['Vault ready', 'Linked notes', 'Clean metadata'],
     previewTitle: 'Vault note snapshot',
     previewLines: [
-      '[[Instagram Saves]] / Prompting / Creator Systems',
+      '[[Saved Ideas]] / Prompting / Creator Systems',
       'Title: Reel about AI offer teardown',
       'Links: [[Hooks]], [[Offer Research]], [[Creator Swipe File]]',
     ],
@@ -223,7 +223,7 @@ function ShowcaseSection() {
       <div className="showcase-section-header">
         <span className="showcase-section-label">Showcase</span>
         <h2 id="showcase-section-title">The outcome is usable memory, not just another import screen.</h2>
-        <p>Open any result to inspect what IScraper gives you after the raw Instagram save is processed.</p>
+        <p>Open any result to inspect what IScraper gives you after a raw save is processed.</p>
       </div>
 
       <div className="showcase-shell">
