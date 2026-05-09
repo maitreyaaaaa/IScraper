@@ -16,7 +16,7 @@ function createJobsForImport({ importId, items, existingJobs = [] }) {
 }
 
 function pickNextProcessableJob(jobs) {
-  return jobs.find((job) => job.status === 'failed') || jobs.find((job) => job.status === 'queued') || null;
+  return jobs.find((job) => job.status === 'queued') || null;
 }
 
 function isRestartableJob(job) {

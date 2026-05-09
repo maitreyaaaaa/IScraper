@@ -566,6 +566,108 @@ test('POST /api/items/:id/approve queues a reviewed web save', async () => {
   }
 });
 
+test('POST /api/indexing/start approves waiting saves in one request', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const importEntry = await store.createImport({
+      userId: 'local-dev-user',
+      source: 'user-export',
+      fileNames: ['saved_posts.html'],
+    });
+    await store.upsertImportData({
+      userId: 'local-dev-user',
+      importId: importEntry.id,
+      initialStatus: 'needs_review',
+      parsed: {
+        collections: [],
+        items: [
+          { id: 'bulk-a', url: 'https://example.com/a', contentType: 'unknown', caption: 'A', hashtags: [], collections: [] },
+          { id: 'bulk-b', url: 'https://example.com/b', contentType: 'unknown', caption: 'B', hashtags: [], collections: [] },
+        ],
+      },
+    });
+
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/indexing/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ startProcessing: false }),
+    });
+    const body = await response.json();
+    const jobs = await store.getJobs('local-dev-user', importEntry.id);
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.approvedCount, 2);
+    assert.equal(body.queuedJobCount, 2);
+    assert.equal(jobs.length, 2);
+    assert.equal(items.every((item) => item.status === 'queued'), true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/worker/process requires a worker key and processes queued scopes', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({
+    store,
+    config: {
+      workerApiKey: 'worker-secret',
+      credentialEncryptionKey: 'dev-encryption-key',
+      videoDir: path.join(dir, 'videos'),
+    },
+  });
+  const server = app.listen(0);
+
+  try {
+    const importEntry = await store.createImport({
+      userId: 'local-dev-user',
+      source: 'manual-link',
+      fileNames: ['https://example.com/queued'],
+    });
+    const items = await store.upsertImportData({
+      userId: 'local-dev-user',
+      importId: importEntry.id,
+      initialStatus: 'queued',
+      parsed: {
+        collections: [],
+        items: [
+          { id: 'worker-a', url: 'https://example.com/queued', contentType: 'unknown', caption: 'Queued', hashtags: [], collections: [] },
+        ],
+      },
+    });
+    await store.createJobs({ userId: 'local-dev-user', importId: importEntry.id, items });
+
+    const port = server.address().port;
+    const denied = await fetch(`http://127.0.0.1:${port}/api/worker/process`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxJobs: 1 }),
+    });
+    const allowed = await fetch(`http://127.0.0.1:${port}/api/worker/process`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-worker-api-key': 'worker-secret' },
+      body: JSON.stringify({ maxJobs: 1, download: false }),
+    });
+    const body = await allowed.json();
+    const job = store.getJobs('local-dev-user', importEntry.id)[0];
+
+    assert.equal(denied.status, 403);
+    assert.equal(allowed.status, 200);
+    assert.equal(body.scopeCount, 1);
+    assert.equal(job.status, 'paused_missing_provider');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('extension token can search Lens text and stops after revoke', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

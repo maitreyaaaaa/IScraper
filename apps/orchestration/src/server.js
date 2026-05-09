@@ -115,6 +115,25 @@ async function assertAdmin(req, config, store) {
   throw error;
 }
 
+function assertWorker(req, config) {
+  const expected = config.workerApiKey;
+  if (!expected) {
+    const error = new Error('Worker API is not configured.');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const auth = req.header('authorization') || '';
+  const provided = req.header('x-worker-api-key') || (auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : '');
+  const validLength = Buffer.byteLength(provided) === Buffer.byteLength(expected);
+  const valid = validLength && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+  if (valid) return;
+
+  const error = new Error('Worker access denied.');
+  error.statusCode = 403;
+  throw error;
+}
+
 function stripeFor(config) {
   return config.stripeSecretKey ? new Stripe(config.stripeSecretKey) : null;
 }
@@ -465,6 +484,48 @@ function reviewUpdatesFromBody(body = {}, item = {}) {
   };
 }
 
+async function approveReviewItemsForIndexing({ store, userId, items }) {
+  const queuedItems = [];
+  const jobs = [];
+  let fallbackImportId = null;
+
+  for (const item of items) {
+    let importId = item.importId;
+    if (!importId) {
+      if (!fallbackImportId) {
+        const importEntry = await store.createImport({
+          userId,
+          source: 'bulk-review-approval',
+          mode: 'export',
+          fileNames: items.map((entry) => entry.url).slice(0, 20),
+        });
+        fallbackImportId = importEntry.id;
+      }
+      importId = fallbackImportId;
+    }
+
+    const updated = await store.updateSavedItem(userId, item.id, {
+      importId,
+      status: item.status === 'done' ? 'done' : 'queued',
+      error: null,
+    });
+    if (updated && updated.status !== 'done') queuedItems.push(updated);
+  }
+
+  const itemsByImportId = queuedItems.reduce((groups, item) => {
+    const importId = item.importId;
+    if (!groups.has(importId)) groups.set(importId, []);
+    groups.get(importId).push(item);
+    return groups;
+  }, new Map());
+
+  for (const [importId, importItems] of itemsByImportId.entries()) {
+    jobs.push(...await store.createJobs({ userId, importId, items: importItems }));
+  }
+
+  return { items: queuedItems, jobs };
+}
+
 function publicLensResult(item) {
   const analysis = item.analysis || {};
   return {
@@ -531,7 +592,35 @@ function createApp({ store, config = {} }) {
   const searchRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.searchRateLimitMax || 180, name: 'search', namespace: rateLimitNamespace });
   const checkoutRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.checkoutRateLimitMax || 10, name: 'checkout', namespace: rateLimitNamespace });
   const adminRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.adminRateLimitMax || 30, name: 'admin', namespace: rateLimitNamespace });
+  const workerRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.workerRateLimitMax || 30, name: 'worker', namespace: rateLimitNamespace });
   const allowedOrigins = new Set((config.corsOrigins || []).map((origin) => String(origin).replace(/\/$/, '')));
+  const workerProcessHandler = asyncRoute(async (req, res) => {
+    assertWorker(req, config);
+    if (typeof store.getProcessableJobScopes !== 'function') return res.status(501).json({ error: 'Worker job discovery is not available.' });
+
+    const maxJobs = Math.max(1, Math.min(Number(req.body?.maxJobs || req.query?.maxJobs) || config.workerBatchSize || 10, 50));
+    const downloadValue = req.body?.download ?? req.query?.download;
+    const scopes = await store.getProcessableJobScopes({ limit: maxJobs });
+    const processed = [];
+
+    for (const scope of scopes) {
+      if (processed.length >= maxJobs) break;
+      const batch = await runProcessImportJobs({
+        store,
+        userId: scope.userId,
+        importId: scope.importId,
+        config,
+        shouldDownload: downloadValue !== false && downloadValue !== 'false',
+        maxJobs: Math.max(1, maxJobs - processed.length),
+      });
+      processed.push(...batch);
+    }
+
+    return res.json({
+      processedCount: processed.length,
+      scopeCount: scopes.length,
+    });
+  });
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use(securityHeaders);
@@ -717,6 +806,9 @@ function createApp({ store, config = {} }) {
     return res.status(201).json(result);
   }));
 
+  app.get('/api/worker/process', workerRateLimit, workerProcessHandler);
+  app.post('/api/worker/process', workerRateLimit, workerProcessHandler);
+
   app.post('/api/lens/search', searchRateLimit, asyncRoute(async (req, res) => {
     const user = await getExtensionUser(req, store, 'lens:search');
     const type = req.body?.type === 'image' ? 'image' : 'text';
@@ -819,10 +911,40 @@ function createApp({ store, config = {} }) {
 
     const jobs = item.status === 'done' ? [] : await store.createJobs({ userId: req.user.id, importId, items: [item] });
     if (req.body?.startProcessing !== false && jobs.length) {
-      startProcessing({ store, userId: req.user.id, importId, config, shouldDownload: false });
+      startProcessing({ store, userId: req.user.id, importId, config, shouldDownload: req.body?.download !== false });
     }
 
     return res.json({ item, queuedJobCount: jobs.length, jobs });
+  }));
+
+  app.post('/api/indexing/start', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.updateSavedItem !== 'function' || typeof store.createJobs !== 'function') {
+      return res.status(501).json({ error: 'Indexing jobs are not available.' });
+    }
+
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 1000, 1000));
+    const allItems = await store.getItems(req.user.id);
+    const pendingReviewItems = allItems.filter((item) => item.status === 'needs_review');
+    const selectedItems = pendingReviewItems.slice(0, limit);
+    const { items, jobs } = await approveReviewItemsForIndexing({
+      store,
+      userId: req.user.id,
+      items: selectedItems,
+    });
+
+    if (jobs.length && req.body?.startProcessing !== false && config.inlineIndexingEnabled !== false) {
+      startProcessing({ store, userId: req.user.id, importId: null, config, shouldDownload: req.body?.download !== false });
+    }
+
+    return res.json({
+      message: jobs.length ? 'Indexing started' : 'No saves are waiting for indexing.',
+      approvedCount: items.length,
+      queuedJobCount: jobs.length,
+      remainingPendingCount: Math.max(pendingReviewItems.length - selectedItems.length, 0),
+      items,
+      jobs,
+    });
   }));
 
   app.get('/api/credits', asyncRoute(async (req, res) => {
@@ -1139,7 +1261,13 @@ function createApp({ store, config = {} }) {
 }
 
 function startProcessing({ store, userId, importId, config, shouldDownload = true }) {
-  processImportJobs({
+  runProcessImportJobs({ store, userId, importId, config, shouldDownload }).catch((error) => {
+    console.error('Background processing failed:', error);
+  });
+}
+
+function runProcessImportJobs({ store, userId, importId, config, shouldDownload = true, maxJobs = Infinity }) {
+  return processImportJobs({
     store,
     userId,
     importId,
@@ -1153,8 +1281,7 @@ function startProcessing({ store, userId, importId, config, shouldDownload = tru
     embeddingDimensions: config.embeddingDimensions,
     indexingConcurrency: config.indexingConcurrency,
     credentialEncryptionKey: config.credentialEncryptionKey,
-  }).catch((error) => {
-    console.error('Background processing failed:', error);
+    maxJobs,
   });
 }
 

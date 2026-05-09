@@ -201,6 +201,14 @@ export function uploadImportChunk({ path, chunk, index, totalChunks }) {
   });
 }
 
+export function startIndexing(payload = {}) {
+  return request('/indexing/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ download: true, ...payload }),
+  });
+}
+
 export function saveLink(payload) {
   return request('/saves/link', {
     method: 'POST',

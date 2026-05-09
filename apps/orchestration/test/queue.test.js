@@ -24,14 +24,14 @@ test('createJobsForImport does not duplicate existing done or queued jobs', () =
   assert.deepEqual(jobs.map((job) => job.itemId), ['c']);
 });
 
-test('pickNextProcessableJob resumes queued and failed jobs but skips done jobs', () => {
+test('pickNextProcessableJob runs queued jobs but leaves failed jobs for restart', () => {
   const jobs = [
     { itemId: 'a', status: 'done' },
     { itemId: 'b', status: 'failed' },
     { itemId: 'c', status: 'queued' },
   ];
 
-  assert.equal(pickNextProcessableJob(jobs).itemId, 'b');
+  assert.equal(pickNextProcessableJob(jobs).itemId, 'c');
 });
 
 test('pickNextProcessableJob skips paused billing and provider jobs', () => {

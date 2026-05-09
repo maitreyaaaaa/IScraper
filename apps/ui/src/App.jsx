@@ -61,10 +61,10 @@ import {
   saveProviderCredential,
   searchItems,
   setApiAccessToken,
+  startIndexing,
   submitPublicFeedback,
   testProviderCredential,
   updateReviewItem,
-  uploadImportChunk,
 } from './api';
 import { identifyPostHogUser, resetPostHogUser } from './posthog';
 import { supabase } from './supabaseClient';
@@ -87,7 +87,6 @@ const STATUS_META = {
 const STATUSES = ['all', 'needs_review', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 const DIRECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
-const IMPORT_UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
 const HERO_PLATFORMS = [
   { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
   { name: 'X', src: '/platforms/x.svg', bg: '#fff' },
@@ -505,30 +504,25 @@ function rememberPendingSave() {
 }
 
 async function uploadImportFilesToStorage(files) {
-  const { uploads } = await createImportUploadUrls({ files });
+  if (!supabase) throw new Error('Direct uploads require Supabase login.');
+  const { bucket, uploads } = await createImportUploadUrls({ files });
   const uploaded = [];
 
   for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
     const file = files[fileIndex];
     const upload = uploads[fileIndex];
-    const totalChunks = Math.max(1, Math.ceil(file.size / IMPORT_UPLOAD_CHUNK_BYTES));
-    for (let index = 0; index < totalChunks; index += 1) {
-      const start = index * IMPORT_UPLOAD_CHUNK_BYTES;
-      const chunk = file.slice(start, Math.min(start + IMPORT_UPLOAD_CHUNK_BYTES, file.size));
-      await uploadImportChunk({
-        path: upload.path,
-        chunk,
-        index,
-        totalChunks,
-      });
+    const { error } = await supabase.storage.from(bucket).upload(upload.path, file, {
+      contentType: file.type || 'application/octet-stream',
+      upsert: false,
+    });
+    if (error) {
+      throw new Error(`Upload failed for ${file.name}: ${error.message}`);
     }
     uploaded.push({
       path: upload.path,
       name: file.name,
       type: file.type || 'application/octet-stream',
       size: file.size,
-      chunked: true,
-      totalChunks,
     });
   }
 
@@ -2838,13 +2832,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setNotice('');
     try {
       if (pendingReviews.length > 0) {
-        const approved = [];
-        for (const item of pendingReviews) {
-          const body = await approveReviewItem(item.id, { startProcessing: true });
-          approved.push(mapItem(body.item));
-        }
+        const body = await startIndexing();
+        const approved = (body.items || []).map(mapItem);
         setItems((current) => current.map((entry) => approved.find((item) => item.id === entry.id) || entry));
-        setNotice(`Started indexing ${approved.length} waiting saves. Refreshing results shortly.`);
+        setNotice(`Started indexing ${body.approvedCount || approved.length} waiting saves. Refreshing results shortly.`);
       } else {
         await restartQueue();
         setNotice('Queue restarted. Refreshing results shortly.');
@@ -4169,11 +4160,7 @@ function UploadTab({
             </div>
             <button
               type="button"
-              onClick={async () => {
-                for (const item of pendingReviews) {
-                  await onApproveReview(item);
-                }
-              }}
+              onClick={onRestart}
               disabled={busy}
               className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
             >

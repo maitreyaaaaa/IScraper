@@ -432,6 +432,22 @@ function createLocalStore({ dataPath }) {
       return state.jobs.filter((job) => job.userId === userId && (!importId || job.importId === importId));
     },
 
+    getProcessableJobScopes({ limit = 10 } = {}) {
+      const scopes = [];
+      const seen = new Set();
+      const queuedJobs = state.jobs
+        .filter((job) => job.status === 'queued')
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+      for (const job of queuedJobs) {
+        const key = `${job.userId}:${job.importId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        scopes.push({ userId: job.userId, importId: job.importId });
+        if (scopes.length >= limit) break;
+      }
+      return scopes;
+    },
+
     getJob(userId, id) {
       return state.jobs.find((job) => job.userId === userId && job.id === id) || null;
     },
@@ -439,6 +455,14 @@ function createLocalStore({ dataPath }) {
     updateJob(userId, id, patch) {
       const job = this.getJob(userId, id);
       if (!job) return null;
+      Object.assign(job, patch, { updatedAt: now() });
+      save();
+      return job;
+    },
+
+    claimJob(userId, id, patch) {
+      const job = this.getJob(userId, id);
+      if (!job || job.status !== 'queued') return null;
       Object.assign(job, patch, { updatedAt: now() });
       save();
       return job;

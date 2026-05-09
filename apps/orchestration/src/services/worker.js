@@ -57,14 +57,17 @@ async function processImportJobs({
   embeddingDimensions = 1536,
   credentialEncryptionKey = null,
   indexingConcurrency = 3,
+  maxJobs = Infinity,
 }) {
   fs.mkdirSync(videoDir, { recursive: true });
   const processed = [];
+  let attempted = 0;
   const concurrency = Math.max(1, Math.min(Number(indexingConcurrency) || 1, 5));
+  const jobLimit = Number.isFinite(Number(maxJobs)) ? Math.max(1, Number(maxJobs)) : Infinity;
 
-  while (true) {
+  while (attempted < jobLimit) {
     const jobs = await store.getJobs(userId, importId);
-    const batch = pickNextProcessableJobs(jobs, concurrency);
+    const batch = pickNextProcessableJobs(jobs, Math.min(concurrency, jobLimit - attempted));
     if (!batch.length) break;
 
     const batchResults = await Promise.all(batch.map((job) => processOneJob({
@@ -80,6 +83,7 @@ async function processImportJobs({
       embeddingDimensions,
       credentialEncryptionKey,
     })));
+    attempted += batch.length;
     processed.push(...batchResults.filter(Boolean));
   }
 
@@ -99,22 +103,34 @@ async function processOneJob({
   embeddingDimensions,
   credentialEncryptionKey,
 }) {
-  const item = await store.getItem(userId, job.itemId);
+  let currentJob = job;
+  const item = await store.getItem(userId, currentJob.itemId);
   if (!item) {
-    await store.updateJob(userId, job.id, {
+    await store.updateJob(userId, currentJob.id, {
       status: 'failed',
-      attempts: (job.attempts || 0) + 1,
+      attempts: (currentJob.attempts || 0) + 1,
       error: 'Saved item not found for job.',
     });
     return null;
   }
 
   try {
-    await store.updateJob(userId, job.id, {
-      status: 'downloading',
-      attempts: (job.attempts || 0) + 1,
-      error: null,
-    });
+    const nextAttempts = (currentJob.attempts || 0) + 1;
+    currentJob = typeof store.claimJob === 'function'
+      ? await store.claimJob(userId, currentJob.id, {
+          status: 'downloading',
+          attempts: nextAttempts,
+          error: null,
+        })
+      : await store.updateJob(userId, currentJob.id, {
+          status: 'downloading',
+          attempts: nextAttempts,
+          error: null,
+        });
+
+    if (!currentJob) return null;
+
+    await store.setItemStatus?.(userId, item.id, 'downloading', null);
 
     const analysisPlan = await chooseAnalysisPlan({
       store,
@@ -128,7 +144,7 @@ async function processOneJob({
     });
 
     let mediaPaths = [];
-    if (shouldDownload && item.contentType !== 'unknown') {
+    if (shouldDownload && requiresMediaAnalysis(item)) {
       try {
         const download = await downloadInstagramMedia({ url: item.url, outputDir: videoDir, id: item.id });
         mediaPaths = download.outputPaths || [];
@@ -137,7 +153,8 @@ async function processOneJob({
       }
     }
 
-    await store.updateJob(userId, job.id, { status: 'analyzing', error: null });
+    await store.updateJob(userId, currentJob.id, { status: 'analyzing', error: null });
+    await store.setItemStatus?.(userId, item.id, 'analyzing', null);
     if (requiresMediaAnalysis(item) && !mediaPaths.length) {
       throw new Error('Media file could not be downloaded for analysis.');
     }
@@ -189,10 +206,10 @@ async function processOneJob({
         console.warn(`OpenRouter embedding failed for ${item.id}: ${error.message}`);
       }
     }
-    return store.updateJob(userId, job.id, { status: 'done', error: null });
+    return store.updateJob(userId, currentJob.id, { status: 'done', error: null });
   } catch (error) {
     if (error.pauseStatus) {
-      await pauseJob({ store, userId, item, job, status: error.pauseStatus, message: error.message });
+      await pauseJob({ store, userId, item, job: currentJob, status: error.pauseStatus, message: error.message });
       return null;
     }
     if (isProviderLimitError(error)) {
@@ -200,16 +217,16 @@ async function processOneJob({
         store,
         userId,
         item,
-        job,
+        job: currentJob,
         status: 'paused_api_limit',
         message: 'Saved post did not process because your API limit was reached.',
       });
       return null;
     }
     await store.markItemFailed(userId, item.id, error.message);
-    await store.updateJob(userId, job.id, {
+    await store.updateJob(userId, currentJob.id, {
       status: 'failed',
-      attempts: (job.attempts || 0) + 1,
+      attempts: currentJob.attempts || (job.attempts || 0) + 1,
       error: error.message,
     });
     return null;

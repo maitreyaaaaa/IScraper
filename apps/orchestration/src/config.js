@@ -28,6 +28,10 @@ function getConfig() {
     credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY,
     adminApiKey: process.env.ADMIN_API_KEY,
     adminPassword: process.env.ADMIN_PASSWORD,
+    workerApiKey: process.env.WORKER_API_KEY || process.env.CRON_SECRET,
+    workerBatchSize: Number(process.env.WORKER_BATCH_SIZE || 10),
+    workerRateLimitMax: Number(process.env.WORKER_RATE_LIMIT_MAX || 30),
+    inlineIndexingEnabled: process.env.INLINE_INDEXING_ENABLED !== 'false',
     adminEmails: (process.env.ADMIN_EMAILS || '')
       .split(',')
       .map((email) => email.trim().toLowerCase())
@@ -38,6 +42,7 @@ function getConfig() {
       .map((origin) => origin.trim().replace(/\/$/, ''))
       .filter(Boolean),
     maxUploadFileSizeBytes: Number(process.env.MAX_UPLOAD_FILE_SIZE_BYTES || 25 * 1024 * 1024),
+    importChunkSizeBytes: Number(process.env.IMPORT_CHUNK_SIZE_BYTES || 4 * 1024 * 1024),
     importUploadBucket: process.env.IMPORT_UPLOAD_BUCKET || 'import-uploads',
     jsonBodyLimit: process.env.JSON_BODY_LIMIT || '1mb',
     rateLimitWindowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),

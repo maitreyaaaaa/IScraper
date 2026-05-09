@@ -310,6 +310,24 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data.map(mapJob);
     },
+    async getProcessableJobScopes({ limit = 10 } = {}) {
+      const { data, error } = await client
+        .from('processing_jobs')
+        .select('user_id,import_id')
+        .eq('status', 'queued')
+        .order('created_at')
+        .limit(Math.max(1, Math.min(Number(limit) || 10, 100)));
+      if (error) throw error;
+      const seen = new Set();
+      const scopes = [];
+      for (const row of data || []) {
+        const key = `${row.user_id}:${row.import_id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        scopes.push({ userId: row.user_id, importId: row.import_id });
+      }
+      return scopes;
+    },
     async getJob(userId, id) {
       const { data, error } = await client.from('processing_jobs').select('*').eq('user_id', userId).eq('id', id).maybeSingle();
       if (error) throw error;
@@ -325,6 +343,18 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .single();
       if (error) throw error;
       return mapJob(data);
+    },
+    async claimJob(userId, id, patch) {
+      const { data, error } = await client
+        .from('processing_jobs')
+        .update(toJobRow(patch))
+        .eq('user_id', userId)
+        .eq('id', id)
+        .eq('status', 'queued')
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapJob(data) : null;
     },
     async restartJobs(userId, importId = null) {
       const restartableStatuses = ['failed', 'downloading', 'analyzing', 'paused_needs_billing', 'paused_api_limit', 'paused_missing_provider'];
