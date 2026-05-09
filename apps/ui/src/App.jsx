@@ -493,10 +493,7 @@ async function uploadImportFilesToStorage(files) {
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
       const upload = uploads[index];
-      const { error } = await supabase.storage.from(bucket || IMPORT_UPLOAD_BUCKET).upload(upload.path, file, {
-        contentType: file.type || upload.type || 'application/octet-stream',
-        upsert: false,
-      });
+      const { error } = await supabase.storage.from(bucket || IMPORT_UPLOAD_BUCKET).uploadToSignedUrl(upload.path, upload.token, file);
       if (error) throw error;
       uploaded.push({
         path: upload.path,
