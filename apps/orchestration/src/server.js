@@ -73,21 +73,41 @@ function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
 
-function assertAdmin(req, config) {
-  if (!config.adminApiKey) {
+async function assertAdmin(req, config, store) {
+  const provided = req.header('x-admin-api-key') || '';
+  if (config.adminApiKey && provided) {
+    const expected = String(config.adminApiKey);
+    const validLength = Buffer.byteLength(provided) === Buffer.byteLength(expected);
+    const valid = validLength && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    if (valid) return { id: 'admin-api-key', email: req.header('x-admin-actor') || 'admin-api' };
+  }
+
+  const adminEmails = new Set((config.adminEmails || []).map((email) => String(email).toLowerCase()));
+  const email = String(req.header('x-admin-email') || '').trim().toLowerCase();
+  const password = String(req.header('x-admin-password') || '');
+  if (adminEmails.size && config.adminPassword && email && password) {
+    const expected = String(config.adminPassword);
+    const validLength = Buffer.byteLength(password) === Buffer.byteLength(expected);
+    const validPassword = validLength && crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expected));
+    if (validPassword && adminEmails.has(email)) return { id: email, email };
+  }
+
+  const auth = req.header('authorization') || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : null;
+  if (adminEmails.size && token && typeof store.getUserFromToken === 'function') {
+    const user = await store.getUserFromToken(token);
+    if (adminEmails.has(String(user.email || '').toLowerCase())) return user;
+  }
+
+  if (!config.adminApiKey && !adminEmails.size) {
     const error = new Error('Admin API is not configured.');
     error.statusCode = 503;
     throw error;
   }
-  const provided = req.header('x-admin-api-key') || '';
-  const expected = String(config.adminApiKey);
-  const validLength = Buffer.byteLength(provided) === Buffer.byteLength(expected);
-  const valid = validLength && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
-  if (!valid) {
-    const error = new Error('Admin access denied.');
-    error.statusCode = 403;
-    throw error;
-  }
+
+  const error = new Error('Admin access denied.');
+  error.statusCode = 403;
+  throw error;
 }
 
 function stripeFor(config) {
@@ -96,6 +116,14 @@ function stripeFor(config) {
 
 async function requireCompletedProfile(req, store) {
   if (!store.requiresAuth || typeof store.getProfile !== 'function') return;
+  if (typeof store.getUserAdminState === 'function') {
+    const state = await store.getUserAdminState(req.user.id);
+    if (state?.status === 'blocked') {
+      const error = new Error('This account is blocked. Contact support if this looks wrong.');
+      error.statusCode = 403;
+      throw error;
+    }
+  }
   const profile = await store.getProfile(req.user.id);
   if (!profile?.username) {
     const error = new Error('Create your username before importing saved posts.');
@@ -154,7 +182,7 @@ function contentSecurityPolicy() {
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: https:",
     "media-src 'self' data: blob: https:",
-    "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+    "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://us.i.posthog.com https://eu.i.posthog.com",
     "worker-src 'self' blob:",
     "manifest-src 'self'",
     "form-action 'self'",
@@ -326,17 +354,117 @@ function createApp({ store, config = {} }) {
     return res.status(201).json({ feedback });
   }));
 
+  app.post('/api/admin/login', adminRateLimit, asyncRoute(async (req, res) => {
+    const email = cleanText(req.body?.email, 240).toLowerCase();
+    const password = String(req.body?.password || '');
+    const adminEmails = new Set((config.adminEmails || []).map((entry) => String(entry).toLowerCase()));
+    if (!adminEmails.size || !config.adminPassword) return res.status(503).json({ error: 'Admin password login is not configured.' });
+
+    const expected = String(config.adminPassword);
+    const validLength = Buffer.byteLength(password) === Buffer.byteLength(expected);
+    const validPassword = validLength && crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expected));
+    if (!email || !adminEmails.has(email) || !validPassword) {
+      return res.status(403).json({ error: 'Invalid admin email or password.' });
+    }
+
+    return res.json({ admin: { email } });
+  }));
+
+  app.get('/api/admin/summary', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof store.getAdminSummary !== 'function') return res.status(501).json({ error: 'Admin summary is not available.' });
+    res.json({ summary: await store.getAdminSummary() });
+  }));
+
+  app.get('/api/admin/users', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof store.listAdminUsers !== 'function') return res.status(501).json({ error: 'Admin users are not available.' });
+    const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 100);
+    const offset = Math.max(Number(req.query.offset || 0), 0);
+    const query = String(req.query.q || '').trim();
+    res.json(await store.listAdminUsers({ query, limit, offset }));
+  }));
+
+  app.get('/api/admin/users/:userId', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof store.getAdminUserDetail !== 'function') return res.status(501).json({ error: 'Admin user details are not available.' });
+    const user = await store.getAdminUserDetail(req.params.userId);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    res.json({ user });
+  }));
+
+  app.post('/api/admin/users/:userId/block', adminRateLimit, asyncRoute(async (req, res) => {
+    const adminUser = await assertAdmin(req, config, store);
+    if (typeof store.setUserBlocked !== 'function') return res.status(501).json({ error: 'User blocking is not available.' });
+    const reason = cleanText(req.body?.reason || 'Blocked by admin', 240);
+    const user = await store.setUserBlocked({
+      userId: req.params.userId,
+      blocked: true,
+      reason,
+      adminActor: adminUser.email || 'admin',
+    });
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    res.json({ user });
+  }));
+
+  app.post('/api/admin/users/:userId/unblock', adminRateLimit, asyncRoute(async (req, res) => {
+    const adminUser = await assertAdmin(req, config, store);
+    if (typeof store.setUserBlocked !== 'function') return res.status(501).json({ error: 'User blocking is not available.' });
+    const user = await store.setUserBlocked({
+      userId: req.params.userId,
+      blocked: false,
+      reason: cleanText(req.body?.reason || 'Unblocked by admin', 240),
+      adminActor: adminUser.email || 'admin',
+    });
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    res.json({ user });
+  }));
+
+  app.get('/api/admin/imports', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof store.listAdminImports !== 'function') return res.status(501).json({ error: 'Admin imports are not available.' });
+    res.json({ imports: await store.listAdminImports({ limit: 50 }) });
+  }));
+
+  app.get('/api/admin/activity', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof store.listAdminActivity !== 'function') return res.status(501).json({ error: 'Admin activity is not available.' });
+    res.json({ activity: await store.listAdminActivity({ limit: 100 }) });
+  }));
+
+  app.get('/api/admin/feedback', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof store.listAdminFeedback !== 'function') return res.status(501).json({ error: 'Admin feedback is not available.' });
+    res.json({ feedback: await store.listAdminFeedback({ limit: 100 }) });
+  }));
+
+  app.post('/api/admin/feedback/:id/hide', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof store.setFeedbackStatus !== 'function') return res.status(501).json({ error: 'Feedback moderation is not available.' });
+    const feedback = await store.setFeedbackStatus(req.params.id, 'hidden');
+    if (!feedback) return res.status(404).json({ error: 'Feedback not found.' });
+    res.json({ feedback });
+  }));
+
+  app.post('/api/admin/feedback/:id/show', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof store.setFeedbackStatus !== 'function') return res.status(501).json({ error: 'Feedback moderation is not available.' });
+    const feedback = await store.setFeedbackStatus(req.params.id, 'visible');
+    if (!feedback) return res.status(404).json({ error: 'Feedback not found.' });
+    res.json({ feedback });
+  }));
+
   app.get('/api/admin/credits/:userId', adminRateLimit, asyncRoute(async (req, res) => {
-    assertAdmin(req, config);
+    await assertAdmin(req, config, store);
     res.json({ credits: await store.getCredits(req.params.userId) });
   }));
 
   app.post('/api/admin/credits/adjust', adminRateLimit, asyncRoute(async (req, res) => {
-    assertAdmin(req, config);
+    const adminUser = await assertAdmin(req, config, store);
     const userId = String(req.body?.userId || '').trim();
     const amount = Number(req.body?.amount);
     const reason = String(req.body?.reason || '').trim().slice(0, 240);
-    const adminActor = String(req.header('x-admin-actor') || 'admin-api').trim().slice(0, 120);
+    const adminActor = String(req.header('x-admin-actor') || adminUser.email || 'admin-api').trim().slice(0, 120);
 
     if (!userId) return res.status(400).json({ error: 'userId is required.' });
     if (!Number.isInteger(amount) || amount === 0) return res.status(400).json({ error: 'amount must be a non-zero whole number.' });
@@ -461,6 +589,17 @@ function createApp({ store, config = {} }) {
   app.get('/api/profile', asyncRoute(async (req, res) => {
     const profile = typeof store.getProfile === 'function' ? await store.getProfile(req.user.id) : null;
     res.json({ profile, required: Boolean(store.requiresAuth && !profile?.username) });
+  }));
+
+  app.post('/api/activity/sign-in', asyncRoute(async (req, res) => {
+    if (typeof store.recordUserActivity === 'function') {
+      await store.recordUserActivity({
+        userId: req.user.id,
+        eventType: 'sign_in',
+        metadata: { email: req.user.email },
+      });
+    }
+    res.json({ ok: true });
   }));
 
   app.post('/api/profile', asyncRoute(async (req, res) => {

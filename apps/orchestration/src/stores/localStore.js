@@ -43,6 +43,8 @@ function seedFromLegacyIndex(dataPath) {
     analysisUsageEvents: [],
     adminCreditAdjustments: [],
     feedback: [],
+    userAdminStates: [],
+    userActivityEvents: [],
     profiles: [],
     extensionTokens: [],
     lensSearchEvents: [],
@@ -112,9 +114,46 @@ function normalizeState(state) {
     analysisUsageEvents: state.analysisUsageEvents || [],
     adminCreditAdjustments: state.adminCreditAdjustments || [],
     feedback: state.feedback || [],
+    userAdminStates: state.userAdminStates || [],
+    userActivityEvents: state.userActivityEvents || [],
     profiles: state.profiles || [],
     extensionTokens: state.extensionTokens || [],
     lensSearchEvents: state.lensSearchEvents || [],
+  };
+}
+
+function adminUserSummary(state, user, credits) {
+  const profile = state.profiles.find((entry) => entry.userId === user.id) || null;
+  const adminState = state.userAdminStates.find((entry) => entry.userId === user.id) || null;
+  const items = state.items.filter((entry) => entry.userId === user.id);
+  const itemStats = items.reduce((stats, item) => {
+    stats.total += 1;
+    stats.byStatus[item.status || 'unknown'] = (stats.byStatus[item.status || 'unknown'] || 0) + 1;
+    return stats;
+  }, { total: 0, byStatus: {} });
+  const usageStats = state.analysisUsageEvents
+    .filter((entry) => entry.userId === user.id)
+    .reduce((stats, entry) => {
+      stats[entry.source || 'unknown'] = (stats[entry.source || 'unknown'] || 0) + 1;
+      return stats;
+    }, {});
+
+  return {
+    id: user.id,
+    email: user.email,
+    createdAt: user.createdAt,
+    lastSignInAt: user.lastSignInAt || null,
+    profile: profile ? publicProfile(profile) : null,
+    adminState: adminState || { userId: user.id, status: 'active', blockedAt: null, blockedReason: '' },
+    credits,
+    itemStats: {
+      ...itemStats,
+      indexed: itemStats.byStatus.done || 0,
+      queued: itemStats.byStatus.queued || 0,
+      failed: itemStats.byStatus.failed || 0,
+      needsReview: itemStats.byStatus.needs_review || 0,
+    },
+    usageStats,
   };
 }
 
@@ -135,6 +174,33 @@ function createLocalStore({ dataPath }) {
 
   return {
     ensureUser,
+
+    getUserAdminState(userId) {
+      return state.userAdminStates.find((entry) => entry.userId === userId) || { userId, status: 'active' };
+    },
+
+    setUserBlocked({ userId, blocked, reason, adminActor }) {
+      const user = state.users.find((entry) => entry.id === userId);
+      if (!user) return null;
+      let adminState = state.userAdminStates.find((entry) => entry.userId === userId);
+      if (!adminState) {
+        adminState = { userId, status: 'active', blockedAt: null, blockedReason: '', updatedAt: now() };
+        state.userAdminStates.push(adminState);
+      }
+      Object.assign(adminState, {
+        status: blocked ? 'blocked' : 'active',
+        blockedAt: blocked ? now() : null,
+        blockedReason: blocked ? reason : '',
+        updatedAt: now(),
+      });
+      this.recordUserActivity({
+        userId,
+        eventType: blocked ? 'admin_blocked' : 'admin_unblocked',
+        metadata: { reason, adminActor },
+      });
+      save();
+      return this.getAdminUserDetail(userId);
+    },
 
     getProfile(userId) {
       return publicProfile(state.profiles.find((profile) => profile.userId === userId) || null);
@@ -246,6 +312,21 @@ function createLocalStore({ dataPath }) {
       return entry;
     },
 
+    listAdminFeedback({ limit = 100 } = {}) {
+      return [...state.feedback]
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, limit);
+    },
+
+    setFeedbackStatus(id, status) {
+      const feedback = state.feedback.find((entry) => entry.id === id);
+      if (!feedback) return null;
+      feedback.status = status;
+      feedback.updatedAt = now();
+      save();
+      return feedback;
+    },
+
     createImport({ userId, source, mode = 'export', fileNames = [] }) {
       const entry = {
         id: `import-${Date.now()}`,
@@ -258,6 +339,11 @@ function createLocalStore({ dataPath }) {
         updatedAt: now(),
       };
       state.imports.push(entry);
+      this.recordUserActivity({
+        userId,
+        eventType: 'import_created',
+        metadata: { importId: entry.id, source, fileCount: fileNames.length },
+      });
       save();
       return entry;
     },
@@ -510,9 +596,27 @@ function createLocalStore({ dataPath }) {
         createdAt: now(),
       };
       state.analysisUsageEvents.push(event);
+      this.recordUserActivity({
+        userId,
+        eventType: 'analysis_used',
+        metadata: { itemId, source, provider, model },
+      });
       if (source === 'paid') {
         this.addCreditTransaction({ userId, amount: -1, reason: 'item_analysis', itemId });
       }
+      save();
+      return event;
+    },
+
+    recordUserActivity({ userId, eventType, metadata = {} }) {
+      const event = {
+        id: `activity-${Date.now()}-${state.userActivityEvents.length + 1}`,
+        userId,
+        eventType,
+        metadata,
+        createdAt: now(),
+      };
+      state.userActivityEvents.push(event);
       save();
       return event;
     },
@@ -558,6 +662,112 @@ function createLocalStore({ dataPath }) {
       state.adminCreditAdjustments.push(adjustment);
       save();
       return { adjustment, transaction, credits: this.getCredits(userId) };
+    },
+
+    getAdminSummary() {
+      const today = Date.now() - 24 * 60 * 60 * 1000;
+      const week = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const itemStatuses = state.items.reduce((stats, item) => {
+        stats[item.status || 'unknown'] = (stats[item.status || 'unknown'] || 0) + 1;
+        return stats;
+      }, {});
+      const usageBySource = state.analysisUsageEvents.reduce((stats, event) => {
+        stats[event.source || 'unknown'] = (stats[event.source || 'unknown'] || 0) + 1;
+        return stats;
+      }, {});
+      const completedPurchases = state.creditPurchases.filter((purchase) => purchase.status === 'completed');
+
+      return {
+        users: {
+          total: state.users.length,
+          newToday: state.users.filter((user) => new Date(user.createdAt || 0).getTime() >= today).length,
+          newThisWeek: state.users.filter((user) => new Date(user.createdAt || 0).getTime() >= week).length,
+        },
+        items: {
+          total: state.items.length,
+          indexed: itemStatuses.done || 0,
+          queued: itemStatuses.queued || 0,
+          failed: itemStatuses.failed || 0,
+          needsReview: itemStatuses.needs_review || 0,
+          byStatus: itemStatuses,
+        },
+        credits: {
+          freeUsed: usageBySource.free || 0,
+          paidUsed: usageBySource.paid || 0,
+          byokUsed: usageBySource.byok || 0,
+          paidCreditsAvailable: state.creditTransactions.reduce((total, entry) => total + Number(entry.amount || 0), 0),
+        },
+        purchases: {
+          completed: completedPurchases.length,
+          revenueCents: completedPurchases.reduce((total, purchase) => total + Number(purchase.amountCents || 0), 0),
+        },
+        feedback: {
+          total: state.feedback.length,
+          visible: state.feedback.filter((entry) => entry.status !== 'hidden').length,
+        },
+      };
+    },
+
+    listAdminUsers({ query = '', limit = 50, offset = 0 } = {}) {
+      const needle = String(query || '').trim().toLowerCase();
+      const rows = state.users
+        .map((user) => adminUserSummary(state, user, this.getCredits(user.id)))
+        .filter((user) => !needle || [user.email, user.profile?.username].some((value) => String(value || '').toLowerCase().includes(needle)))
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+
+      return {
+        users: rows.slice(offset, offset + limit),
+        total: rows.length,
+        limit,
+        offset,
+      };
+    },
+
+    getAdminUserDetail(userId) {
+      const user = state.users.find((entry) => entry.id === userId);
+      if (!user) return null;
+      return {
+        ...adminUserSummary(state, user, this.getCredits(user.id)),
+        creditTransactions: state.creditTransactions
+          .filter((entry) => entry.userId === user.id)
+          .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+          .slice(0, 100),
+        purchases: state.creditPurchases
+          .filter((entry) => entry.userId === user.id)
+          .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+          .slice(0, 50),
+        adminAdjustments: state.adminCreditAdjustments
+          .filter((entry) => entry.userId === user.id)
+          .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+          .slice(0, 50),
+      };
+    },
+
+    listAdminImports({ limit = 50 } = {}) {
+      return [...state.imports]
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, limit)
+        .map((entry) => ({
+          ...entry,
+          user: state.users.find((user) => user.id === entry.userId) || null,
+          itemCount: state.items.filter((item) => item.importId === entry.id).length,
+          jobStats: state.jobs
+            .filter((job) => job.importId === entry.id)
+            .reduce((stats, job) => {
+              stats[job.status || 'unknown'] = (stats[job.status || 'unknown'] || 0) + 1;
+              return stats;
+            }, {}),
+        }));
+    },
+
+    listAdminActivity({ limit = 100 } = {}) {
+      return [...state.userActivityEvents]
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, limit)
+        .map((entry) => ({
+          ...entry,
+          user: state.users.find((user) => user.id === entry.userId) || null,
+        }));
     },
 
     listProviderCredentials(userId) {

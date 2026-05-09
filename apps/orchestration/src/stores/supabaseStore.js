@@ -34,6 +34,37 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .upsert({ user_id: userId, free_items_limit: FREE_ITEMS_LIMIT }, { onConflict: 'user_id' })
         .throwOnError();
     },
+    async getUserAdminState(userId) {
+      const { data, error } = await client
+        .from('user_admin_states')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (error && error.code === '42P01') return { userId, status: 'active' };
+      if (error) throw error;
+      return data ? mapUserAdminState(data) : { userId, status: 'active' };
+    },
+    async setUserBlocked({ userId, blocked, reason, adminActor }) {
+      const { data: user, error: userError } = await client.from('users').select('*').eq('id', userId).maybeSingle();
+      if (userError) throw userError;
+      if (!user) return null;
+      await client
+        .from('user_admin_states')
+        .upsert({
+          user_id: userId,
+          status: blocked ? 'blocked' : 'active',
+          blocked_at: blocked ? new Date().toISOString() : null,
+          blocked_reason: blocked ? reason : null,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id' })
+        .throwOnError();
+      await this.recordUserActivity({
+        userId,
+        eventType: blocked ? 'admin_blocked' : 'admin_unblocked',
+        metadata: { reason, adminActor },
+      });
+      return this.getAdminUserDetail(userId);
+    },
     async getProfile(userId) {
       const { data, error } = await client
         .from('user_profiles')
@@ -147,6 +178,25 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return mapFeedback(data);
     },
+    async listAdminFeedback({ limit = 100 } = {}) {
+      const { data, error } = await client
+        .from('public_feedback')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return data.map(mapFeedback);
+    },
+    async setFeedbackStatus(id, status) {
+      const { data, error } = await client
+        .from('public_feedback')
+        .update({ status })
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapFeedback(data) : null;
+    },
     async createImport({ userId, source, mode = 'export', fileNames = [] }) {
       const { data, error } = await client
         .from('imports')
@@ -154,6 +204,11 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .select('*')
         .single();
       if (error) throw error;
+      await this.recordUserActivity({
+        userId,
+        eventType: 'import_created',
+        metadata: { importId: data.id, source, fileCount: fileNames.length },
+      });
       return mapImport(data);
     },
     async upsertImportData({ userId, importId, parsed, initialStatus = 'queued' }) {
@@ -428,9 +483,24 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .from('analysis_usage_events')
         .upsert({ user_id: userId, item_id: itemId, source, provider, model }, { onConflict: 'user_id,item_id,source' });
       if (error) throw error;
+      await this.recordUserActivity({
+        userId,
+        eventType: 'analysis_used',
+        metadata: { itemId, source, provider, model },
+      });
       if (source === 'paid') {
         await this.addCreditTransaction({ userId, amount: -1, reason: 'item_analysis', itemId });
       }
+    },
+    async recordUserActivity({ userId, eventType, metadata = {} }) {
+      const { data, error } = await client
+        .from('user_activity_events')
+        .insert({ user_id: userId, event_type: eventType, metadata })
+        .select('*')
+        .single();
+      if (error && error.code === '42P01') return null;
+      if (error) throw error;
+      return mapUserActivity(data);
     },
     async addCreditTransaction({ userId, amount, reason = 'manual', itemId = null, metadata = {} }) {
       const numericAmount = Number(amount || 0);
@@ -464,6 +534,144 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .single();
       if (error) throw error;
       return { adjustment: data, credits: await this.getCredits(userId) };
+    },
+    async getAdminSummary() {
+      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const [totalUsers, newToday, newThisWeek, totalItems, indexed, queued, failed, needsReview, feedbackTotal, feedbackVisible] = await Promise.all([
+        countRows(client, 'users'),
+        countRows(client, 'users', (query) => query.gte('created_at', dayAgo)),
+        countRows(client, 'users', (query) => query.gte('created_at', weekAgo)),
+        countRows(client, 'saved_items'),
+        countRows(client, 'saved_items', (query) => query.eq('status', 'done')),
+        countRows(client, 'saved_items', (query) => query.eq('status', 'queued')),
+        countRows(client, 'saved_items', (query) => query.eq('status', 'failed')),
+        countRows(client, 'saved_items', (query) => query.eq('status', 'needs_review')),
+        countRows(client, 'public_feedback'),
+        countRows(client, 'public_feedback', (query) => query.eq('status', 'visible')),
+      ]);
+      const usageRows = await selectRows(client, 'analysis_usage_events', 'source', 10000);
+      const purchaseRows = await selectRows(client, 'credit_purchases', 'status,amount_cents', 10000);
+      const transactionRows = await selectRows(client, 'credit_transactions', 'amount', 10000);
+      const usageBySource = countField(usageRows, 'source');
+      const completedPurchases = purchaseRows.filter((row) => row.status === 'completed');
+
+      return {
+        users: { total: totalUsers, newToday, newThisWeek },
+        items: {
+          total: totalItems,
+          indexed,
+          queued,
+          failed,
+          needsReview,
+          byStatus: { done: indexed, queued, failed, needs_review: needsReview },
+        },
+        credits: {
+          freeUsed: usageBySource.free || 0,
+          paidUsed: usageBySource.paid || 0,
+          byokUsed: usageBySource.byok || 0,
+          paidCreditsAvailable: transactionRows.reduce((total, row) => total + Number(row.amount || 0), 0),
+        },
+        purchases: {
+          completed: completedPurchases.length,
+          revenueCents: completedPurchases.reduce((total, row) => total + Number(row.amount_cents || 0), 0),
+        },
+        feedback: { total: feedbackTotal, visible: feedbackVisible },
+      };
+    },
+    async listAdminUsers({ query = '', limit = 50, offset = 0 } = {}) {
+      const search = String(query || '').trim();
+      let profileUserIds = [];
+      if (search) {
+        const { data: profileMatches, error: profileError } = await client
+          .from('user_profiles')
+          .select('user_id')
+          .ilike('username', `%${search}%`)
+          .limit(100);
+        if (profileError) throw profileError;
+        profileUserIds = (profileMatches || []).map((row) => row.user_id);
+      }
+
+      let usersQuery = client.from('users').select('*', { count: 'exact' }).order('created_at', { ascending: false });
+      if (search) {
+        const filters = [`email.ilike.%${search}%`];
+        if (profileUserIds.length) filters.push(`id.in.(${profileUserIds.join(',')})`);
+        usersQuery = usersQuery.or(filters.join(','));
+      }
+      const { data, error, count } = await usersQuery.range(offset, offset + limit - 1);
+      if (error) throw error;
+      const users = await Promise.all((data || []).map((user) => this.getAdminUserSummary(user)));
+      return { users, total: count || 0, limit, offset };
+    },
+    async getAdminUserSummary(user) {
+      const [profile, credits, itemStats, usageStats, adminState] = await Promise.all([
+        this.getProfile(user.id),
+        this.getCredits(user.id),
+        getUserItemStats(client, user.id),
+        getUserUsageStats(client, user.id),
+        this.getUserAdminState(user.id),
+      ]);
+      return {
+        id: user.id,
+        email: user.email,
+        createdAt: user.created_at,
+        lastSignInAt: null,
+        profile,
+        adminState,
+        credits,
+        itemStats,
+        usageStats,
+      };
+    },
+    async getAdminUserDetail(userId) {
+      const { data: user, error } = await client.from('users').select('*').eq('id', userId).maybeSingle();
+      if (error) throw error;
+      if (!user) return null;
+      const [summary, transactions, purchases, adjustments] = await Promise.all([
+        this.getAdminUserSummary(user),
+        selectUserRows(client, 'credit_transactions', userId, '*', 100),
+        selectUserRows(client, 'credit_purchases', userId, '*', 50),
+        selectUserRows(client, 'admin_credit_adjustments', userId, '*', 50),
+      ]);
+
+      return {
+        ...summary,
+        creditTransactions: transactions.map(mapCreditTransaction),
+        purchases: purchases.map(mapCreditPurchase),
+        adminAdjustments: adjustments.map(mapAdminCreditAdjustment),
+      };
+    },
+    async listAdminImports({ limit = 50 } = {}) {
+      const { data, error } = await client
+        .from('imports')
+        .select('*, users(id,email)')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return Promise.all((data || []).map(async (row) => {
+        const [itemCount, jobs] = await Promise.all([
+          countRows(client, 'saved_items', (query) => query.eq('import_id', row.id)),
+          selectRows(client, 'processing_jobs', 'status', 10000, (query) => query.eq('import_id', row.id)),
+        ]);
+        return {
+          ...mapImport(row),
+          createdAt: row.created_at,
+          fileNames: row.file_names || [],
+          user: row.users || null,
+          itemCount,
+          jobStats: countField(jobs, 'status'),
+        };
+      }));
+    },
+    async listAdminActivity({ limit = 100 } = {}) {
+      const { data, error } = await client
+        .from('user_activity_events')
+        .select('*, users(id,email)')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error && error.code === '42P01') return [];
+      if (error) throw error;
+      return data.map((row) => ({ ...mapUserActivity(row), user: row.users || null }));
     },
     async listProviderCredentials(userId) {
       const { data, error } = await client
@@ -570,6 +778,58 @@ function mapImport(row) {
 
 function escapeSupabaseListValue(value) {
   return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+async function countRows(client, table, apply = null) {
+  let query = client.from(table).select('*', { count: 'exact', head: true });
+  if (apply) query = apply(query);
+  const { count, error } = await query;
+  if (error) throw error;
+  return count || 0;
+}
+
+async function selectRows(client, table, columns = '*', limit = 1000, apply = null) {
+  let query = client.from(table).select(columns).limit(limit);
+  if (apply) query = apply(query);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+async function selectUserRows(client, table, userId, columns = '*', limit = 100) {
+  const { data, error } = await client
+    .from(table)
+    .select(columns)
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+
+function countField(rows, field) {
+  return rows.reduce((stats, row) => {
+    stats[row[field] || 'unknown'] = (stats[row[field] || 'unknown'] || 0) + 1;
+    return stats;
+  }, {});
+}
+
+async function getUserItemStats(client, userId) {
+  const rows = await selectUserRows(client, 'saved_items', userId, 'status', 10000);
+  const byStatus = countField(rows, 'status');
+  return {
+    total: rows.length,
+    indexed: byStatus.done || 0,
+    queued: byStatus.queued || 0,
+    failed: byStatus.failed || 0,
+    needsReview: byStatus.needs_review || 0,
+    byStatus,
+  };
+}
+
+async function getUserUsageStats(client, userId) {
+  const rows = await selectUserRows(client, 'analysis_usage_events', userId, 'source', 10000);
+  return countField(rows, 'source');
 }
 
 function mapItem(row) {
@@ -718,6 +978,29 @@ function mapCreditPurchase(row) {
   };
 }
 
+function mapCreditTransaction(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    amount: row.amount,
+    reason: row.reason,
+    itemId: row.item_id,
+    metadata: row.metadata || {},
+    createdAt: row.created_at,
+  };
+}
+
+function mapAdminCreditAdjustment(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    amount: row.amount,
+    reason: row.reason,
+    adminActor: row.admin_actor,
+    createdAt: row.created_at,
+  };
+}
+
 function mapFeedback(row) {
   return {
     id: row.id,
@@ -725,6 +1008,26 @@ function mapFeedback(row) {
     message: row.message,
     displayName: row.display_name || 'Anonymous user',
     status: row.status,
+    createdAt: row.created_at,
+  };
+}
+
+function mapUserAdminState(row) {
+  return {
+    userId: row.user_id,
+    status: row.status || 'active',
+    blockedAt: row.blocked_at,
+    blockedReason: row.blocked_reason || '',
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapUserActivity(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    eventType: row.event_type,
+    metadata: row.metadata || {},
     createdAt: row.created_at,
   };
 }

@@ -60,6 +60,14 @@ export function getProfile() {
   return request('/profile');
 }
 
+export function recordSignInActivity() {
+  return request('/activity/sign-in', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
 export function saveProfile(payload) {
   return request('/profile', {
     method: 'POST',

@@ -63,6 +63,7 @@ import {
   testProviderCredential,
   updateReviewItem,
 } from './api';
+import { identifyPostHogUser, resetPostHogUser } from './posthog';
 import { supabase } from './supabaseClient';
 
 gsap.registerPlugin(ScrollTrigger);
@@ -498,9 +499,13 @@ function LoginPage({ onBack, onOpenApp }) {
     const { data } = await supabase.auth.getSession();
     setSession(data.session);
     setApiAccessToken(data.session?.access_token);
-    if (!data.session) return;
+    if (!data.session) {
+      resetPostHogUser();
+      return;
+    }
     const profileBody = await getProfile();
     applyProfileState(profileBody.profile, profileBody.required);
+    identifyPostHogUser(data.session, profileBody.profile);
     cleanAuthCallbackUrl();
   }, [applyProfileState]);
 
@@ -527,6 +532,7 @@ function LoginPage({ onBack, onOpenApp }) {
       } else {
         setProfile(null);
         setProfileRequired(false);
+        resetPostHogUser();
       }
     });
 
@@ -613,6 +619,7 @@ function LoginPage({ onBack, onOpenApp }) {
     try {
       const body = await saveProfile(profileForm);
       applyProfileState(body.profile, false);
+      identifyPostHogUser(session, body.profile);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -811,13 +818,20 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
       setApiAccessToken(session?.access_token);
       if (!session) {
         setLandingProfile(null);
+        resetPostHogUser();
         return;
       }
       try {
         const body = await getProfile();
-        if (!cancelled) setLandingProfile(body.profile || null);
+        if (!cancelled) {
+          setLandingProfile(body.profile || null);
+          identifyPostHogUser(session, body.profile);
+        }
       } catch {
-        if (!cancelled) setLandingProfile(null);
+        if (!cancelled) {
+          setLandingProfile(null);
+          identifyPostHogUser(session, null);
+        }
       }
     };
 
@@ -2187,7 +2201,7 @@ const LEGAL_CONTENT = {
     sections: [
       ['Essential storage', 'IScraper may use browser storage and Supabase Auth session storage to keep you signed in and remember app state. This is needed for the app to work.'],
       ['Local preferences', 'The site may remember small preferences such as dismissed popups, pending save links, and temporary UI state in local storage.'],
-      ['Analytics and ads', 'IScraper does not currently use advertising cookies or third-party ad tracking cookies. If analytics are added later, this notice should be updated before public use.'],
+      ['Analytics and ads', 'IScraper may use privacy-conscious analytics to understand basic product usage. IScraper does not currently use advertising cookies.'],
       ['Browser controls', 'You can clear cookies and local storage from your browser settings. Doing this may sign you out or reset app preferences.'],
       ['Contact', `Questions about cookies or browser storage can be sent to ${SUPPORT_EMAIL}.`],
     ],
@@ -2436,11 +2450,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
 
   useEffect(() => {
     let cancelled = false;
-    const initialize = async () => {
+    const initialize = async (currentSession) => {
       try {
         if (authEnabled) {
           const profileBody = await getProfile();
           applyProfileState(profileBody.profile, profileBody.required);
+          identifyPostHogUser(currentSession, profileBody.profile);
           if (profileBody.required) return;
         }
         await Promise.all([loadItems(), loadControls()]);
@@ -2462,11 +2477,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setSession(data.session);
       setApiAccessToken(data.session?.access_token);
       if (data.session) {
-        initialize().finally(() => cleanAuthCallbackUrl());
+        initialize(data.session).finally(() => cleanAuthCallbackUrl());
       } else {
         setItems([]);
         setCredentials([]);
         setLoading(false);
+        resetPostHogUser();
       }
     });
 
@@ -2474,13 +2490,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setSession(nextSession);
       setApiAccessToken(nextSession?.access_token);
       if (nextSession) {
-        initialize().finally(() => cleanAuthCallbackUrl());
+        initialize(nextSession).finally(() => cleanAuthCallbackUrl());
       } else {
         setItems([]);
         setCredentials([]);
         setProfile(null);
         setProfileRequired(false);
         setLoading(false);
+        resetPostHogUser();
       }
     });
 
@@ -2558,6 +2575,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     try {
       const body = await saveProfile(profileForm);
       applyProfileState(body.profile, false);
+      identifyPostHogUser(session, body.profile);
       await Promise.all([loadItems(), loadControls()]);
       setNotice('Profile saved. Your private library is ready.');
     } catch (err) {
@@ -3111,6 +3129,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     try {
       const body = await saveProfile(profileForm);
       onProfileSaved?.(body.profile);
+      identifyPostHogUser(session, body.profile);
       setMessage('Profile saved.');
     } catch (err) {
       setError(err.message);

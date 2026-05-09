@@ -23,7 +23,7 @@ test('API responses include a restrictive content security policy', async () => 
     assert.match(csp, /default-src 'self'/);
     assert.match(csp, /object-src 'none'/);
     assert.match(csp, /frame-ancestors 'none'/);
-    assert.match(csp, /connect-src 'self' https:\/\/\*\.supabase\.co wss:\/\/\*\.supabase\.co/);
+    assert.match(csp, /connect-src 'self' https:\/\/\*\.supabase\.co wss:\/\/\*\.supabase\.co https:\/\/us\.i\.posthog\.com https:\/\/eu\.i\.posthog\.com/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -624,6 +624,231 @@ test('admin credit adjustment requires API key and updates paid credits', async 
     assert.equal(deniedResponse.status, 403);
     assert.equal(adjustResponse.status, 201);
     assert.equal(body.credits.paidCredits, 10);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('admin endpoints allow listed Google admin emails and block other signed-in users', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  store.getUserFromToken = async (token) => (
+    token === 'admin-token'
+      ? { id: 'admin-user', email: 'owner@example.com' }
+      : { id: 'regular-user', email: 'user@example.com' }
+  );
+  const app = createApp({ store, config: { adminEmails: ['owner@example.com'] } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    await store.ensureUser('user-1', 'user@example.com');
+    await store.saveProfile('user-1', { username: 'user_one' });
+    await store.recordUsage({ userId: 'user-1', itemId: 'item-1', source: 'free' });
+
+    const denied = await fetch(`http://127.0.0.1:${port}/api/admin/summary`, {
+      headers: { Authorization: 'Bearer regular-token' },
+    });
+    const summaryResponse = await fetch(`http://127.0.0.1:${port}/api/admin/summary`, {
+      headers: { Authorization: 'Bearer admin-token' },
+    });
+    const usersResponse = await fetch(`http://127.0.0.1:${port}/api/admin/users?q=user_one`, {
+      headers: { Authorization: 'Bearer admin-token' },
+    });
+    const summary = await summaryResponse.json();
+    const users = await usersResponse.json();
+
+    assert.equal(denied.status, 403);
+    assert.equal(summaryResponse.status, 200);
+    assert.equal(summary.summary.users.total, 1);
+    assert.equal(summary.summary.credits.freeUsed, 1);
+    assert.equal(usersResponse.status, 200);
+    assert.equal(users.total, 1);
+    assert.equal(users.users[0].profile.username, 'user_one');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('admin password login allows email/password admin requests', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({
+    store,
+    config: {
+      adminEmails: ['owner@example.com'],
+      adminPassword: 'correct-password',
+    },
+  });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    await store.ensureUser('user-1', 'user@example.com');
+
+    const badLogin = await fetch(`http://127.0.0.1:${port}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'owner@example.com', password: 'wrong' }),
+    });
+    const goodLogin = await fetch(`http://127.0.0.1:${port}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'owner@example.com', password: 'correct-password' }),
+    });
+    const summary = await fetch(`http://127.0.0.1:${port}/api/admin/summary`, {
+      headers: {
+        'x-admin-email': 'owner@example.com',
+        'x-admin-password': 'correct-password',
+      },
+    });
+
+    assert.equal(badLogin.status, 403);
+    assert.equal(goodLogin.status, 200);
+    assert.equal(summary.status, 200);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('admin user detail returns credits, item stats, and credit history', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { adminApiKey: 'test-admin-key' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    await store.ensureUser('user-1', 'user@example.com');
+    await store.saveProfile('user-1', { username: 'user_one' });
+    await store.upsertImportData({
+      userId: 'user-1',
+      importId: 'import-1',
+      parsed: {
+        collections: [],
+        items: [{ id: 'item-1', url: 'https://example.com/1', contentType: 'post', caption: '', hashtags: [], collections: [] }],
+      },
+    });
+    await store.saveAnalysis('user-1', 'item-1', { title: 'Indexed item' });
+    await fetch(`http://127.0.0.1:${port}/api/admin/credits/adjust`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-api-key': 'test-admin-key' },
+      body: JSON.stringify({ userId: 'user-1', amount: 25, reason: 'launch bonus' }),
+    });
+
+    const detailResponse = await fetch(`http://127.0.0.1:${port}/api/admin/users/user-1`, {
+      headers: { 'x-admin-api-key': 'test-admin-key' },
+    });
+    const detail = await detailResponse.json();
+
+    assert.equal(detailResponse.status, 200);
+    assert.equal(detail.user.email, 'user@example.com');
+    assert.equal(detail.user.credits.paidCredits, 25);
+    assert.equal(detail.user.itemStats.indexed, 1);
+    assert.equal(detail.user.creditTransactions[0].metadata.reason, 'launch bonus');
+    assert.equal(detail.user.adminAdjustments[0].reason, 'launch bonus');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('admin can block users and blocked users cannot create private saves', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  store.requiresAuth = true;
+  store.getUserFromToken = async (token) => (
+    token === 'admin-token'
+      ? { id: 'admin-user', email: 'owner@example.com' }
+      : { id: 'user-1', email: 'user@example.com' }
+  );
+  const app = createApp({ store, config: { adminEmails: ['owner@example.com'] } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    await store.ensureUser('user-1', 'user@example.com');
+    await store.saveProfile('user-1', { username: 'user_one' });
+
+    const blockResponse = await fetch(`http://127.0.0.1:${port}/api/admin/users/user-1/block`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer admin-token' },
+      body: JSON.stringify({ reason: 'test block' }),
+    });
+    const blockedSave = await fetch(`http://127.0.0.1:${port}/api/saves/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer user-token' },
+      body: JSON.stringify({ url: 'https://example.com/blocked', title: 'Blocked' }),
+    });
+    const unblockResponse = await fetch(`http://127.0.0.1:${port}/api/admin/users/user-1/unblock`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin-token' },
+    });
+    const allowedSave = await fetch(`http://127.0.0.1:${port}/api/saves/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer user-token' },
+      body: JSON.stringify({ url: 'https://example.com/allowed', title: 'Allowed' }),
+    });
+
+    assert.equal(blockResponse.status, 200);
+    assert.equal(blockedSave.status, 403);
+    assert.equal(unblockResponse.status, 200);
+    assert.equal(allowedSave.status, 201);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('admin can list activity, imports, and moderate feedback', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { adminApiKey: 'test-admin-key' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    await store.ensureUser('local-dev-user', 'local@example.com');
+    await store.saveProfile('local-dev-user', { username: 'local_user' });
+
+    await fetch(`http://127.0.0.1:${port}/api/activity/sign-in`, { method: 'POST' });
+    await fetch(`http://127.0.0.1:${port}/api/saves/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://example.com/admin-list', title: 'Admin list' }),
+    });
+    const feedbackResponse = await fetch(`http://127.0.0.1:${port}/api/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feature: 'Search', message: 'Please improve this' }),
+    });
+    const feedbackBody = await feedbackResponse.json();
+
+    const activityResponse = await fetch(`http://127.0.0.1:${port}/api/admin/activity`, {
+      headers: { 'x-admin-api-key': 'test-admin-key' },
+    });
+    const importsResponse = await fetch(`http://127.0.0.1:${port}/api/admin/imports`, {
+      headers: { 'x-admin-api-key': 'test-admin-key' },
+    });
+    const hideResponse = await fetch(`http://127.0.0.1:${port}/api/admin/feedback/${feedbackBody.feedback.id}/hide`, {
+      method: 'POST',
+      headers: { 'x-admin-api-key': 'test-admin-key' },
+    });
+    const publicFeedbackResponse = await fetch(`http://127.0.0.1:${port}/api/feedback`);
+    const activity = await activityResponse.json();
+    const imports = await importsResponse.json();
+    const publicFeedback = await publicFeedbackResponse.json();
+
+    assert.equal(feedbackResponse.status, 201);
+    assert.equal(activityResponse.status, 200);
+    assert.equal(activity.activity.some((entry) => entry.eventType === 'sign_in'), true);
+    assert.equal(importsResponse.status, 200);
+    assert.equal(imports.imports.length, 1);
+    assert.equal(hideResponse.status, 200);
+    assert.equal(publicFeedback.feedback.length, 0);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });

@@ -20,6 +20,11 @@ function getConfig() {
     indexingConcurrency: Number(process.env.INDEXING_CONCURRENCY || 3),
     credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY,
     adminApiKey: process.env.ADMIN_API_KEY,
+    adminPassword: process.env.ADMIN_PASSWORD,
+    adminEmails: (process.env.ADMIN_EMAILS || '')
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
     appUrl: process.env.APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173',
     corsOrigins: (process.env.CORS_ORIGINS || process.env.APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173')
       .split(',')
