@@ -305,8 +305,7 @@ async function createImportFromFiles({ store, userId, files, config }) {
     mode: 'export',
     fileNames: files.map((file) => file.originalname),
   });
-  const items = await store.upsertImportData({ userId, importId: importEntry.id, parsed });
-  const jobs = await store.createJobs({ userId, importId: importEntry.id, items });
+  const items = await store.upsertImportData({ userId, importId: importEntry.id, parsed, initialStatus: 'needs_review' });
 
   return {
     import: importEntry,
@@ -315,8 +314,8 @@ async function createImportFromFiles({ store, userId, files, config }) {
     newItemCount: items.length,
     skippedDuplicateCount: Math.max(parsed.items.length - items.length, 0),
     collectionCount: parsed.collections.length,
-    queuedJobCount: jobs.length,
-    jobCount: jobs.length,
+    queuedJobCount: 0,
+    jobCount: 0,
   };
 }
 

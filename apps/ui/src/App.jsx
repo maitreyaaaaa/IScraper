@@ -252,6 +252,11 @@ function RotatingPlatformLogo() {
   useEffect(() => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (reduceMotion) return undefined;
+    const logoElement = logoRef.current;
+    HERO_PLATFORMS.forEach((platform) => {
+      const image = new Image();
+      image.src = platform.src;
+    });
 
     const timer = window.setInterval(() => {
       const target = logoRef.current;
@@ -260,20 +265,36 @@ function RotatingPlatformLogo() {
         return;
       }
 
-      gsap.timeline()
-        .to(target, { yPercent: -115, autoAlpha: 0, duration: 0.35, ease: 'power2.in' })
-        .add(() => setActiveIndex((current) => (current + 1) % HERO_PLATFORMS.length))
-        .set(target, { yPercent: 115 })
-        .to(target, { yPercent: 0, autoAlpha: 1, duration: 0.45, ease: 'power3.out' });
-    }, 1600);
+      gsap.to(target, {
+        autoAlpha: 0,
+        scale: 0.84,
+        duration: 0.18,
+        ease: 'power2.out',
+        overwrite: true,
+        onComplete: () => {
+          setActiveIndex((current) => (current + 1) % HERO_PLATFORMS.length);
+          window.requestAnimationFrame(() => {
+            if (!logoRef.current) return;
+            gsap.fromTo(
+              logoRef.current,
+              { autoAlpha: 0, scale: 0.84 },
+              { autoAlpha: 1, scale: 1, duration: 0.24, ease: 'power3.out', overwrite: true },
+            );
+          });
+        },
+      });
+    }, 1800);
 
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      if (logoElement) gsap.killTweensOf(logoElement);
+    };
   }, []);
 
   const platform = HERO_PLATFORMS[activeIndex];
 
   return (
-    <span className="hero-platform-ticker ml-[0.12em] inline-grid translate-y-[0.08em] overflow-hidden rounded-full align-baseline">
+    <span className="hero-platform-ticker ml-[0.12em] inline-grid h-[0.92em] w-[0.92em] translate-y-[0.08em] place-items-center overflow-hidden rounded-full align-baseline">
       <span
         ref={logoRef}
         className="inline-flex h-[0.86em] w-[0.86em] items-center justify-center rounded-full shadow-[0_0_36px_rgba(255,106,0,0.24)]"
@@ -1372,7 +1393,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
                 Your saves finally <span className="italic text-primary">work for you</span>.
               </h2>
             </div>
-            <p className="max-w-md text-muted-foreground">Stop relying on Instagram's endless saved folder. Find the exact thing when you need it.</p>
+            <p className="max-w-md text-muted-foreground">Stop losing useful saves inside different apps. Find the exact thing when you need it.</p>
           </div>
 
           <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
@@ -1381,10 +1402,10 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
               [Brain, 'Know why you saved it', 'Each save can get a plain-English summary, so old posts become useful again instead of forgotten.'],
               [CheckCircle2, 'First 200 saves included', 'Start with 200 imported saves covered by IScraper before paid credits matter. No API key needed for that first allowance.'],
               [Tag, 'Organized without the cleanup', 'Group saves by themes like travel, food, fitness, shopping, home, business, or inspiration.'],
-              [Lock, 'Private by default', 'Your saved export starts on your machine, so your personal taste and plans stay yours.'],
-              [ShieldCheck, 'Built around official export', 'Use Instagram export files to build your library without handing over your Instagram login.'],
-              [KeyRound, 'Browser extension coming soon', 'The extension will let you send the current tab into IScraper after the browser store release.'],
-            ].map(([Icon, title, description], index) => (
+              [Lock, 'Private by default', 'Your export files start on your machine, so your personal taste and plans stay yours.'],
+              [ShieldCheck, 'Built around official export', 'Upload official export files to build your library without handing over your login.'],
+              [KeyRound, 'Browser extension', 'The extension will let you send the current tab into IScraper after the browser store release.', 'Coming soon'],
+            ].map(([Icon, title, description, badge], index) => (
               <div
                 key={title}
                 className="step-card group relative min-h-56 overflow-hidden rounded-2xl border border-white/10 bg-black/80 p-7 transition-all hover:-translate-y-1 hover:border-primary/60"
@@ -1394,6 +1415,11 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
                   style={{ background: index % 2 ? 'var(--glow-2)' : 'var(--glow)' }}
                 />
                 <div className="relative">
+                  {badge && (
+                    <span className="absolute right-0 top-0 rounded-full bg-primary px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-primary-foreground">
+                      {badge}
+                    </span>
+                  )}
                   <Icon className="mb-8 h-6 w-6 text-primary" />
                   <h3 className="mb-3 font-display text-2xl font-semibold tracking-tight">{title}</h3>
                   <p className="text-sm leading-relaxed text-muted-foreground">{description}</p>
@@ -1407,7 +1433,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
       <section id="extension" className="relative border-y border-white/10 bg-black px-6 py-24 md:py-32">
         <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
           <div data-reveal>
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension - coming soon</div>
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension</div>
             <h2 className="max-w-4xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
               Extension support is coming soon.
             </h2>
@@ -1437,10 +1463,10 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
 
           <div data-reveal className="grid gap-4 sm:grid-cols-2">
             {[
-              [KeyRound, 'Limited token - coming soon', 'The planned extension will use a revokable Lens token, not your main login.'],
-              [Search, 'Selected text search - coming soon', 'You will be able to highlight text on a page and search it across your saved library.'],
-              [Eye, 'Image crop Lens - coming soon', 'You will be able to drag over text or an object in an image and search matching saves.'],
-              [ShieldCheck, 'Store review - coming soon', 'The extension needs browser-store approval before normal users can install it.'],
+              [KeyRound, 'Limited token', 'The planned extension will use a revokable Lens token, not your main login.'],
+              [Search, 'Selected text search', 'You will be able to highlight text on a page and search it across your saved library.'],
+              [Eye, 'Image crop Lens', 'You will be able to drag over text or an object in an image and search matching saves.'],
+              [ShieldCheck, 'Store review', 'The extension needs browser-store approval before normal users can install it.'],
             ].map(([Icon, title, description]) => (
               <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
                 <Icon className="h-6 w-6 text-primary" />
@@ -1781,7 +1807,7 @@ const HOW_TO_GUIDES = [
   { key: 'instagram', icon: Upload, title: 'Instagram export', copy: 'Get your saved posts file from Instagram and upload it into IScraper.', status: 'Guide ready' },
   { key: 'api-keys', icon: KeyRound, title: 'API keys', copy: 'Method 1: use OpenRouter for summaries, tags, and semantic search.', status: 'Guide ready' },
   { key: 'pinterest', icon: ExternalLink, title: 'Pinterest export', copy: 'Request and download your Pinterest data export.', status: 'Guide ready' },
-  { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Coming soon: save pages, use Lens search, and open results from your browser.', status: 'Coming soon' },
+  { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Save pages, use Lens search, and open results from your browser after store release.', status: 'Coming soon' },
 ];
 
 function HowToUsePage({ onBack, onOpenApp }) {
@@ -1857,7 +1883,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
             Guides for imports, API keys, and upcoming features.
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
-            Start with Instagram export today. We will keep adding simple guides here for API keys, Pinterest, the browser extension, and other import flows as they become available.
+            Start with Instagram or Pinterest export today. We will keep adding simple guides here for API keys, the browser extension, and other import flows as they become available.
           </p>
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
             {HOW_TO_GUIDES.map(({ key, icon: Icon, title, copy, status }) => (
@@ -1887,9 +1913,9 @@ function HowToUsePage({ onBack, onOpenApp }) {
         {!activeGuide && (
           <section className="howto-reveal rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 md:p-10">
             <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Choose a guide</div>
-            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">Click Instagram export to see the import steps.</h2>
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">Click Instagram export or Pinterest export to see the import steps.</h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-              We will add Pinterest and extension walkthroughs here as those flows are finalized.
+              The extension walkthrough will appear here after the browser-store release.
             </p>
           </section>
         )}
@@ -2026,7 +2052,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
 
         {activeGuide === 'extension' && (
           <section className="howto-reveal rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 md:p-10">
-            <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Browser extension - coming soon</div>
+            <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Browser extension</div>
             <h2 className="mt-3 font-display text-3xl font-bold tracking-tight md:text-5xl">The extension guide is coming soon.</h2>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground">
               The extension is not available for users yet. Once the browser-store listing is approved, this page will show the install and setup steps.
@@ -2102,7 +2128,7 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
     message: '',
   });
   const helpTopics = [
-    [Upload, 'Import help', 'Use the Instagram export guide if you are stuck getting your saved posts file.'],
+    [Upload, 'Import help', 'Use the Instagram or Pinterest export guide if you are stuck getting your saved files.'],
     [KeyRound, 'AI keys', 'IScraper is BYOK right now. Add your own text, media, and embedding keys in Keys & privacy.'],
     [Search, 'Search problems', 'If results feel wrong, make sure the saves were indexed. Search improves after summaries, OCR, and tags exist.'],
     [LifeBuoy, 'Account support', 'Email us if login, usernames, profile setup, or imports are not working.'],
@@ -2219,12 +2245,12 @@ const LEGAL_CONTENT = {
     title: 'Terms of Service',
     intro: 'These terms explain the rules for using IScraper. They are a practical starting point, not a substitute for advice from your lawyer.',
     sections: [
-      ['Using IScraper', 'IScraper helps you upload your official Instagram export, save links from other platforms, and turn saved posts into a private searchable library. You are responsible for using the app lawfully and only uploading or saving content you have the right to use.'],
+      ['Using IScraper', 'IScraper helps you upload official export files, save links from other platforms, and turn saved posts into a private searchable library. You are responsible for using the app lawfully and only uploading or saving content you have the right to use.'],
       ['Accounts', 'You must sign in before importing saved posts. You are responsible for activity on your account and for keeping your login secure. Usernames must be unique and may be changed if they impersonate someone, violate rights, or create abuse.'],
-      ['Your content', 'Your Instagram export, saved links, captions, notes, summaries, graph data, username, and optional profile picture remain your content. You give IScraper permission to process that content only to provide the app features.'],
+      ['Your content', 'Your export files, saved links, captions, notes, summaries, graph data, username, and optional profile picture remain your content. You give IScraper permission to process that content only to provide the app features.'],
       ['Emails and updates', 'We may send account, security, product, billing, import, and support emails to the email address on your account. We may also send product updates or marketing emails where you have opted in or where the law allows it, and those marketing emails must include a way to unsubscribe.'],
       ['AI processing', 'When indexing is enabled, content may be sent to configured AI providers to create summaries, OCR, transcripts, tags, and search data. AI output can be wrong, incomplete, or outdated, so you should verify important information yourself.'],
-      ['Browser extension coming soon', 'The IScraper browser extension is not available for users yet. When released, it will be optional and must be used only on pages and content you are allowed to process.'],
+      ['Browser extension', 'The IScraper browser extension is not available for users yet. When released, it will be optional and must be used only on pages and content you are allowed to process.'],
       ['Things you cannot do', 'Do not upload content you do not have rights to use, attack the service, bypass rate limits, scrape or copy other users data, reverse engineer protected parts of the service, or use IScraper for unlawful activity.'],
       ['Credits and paid features', 'The first 200 imported saved items are currently included without paid IScraper credits, subject to abuse prevention and fair-use limits. Credit purchases are currently marked as coming soon. If payments are enabled later, pricing, refunds, and billing terms will be shown before purchase.'],
       ['Service changes', 'We may change, pause, or discontinue features. We will try to avoid disrupting your saved library, but we do not guarantee uninterrupted access.'],
@@ -2235,11 +2261,11 @@ const LEGAL_CONTENT = {
   privacy: {
     eyebrow: 'Privacy Policy',
     title: 'Privacy Policy',
-    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Supabase login with Google or email, Instagram export upload, saved links, AI indexing, private saved libraries, and the browser extension that is coming soon.',
+    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Supabase login with Google or email, official export upload, saved links, AI indexing, private saved libraries, and the browser extension that is coming soon.',
     sections: [
-      ['Information we collect', 'We collect login details from Supabase and the login method you choose, such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded Instagram export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs. Extension token records may be added when the extension launches.'],
+      ['Information we collect', 'We collect login details from Supabase and the login method you choose, such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs. Extension token records may be added when the extension launches.'],
       ['Login data', 'Google or email login is used to authenticate you and create your IScraper account. From Supabase and Google, when used, we may receive basic account details such as your user ID, email address, name, and profile image if Google provides them. IScraper does not ask for Gmail, Drive, Calendar, contacts, or other Google account content.'],
-      ['Instagram data', 'IScraper uses official Instagram export files that you upload. We do not ask for your Instagram password and we removed Instagram login scraping. Your export is used to build your searchable library.'],
+      ['Export data', 'IScraper uses official export files that you upload. We do not ask for your Instagram or Pinterest password. Your export is used to build your searchable library.'],
       ['AI providers', 'If indexing is enabled, parts of your uploaded content may be sent to configured AI providers such as OpenRouter, Gemini, or your own connected provider key. This is done to generate summaries, transcripts, OCR, tags, and embeddings.'],
       ['Browser extension data - coming soon', 'The browser extension is not available for users yet. When released, it is planned to run only after you click it and use limited data such as the current page URL, selected text, or a user-selected screenshot crop.'],
       ['How we use data', 'We use your data to authenticate your account, keep your library separate from other users, process imports, search your saves, build your graph, show anonymous public feedback, prevent abuse, enforce limits, improve reliability, send service messages, respond to support requests, and send product updates or marketing emails only where you have opted in or where legally permitted.'],
@@ -2486,6 +2512,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [indexingReminder, setIndexingReminder] = useState({ open: false, count: 0 });
   const sidebarRef = useRef(null);
   const pendingSaveHandledRef = useRef(false);
   const pendingItemHandledRef = useRef(false);
@@ -2790,8 +2817,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setCollectionFilter('all');
       setPlatformFilter('all');
       setTab('upload');
-      setNotice(`Added ${newCount} new saves to the review inbox below. ${skippedCount} already existed. Click Start indexing when you are ready.`);
+      setNotice(`Added ${newCount} new saves to your library. ${skippedCount} already existed. Click Start indexing when you want AI summaries and search upgrades.`);
       await loadItems();
+      if (newCount > 0) {
+        setIndexingReminder({ open: true, count: newCount });
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2802,6 +2832,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const handleStartIndexing = async () => {
     if (!requireSignIn('start indexing')) return;
     if (!requireProfile('start indexing')) return;
+    setIndexingReminder({ open: false, count: 0 });
     setBusy(true);
     setError('');
     setNotice('');
@@ -3165,6 +3196,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       </main>
 
       {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} busy={busy} />}
+      {indexingReminder.open && (
+        <IndexingReminderModal
+          count={indexingReminder.count || pendingReviews.length}
+          busy={busy}
+          onClose={() => setIndexingReminder({ open: false, count: 0 })}
+          onStart={handleStartIndexing}
+        />
+      )}
       {accountSettingsOpen && (
         <AccountSettingsModal
           open
@@ -3177,6 +3216,44 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function IndexingReminderModal({ count, busy, onClose, onStart }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-5 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="indexing-reminder-title">
+      <div className="w-full max-w-lg rounded-3xl border border-primary/30 bg-black p-6 shadow-2xl shadow-black/60">
+        <div className="mb-5 inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground">
+          <Sparkles className="h-5 w-5" />
+        </div>
+        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Indexing not started</div>
+        <h2 id="indexing-reminder-title" className="mt-2 font-display text-3xl font-bold tracking-tight">
+          {count === 1 ? '1 save is in your library.' : `${count} saves are in your library.`}
+        </h2>
+        <p className="mt-4 text-sm leading-6 text-muted-foreground">
+          They are saved, but not indexed yet. If you do not index them, they will stay in your library/review inbox, but AI summaries, OCR, transcripts, graph links, and smarter search will not be created.
+        </p>
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={onStart}
+            disabled={busy}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
+            Start indexing
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="inline-flex items-center justify-center rounded-xl border border-white/10 px-5 py-3 font-semibold text-foreground transition hover:bg-white/5 disabled:opacity-60"
+          >
+            Not now
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -4020,7 +4097,7 @@ function UploadTab({
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <h1 className="font-display text-4xl font-bold tracking-tight">Add your saved posts</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Paste any link now, review the capture, then approve indexing when it is worth spending AI usage.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Add saves to your library first. Start indexing only when you are ready to spend AI usage.</p>
         </div>
         <button
           type="button"
@@ -4051,7 +4128,7 @@ function UploadTab({
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save from any platform</div>
           <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Add a Pinterest pin, tweet, video, post, or article</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            New web links go into review first. Nothing is indexed until you approve it.
+            New web links go into your library first. Nothing is indexed until you click Start indexing or index an individual save.
           </p>
         </div>
         <input
@@ -4088,7 +4165,7 @@ function UploadTab({
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Review inbox</div>
               <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saves waiting</h2>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">Clean up the title and notes before indexing. This keeps your brain useful and avoids wasting credits.</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">These saves are in your library but not indexed yet. Without indexing, AI summaries, OCR, transcripts, graph links, and smarter search will not be created.</p>
             </div>
             <button
               type="button"
@@ -4101,7 +4178,7 @@ function UploadTab({
               className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              Index all reviewed
+              Start indexing all
             </button>
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
@@ -4348,7 +4425,7 @@ function SettingsTab({
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Browser extension</div>
-            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Coming soon</h2>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Browser extension</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               Extension tokens and Lens search from the browser will be available after the extension is published in the browser stores.
             </p>

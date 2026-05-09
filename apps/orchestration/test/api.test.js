@@ -30,7 +30,7 @@ test('API responses include a restrictive content security policy', async () => 
   }
 });
 
-test('POST /api/imports imports all uploaded export files and creates processing jobs', async () => {
+test('POST /api/imports adds uploaded export files to library without indexing jobs', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const app = createApp({ store });
@@ -60,8 +60,8 @@ test('POST /api/imports imports all uploaded export files and creates processing
     assert.equal(body.totalItemCount, 2);
     assert.equal(body.newItemCount, 2);
     assert.equal(body.skippedDuplicateCount, 0);
-    assert.equal(body.queuedJobCount, 2);
-    assert.equal(body.jobCount, 2);
+    assert.equal(body.queuedJobCount, 0);
+    assert.equal(body.jobCount, 0);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -97,7 +97,8 @@ test('POST /api/imports accepts Instagram saved-post JSON files', async () => {
     assert.equal(response.status, 200);
     assert.equal(body.itemCount, 1);
     assert.equal(body.newItemCount, 1);
-    assert.equal(body.queuedJobCount, 1);
+    assert.equal(body.queuedJobCount, 0);
+    assert.equal(items[0].status, 'needs_review');
     assert.equal(items[0].platform, 'Instagram');
     assert.equal(items[0].url, 'https://instagram.com/reel/APIJSON111');
     assert.equal(items[0].caption, 'JSON reel import #systems');
@@ -135,7 +136,8 @@ test('POST /api/imports accepts Instagram zip files containing HTML exports', as
     assert.equal(response.status, 200);
     assert.equal(body.itemCount, 1);
     assert.equal(body.newItemCount, 1);
-    assert.equal(body.queuedJobCount, 1);
+    assert.equal(body.queuedJobCount, 0);
+    assert.equal(items[0].status, 'needs_review');
     assert.equal(items[0].platform, 'Instagram');
     assert.equal(items[0].url, 'https://instagram.com/reel/ZIPHTML111');
     assert.equal(items[0].caption, 'Zipped Instagram HTML reel');
@@ -225,10 +227,10 @@ test('POST /api/imports skips already imported canonical duplicate URLs', async 
     assert.equal(secondBody.totalItemCount, 2);
     assert.equal(secondBody.newItemCount, 1);
     assert.equal(secondBody.skippedDuplicateCount, 1);
-    assert.equal(secondBody.queuedJobCount, 1);
-    assert.equal(secondBody.jobCount, 1);
-    assert.equal(allJobs.length, 2);
-    assert.equal(allJobs.filter((job) => job.itemId === 'AAA111').length, 1);
+    assert.equal(secondBody.queuedJobCount, 0);
+    assert.equal(secondBody.jobCount, 0);
+    assert.equal(allJobs.length, 0);
+    assert.equal(allJobs.filter((job) => job.itemId === 'AAA111').length, 0);
     assert.equal(existingItem.status, 'done');
   } finally {
     await new Promise((resolve) => server.close(resolve));
