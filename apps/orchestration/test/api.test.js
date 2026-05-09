@@ -68,6 +68,45 @@ test('POST /api/imports imports all uploaded export files and creates processing
   }
 });
 
+test('POST /api/imports accepts Instagram saved-post JSON files', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const form = new FormData();
+    const json = {
+      saved_saved_media: [
+        {
+          string_map_data: {
+            'Saved on': { href: 'https://www.instagram.com/reel/APIJSON111/', timestamp: 1778256000 },
+            Caption: { value: 'JSON reel import #systems' },
+            Username: { value: 'json.creator' },
+          },
+        },
+      ],
+    };
+    form.append('exportFiles', new Blob([JSON.stringify(json)], { type: 'application/json' }), 'saved_posts.json');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports`, { method: 'POST', body: form });
+    const body = await response.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.itemCount, 1);
+    assert.equal(body.newItemCount, 1);
+    assert.equal(body.queuedJobCount, 1);
+    assert.equal(items[0].platform, 'Instagram');
+    assert.equal(items[0].url, 'https://instagram.com/reel/APIJSON111');
+    assert.equal(items[0].caption, 'JSON reel import #systems');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/imports skips already imported canonical duplicate URLs', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

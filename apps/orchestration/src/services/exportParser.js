@@ -29,8 +29,8 @@ function mergeParsedResults(results) {
 }
 
 async function parseImportExport(files = []) {
-  const htmlFiles = files.filter((file) => ['.html', '.htm'].includes(path.extname(file.originalname || '').toLowerCase()));
-  const instagramParsed = htmlFiles.length ? parseInstagramExport(htmlFiles) : { items: [], collections: [] };
+  const instagramFiles = files.filter((file) => ['.html', '.htm', '.json'].includes(path.extname(file.originalname || '').toLowerCase()));
+  const instagramParsed = instagramFiles.length ? parseInstagramExport(instagramFiles) : { items: [], collections: [] };
   const pinterestParsed = await parsePinterestExport(files);
   const parsed = mergeParsedResults([instagramParsed, pinterestParsed]);
 

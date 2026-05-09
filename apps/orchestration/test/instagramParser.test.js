@@ -83,3 +83,44 @@ test('parseInstagramExport canonicalizes Instagram URLs before deduping', () => 
   assert.equal(result.items[0].id, 'AAA111');
   assert.equal(result.items[1].url, 'https://instagram.com/p/BBB222');
 });
+
+test('parseInstagramExport accepts Instagram saved-post JSON files', () => {
+  const savedPostsJson = {
+    saved_saved_media: [
+      {
+        title: 'Useful systems post #workflow',
+        string_map_data: {
+          'Saved on': {
+            href: 'https://www.instagram.com/reel/JSON111/?igsh=abc',
+            timestamp: 1778256000,
+          },
+          Username: { value: 'systems.creator' },
+          Caption: { value: 'Useful systems post #workflow' },
+        },
+      },
+      {
+        string_map_data: {
+          'Saved on': {
+            href: 'https://www.instagram.com/p/JSON222/',
+            timestamp: 1778257000,
+          },
+          Name: { value: 'Design Builder' },
+        },
+      },
+    ],
+  };
+
+  const result = parseInstagramExport([
+    { originalname: 'saved_posts.json', buffer: Buffer.from(JSON.stringify(savedPostsJson)) },
+  ]);
+
+  assert.equal(result.items.length, 2);
+  assert.equal(result.items[0].url, 'https://instagram.com/reel/JSON111');
+  assert.equal(result.items[0].contentType, 'reel');
+  assert.equal(result.items[0].caption, 'Useful systems post #workflow');
+  assert.deepEqual(result.items[0].hashtags, ['workflow']);
+  assert.equal(result.items[0].ownerUsername, 'systems.creator');
+  assert.equal(result.items[0].savedAt, '2026-05-08T16:00:00.000Z');
+  assert.equal(result.items[1].url, 'https://instagram.com/p/JSON222');
+  assert.equal(result.items[1].ownerName, 'Design Builder');
+});

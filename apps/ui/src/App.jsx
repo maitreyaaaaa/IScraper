@@ -730,7 +730,7 @@ function LoginPage({ onBack, onOpenApp }) {
   const steps = [
     ['1', 'Sign in', 'Use Google or email code. Use the same login every time.'],
     ['2', 'Choose a username', 'This keeps your private library tied to your account.'],
-    ['3', 'Import your saves', 'Upload Instagram HTML or Pinterest export files from the Add saves page.'],
+    ['3', 'Import your saves', 'Upload Instagram HTML/JSON or Pinterest export files from the Add saves page.'],
   ];
 
   return (
@@ -2785,7 +2785,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (!requireSignIn('import saves')) return;
     if (!requireProfile('import saves')) return;
     if (!files.length) {
-      setError('Upload Instagram HTML files or your Pinterest export ZIP.');
+      setError('Upload Instagram HTML/JSON files or your Pinterest export ZIP/JSON/CSV.');
       return;
     }
     const oversizedFile = files.find((file) => file.size > DIRECT_UPLOAD_MAX_BYTES);
@@ -4153,7 +4153,7 @@ function UploadTab({
       >
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
         <h3 className="mb-2 font-display text-xl font-bold">Upload your files here</h3>
-        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram HTML / Pinterest ZIP/JSON/CSV / up to 20 MB per file</p>
+        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram HTML/JSON / Pinterest ZIP/JSON/CSV / up to 20 MB per file</p>
         <button
           type="button"
           onClick={onOpenHowTo}

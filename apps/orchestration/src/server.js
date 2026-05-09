@@ -272,7 +272,7 @@ function contentSecurityPolicy() {
 function uploadFileFilter(_req, file, callback) {
   const extension = path.extname(file.originalname || '').toLowerCase();
   if (!EXPORT_UPLOAD_EXTENSIONS.has(extension) || !EXPORT_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
-    return callback(new Error('Upload Instagram HTML files or Pinterest export ZIP/JSON/CSV files.'));
+    return callback(new Error('Upload Instagram HTML/JSON files or Pinterest export ZIP/JSON/CSV files.'));
   }
   return callback(null, true);
 }
@@ -280,7 +280,7 @@ function uploadFileFilter(_req, file, callback) {
 function assertImportFileAllowed(file, maxUploadFileSizeBytes) {
   const extension = path.extname(file.originalname || '').toLowerCase();
   if (!EXPORT_UPLOAD_EXTENSIONS.has(extension) || !EXPORT_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
-    const error = new Error('Upload Instagram HTML files or Pinterest export ZIP/JSON/CSV files.');
+    const error = new Error('Upload Instagram HTML/JSON files or Pinterest export ZIP/JSON/CSV files.');
     error.statusCode = 400;
     throw error;
   }
@@ -294,7 +294,7 @@ function assertImportFileAllowed(file, maxUploadFileSizeBytes) {
 async function createImportFromFiles({ store, userId, files, config }) {
   const parsed = await parseImportExport(files);
   if (!parsed.items.length) {
-    const error = new Error('No saves were found in those files. Upload Instagram saved-post HTML files or the Pinterest export ZIP.');
+    const error = new Error('No saves were found in those files. Upload Instagram saved-post HTML/JSON files or Pinterest export ZIP/JSON/CSV files.');
     error.statusCode = 400;
     throw error;
   }
@@ -939,7 +939,7 @@ function createApp({ store, config = {} }) {
   app.post('/api/imports', importRateLimit, upload.array('exportFiles', 20), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
-    if (!files.length) return res.status(400).json({ error: 'Upload Instagram HTML files or your Pinterest export ZIP.' });
+    if (!files.length) return res.status(400).json({ error: 'Upload Instagram HTML/JSON files or your Pinterest export ZIP/JSON/CSV.' });
 
     files.forEach((file) => assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024));
     res.json(await createImportFromFiles({ store, userId: req.user.id, files, config }));
