@@ -1798,7 +1798,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const ctx = gsap.context(() => {
       if (reduceMotion) {
-        gsap.set(['.howto-reveal', '.howto-shot', '.howto-copy'], { autoAlpha: 1, x: 0, y: 0 });
+        gsap.set(['.howto-reveal', '.howto-step', '.howto-shot', '.howto-copy'], { autoAlpha: 1, x: 0, y: 0, clearProps: 'transform,opacity,visibility' });
         return;
       }
 
@@ -1811,41 +1811,19 @@ function HowToUsePage({ onBack, onOpenApp }) {
       });
 
       gsap.utils.toArray('.howto-step').forEach((step) => {
-        const shot = step.querySelector('.howto-shot');
-        const copy = step.querySelector('.howto-copy');
-        const reverse = step.dataset.reverse === 'true';
-
         gsap.fromTo(
-          shot,
-          { autoAlpha: 0, x: reverse ? 70 : -70, y: 16 },
+          step,
+          { autoAlpha: 0, y: 42 },
           {
             autoAlpha: 1,
-            x: 0,
             y: 0,
-            duration: 0.85,
+            duration: 0.75,
             ease: 'power3.out',
+            clearProps: 'transform,opacity,visibility',
             scrollTrigger: {
               trigger: step,
-              start: 'top 72%',
-              toggleActions: 'play none none reverse',
-            },
-          },
-        );
-
-        gsap.fromTo(
-          copy,
-          { autoAlpha: 0, x: reverse ? -70 : 70, y: 16 },
-          {
-            autoAlpha: 1,
-            x: 0,
-            y: 0,
-            duration: 0.85,
-            ease: 'power3.out',
-            delay: 0.08,
-            scrollTrigger: {
-              trigger: step,
-              start: 'top 72%',
-              toggleActions: 'play none none reverse',
+              start: 'top 78%',
+              once: true,
             },
           },
         );
