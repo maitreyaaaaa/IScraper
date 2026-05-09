@@ -2754,7 +2754,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const result = await importInstagramExport({ files });
       const newCount = result.newItemCount ?? result.itemCount ?? 0;
       const skippedCount = result.skippedDuplicateCount ?? 0;
-      setNotice(`Added ${newCount} new saves. ${skippedCount} already existed. ${result.queuedJobCount ?? result.jobCount ?? 0} queued for indexing.`);
+      setQuery('');
+      setStatusFilter('all');
+      setCollectionFilter('all');
+      setPlatformFilter('all');
+      setTab('upload');
+      setNotice(`Added ${newCount} new saves to the review inbox below. ${skippedCount} already existed. Click Start indexing when you are ready.`);
       await loadItems();
     } catch (err) {
       setError(err.message);
@@ -2763,15 +2768,25 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   };
 
-  const handleRestart = async () => {
+  const handleStartIndexing = async () => {
     if (!requireSignIn('start indexing')) return;
     if (!requireProfile('start indexing')) return;
     setBusy(true);
     setError('');
     setNotice('');
     try {
-      await restartQueue();
-      setNotice('Queue restarted. Refreshing results shortly.');
+      if (pendingReviews.length > 0) {
+        const approved = [];
+        for (const item of pendingReviews) {
+          const body = await approveReviewItem(item.id, { startProcessing: true });
+          approved.push(mapItem(body.item));
+        }
+        setItems((current) => current.map((entry) => approved.find((item) => item.id === entry.id) || entry));
+        setNotice(`Started indexing ${approved.length} waiting saves. Refreshing results shortly.`);
+      } else {
+        await restartQueue();
+        setNotice('Queue restarted. Refreshing results shortly.');
+      }
       window.setTimeout(() => loadItems().catch((err) => setError(err.message)), 1500);
     } catch (err) {
       setError(err.message);
@@ -2992,7 +3007,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     setPlatformFilter={setPlatformFilter}
                     platforms={platforms}
                     onSelect={openDetail}
-                    onRestart={handleRestart}
+                    onRestart={handleStartIndexing}
                     indexingActivity={indexingActivity}
                   />
                 )}
@@ -3051,7 +3066,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     setLinkForm={setLinkForm}
                     onSaveLink={handleSaveLink}
                     onImport={handleImport}
-                    onRestart={handleRestart}
+                    onRestart={handleStartIndexing}
                     pendingReviews={pendingReviews}
                     onApproveReview={handleApproveReview}
                     onUpdateReview={handleUpdateReview}
@@ -4072,7 +4087,7 @@ function UploadTab({
         </button>
         <button onClick={onRestart} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-5 py-3 font-semibold text-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
-          Start indexing
+          {pendingReviews.length > 0 ? `Start indexing ${pendingReviews.length} waiting saves` : 'Start indexing'}
         </button>
       </div>
     </div>
