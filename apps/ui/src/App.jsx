@@ -349,7 +349,7 @@ function cleanAuthCallbackUrl() {
 }
 
 async function startGoogleSignIn() {
-  if (!supabase) throw new Error('Google login is not configured yet.');
+  if (!supabase) throw new Error('Login is not configured yet.');
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
@@ -360,6 +360,29 @@ async function startGoogleSignIn() {
     },
   });
   if (error) throw error;
+}
+
+async function sendEmailOtp(email) {
+  if (!supabase) throw new Error('Login is not configured yet.');
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: {
+      shouldCreateUser: true,
+      emailRedirectTo: `${window.location.origin}/#app`,
+    },
+  });
+  if (error) throw error;
+}
+
+async function verifyEmailOtp(email, token) {
+  if (!supabase) throw new Error('Login is not configured yet.');
+  const { data, error } = await supabase.auth.verifyOtp({
+    email,
+    token,
+    type: 'email',
+  });
+  if (error) throw error;
+  return data;
 }
 
 function keyValidationMessage(setup, apiKey) {
@@ -423,7 +446,7 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  if (route === 'app') return <Dashboard onBack={() => navigate('landing')} onOpenHowTo={() => navigate('how-to-use')} />;
+  if (route === 'app') return <Dashboard onBack={() => navigate('landing')} onOpenLogin={() => navigate('login')} onOpenHowTo={() => navigate('how-to-use')} />;
   if (route === 'login') return <LoginPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />;
   if (route === 'how-to-use') return <HowToUsePage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />;
   if (route === 'terms') return <LegalPage type="terms" onBack={() => navigate('landing')} />;
@@ -452,6 +475,9 @@ function LoginPage({ onBack, onOpenApp }) {
   const [profile, setProfile] = useState(null);
   const [profileRequired, setProfileRequired] = useState(false);
   const [profileForm, setProfileForm] = useState({ username: '', avatarUrl: '' });
+  const [emailForm, setEmailForm] = useState({ email: '', code: '' });
+  const [emailCodeSent, setEmailCodeSent] = useState(false);
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(Boolean(supabase));
   const [error, setError] = useState('');
@@ -513,10 +539,51 @@ function LoginPage({ onBack, onOpenApp }) {
   const handleGoogleSignIn = async () => {
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       await startGoogleSignIn();
     } catch (err) {
       setError(err.message);
+      setBusy(false);
+    }
+  };
+
+  const handleSendEmailCode = async (event) => {
+    event.preventDefault();
+    const email = emailForm.email.trim().toLowerCase();
+    if (!email) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await sendEmailOtp(email);
+      setEmailForm((current) => ({ ...current, email, code: '' }));
+      setEmailCodeSent(true);
+      setNotice('Code sent. Check your email and paste the code here.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleVerifyEmailCode = async (event) => {
+    event.preventDefault();
+    const email = emailForm.email.trim().toLowerCase();
+    const code = emailForm.code.trim();
+    if (!email || !code) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const data = await verifyEmailOtp(email, code);
+      setSession(data.session || null);
+      setApiAccessToken(data.session?.access_token);
+      await loadProfile();
+      setNotice('Signed in.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
       setBusy(false);
     }
   };
@@ -554,7 +621,7 @@ function LoginPage({ onBack, onOpenApp }) {
   };
 
   const steps = [
-    ['1', 'Continue with Google', 'Use the same Google account every time.'],
+    ['1', 'Sign in', 'Use Google or email code. Use the same login every time.'],
     ['2', 'Choose a username', 'This keeps your private library tied to your account.'],
     ['3', 'Import your saves', 'Upload Instagram HTML or Pinterest export files from the Add saves page.'],
   ];
@@ -603,7 +670,7 @@ function LoginPage({ onBack, onOpenApp }) {
             <div>
               <Lock className="h-8 w-8 text-primary" />
               <h2 className="mt-5 font-display text-3xl font-bold tracking-tight">Login is not configured locally.</h2>
-              <p className="mt-3 text-sm leading-6 text-muted-foreground">Production uses Supabase Google login. Open the app to continue in local mode.</p>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">Production uses Supabase login. Open the app to continue in local mode.</p>
               <button type="button" onClick={onOpenApp} className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground">
                 Open app
               </button>
@@ -612,7 +679,7 @@ function LoginPage({ onBack, onOpenApp }) {
             <div>
               <Lock className="h-8 w-8 text-primary" />
               <h2 className="mt-5 font-display text-3xl font-bold tracking-tight">Welcome back.</h2>
-              <p className="mt-3 text-sm leading-6 text-muted-foreground">Continue with Google to open your private IScraper library.</p>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">Sign in to open your private IScraper library.</p>
               <button
                 type="button"
                 onClick={handleGoogleSignIn}
@@ -622,6 +689,50 @@ function LoginPage({ onBack, onOpenApp }) {
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 Continue with Google
               </button>
+              <div className="my-6 flex items-center gap-3">
+                <span className="h-px flex-1 bg-white/10" />
+                <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">or use email</span>
+                <span className="h-px flex-1 bg-white/10" />
+              </div>
+              <form onSubmit={emailCodeSent ? handleVerifyEmailCode : handleSendEmailCode} className="space-y-3">
+                <label className="block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Email</label>
+                <input
+                  type="email"
+                  value={emailForm.email}
+                  onChange={(event) => setEmailForm((current) => ({ ...current, email: event.target.value }))}
+                  placeholder="you@example.com"
+                  className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+                  required
+                />
+                {emailCodeSent && (
+                  <>
+                    <label className="block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Code</label>
+                    <input
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={emailForm.code}
+                      onChange={(event) => setEmailForm((current) => ({ ...current, code: event.target.value.replace(/\s/g, '') }))}
+                      placeholder="Paste the code from your email"
+                      className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 font-mono outline-none focus:border-primary"
+                      required
+                    />
+                  </>
+                )}
+                <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 font-semibold text-foreground transition hover:bg-white/5 disabled:opacity-60">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                  {emailCodeSent ? 'Verify code' : 'Send code'}
+                </button>
+                {emailCodeSent && (
+                  <button
+                    type="button"
+                    onClick={handleSendEmailCode}
+                    disabled={busy}
+                    className="w-full text-center text-xs font-semibold text-primary transition hover:text-primary/80 disabled:opacity-60"
+                  >
+                    Resend code
+                  </button>
+                )}
+              </form>
               <p className="mt-4 text-xs leading-5 text-muted-foreground">By continuing, you agree to the Terms of Service and Privacy Policy.</p>
             </div>
           ) : profileRequired ? (
@@ -661,6 +772,7 @@ function LoginPage({ onBack, onOpenApp }) {
               </button>
             </div>
           )}
+          {notice && <Banner>{notice}</Banner>}
           {error && <Banner type="error">{error}</Banner>}
         </section>
       </main>
@@ -1089,7 +1201,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
                 onClick={onOpenLogin}
                 className="glow-ring group inline-flex items-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
               >
-                Log in with Google <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+                Log in <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
               </button>
               <button type="button" onClick={onOpenApp} className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
                 Visit library
@@ -1208,7 +1320,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
 
           <div data-reveal className="grid gap-4 sm:grid-cols-2">
             {[
-              [KeyRound, 'Limited token - coming soon', 'The planned extension will use a revokable Lens token, not your Google login.'],
+              [KeyRound, 'Limited token - coming soon', 'The planned extension will use a revokable Lens token, not your main login.'],
               [Search, 'Selected text search - coming soon', 'You will be able to highlight text on a page and search it across your saved library.'],
               [Eye, 'Image crop Lens - coming soon', 'You will be able to drag over text or an object in an image and search matching saves.'],
               [ShieldCheck, 'Store review - coming soon', 'The extension needs browser-store approval before normal users can install it.'],
@@ -1897,7 +2009,7 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
     [Upload, 'Import help', 'Use the Instagram export guide if you are stuck getting your saved posts file.'],
     [KeyRound, 'AI keys', 'IScraper is BYOK right now. Add your own text, media, and embedding keys in Keys & privacy.'],
     [Search, 'Search problems', 'If results feel wrong, make sure the saves were indexed. Search improves after summaries, OCR, and tags exist.'],
-    [LifeBuoy, 'Account support', 'Email us if Google login, usernames, profile setup, or imports are not working.'],
+    [LifeBuoy, 'Account support', 'Email us if login, usernames, profile setup, or imports are not working.'],
   ];
 
   const handleSupportSubmit = (event) => {
@@ -2027,15 +2139,15 @@ const LEGAL_CONTENT = {
   privacy: {
     eyebrow: 'Privacy Policy',
     title: 'Privacy Policy',
-    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Google/Supabase login, Instagram export upload, saved links, AI indexing, private saved libraries, and the browser extension that is coming soon.',
+    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Supabase login with Google or email, Instagram export upload, saved links, AI indexing, private saved libraries, and the browser extension that is coming soon.',
     sections: [
-      ['Information we collect', 'We collect login details from Supabase/Google such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded Instagram export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs. Extension token records may be added when the extension launches.'],
-      ['Google login data', 'Google login is used to authenticate you and create your IScraper account. From Google/Supabase we may receive basic account details such as your user ID, email address, name, and profile image if Google provides them. IScraper does not ask for Gmail, Drive, Calendar, contacts, or other Google account content. Google OAuth configuration must use the Supabase callback URL and must include this privacy policy URL before public launch.'],
+      ['Information we collect', 'We collect login details from Supabase and the login method you choose, such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded Instagram export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs. Extension token records may be added when the extension launches.'],
+      ['Login data', 'Google or email login is used to authenticate you and create your IScraper account. From Supabase and Google, when used, we may receive basic account details such as your user ID, email address, name, and profile image if Google provides them. IScraper does not ask for Gmail, Drive, Calendar, contacts, or other Google account content.'],
       ['Instagram data', 'IScraper uses official Instagram export files that you upload. We do not ask for your Instagram password and we removed Instagram login scraping. Your export is used to build your searchable library.'],
       ['AI providers', 'If indexing is enabled, parts of your uploaded content may be sent to configured AI providers such as OpenRouter, Gemini, or your own connected provider key. This is done to generate summaries, transcripts, OCR, tags, and embeddings.'],
       ['Browser extension data - coming soon', 'The browser extension is not available for users yet. When released, it is planned to run only after you click it and use limited data such as the current page URL, selected text, or a user-selected screenshot crop.'],
       ['How we use data', 'We use your data to authenticate your account, keep your library separate from other users, process imports, search your saves, build your graph, show anonymous public feedback, prevent abuse, enforce limits, improve reliability, send service messages, respond to support requests, and send product updates or marketing emails only where you have opted in or where legally permitted.'],
-      ['Google data limits', 'We do not sell Google login data, use it to build advertising profiles, or transfer it to unrelated third parties for marketing. We use Google login data only for account access, account communication, security, support, and the email uses described in this policy.'],
+      ['Login data limits', 'We do not sell login data, use it to build advertising profiles, or transfer it to unrelated third parties for marketing. We use login data only for account access, account communication, security, support, and the email uses described in this policy.'],
       ['What is public', 'Public feedback is visible to everyone, but it is shown without your name or profile photo. Your saved library, username setup data, provider keys, credits, and imports are not meant to be public.'],
       ['Security', 'We use Supabase Auth, row-level ownership rules, encrypted provider-key storage, rate limits, upload limits, CORS restrictions, and security headers. No system is perfectly secure, so do not upload highly sensitive data unless you accept that risk.'],
       ['Retention and deletion', 'Your saved library stays until you delete it or request deletion. Public feedback may remain visible unless removed by an operator. Before public launch, we should add a clear account/data deletion contact or self-serve deletion flow.'],
@@ -2048,7 +2160,7 @@ const LEGAL_CONTENT = {
     title: 'Security',
     intro: 'This page explains the practical security controls IScraper uses and how to report a security issue.',
     sections: [
-      ['Account protection', 'IScraper uses Supabase Auth and Google sign-in for account access. Users must complete profile setup before importing saved content. Keep your Google account secure because it controls access to your IScraper account.'],
+      ['Account protection', 'IScraper uses Supabase Auth with Google or email sign-in for account access. Users must complete profile setup before importing saved content. Keep your login method secure because it controls access to your IScraper account.'],
       ['Data separation', 'Production data is stored in Supabase with user ownership checks and row-level security policies. The backend uses the service role only on server-side routes, never in browser code.'],
       ['API keys', 'User AI provider keys are encrypted before storage. The first included indexing allowance can use IScraper provider keys; users can still add their own keys when they want provider control.'],
       ['Extension security - coming soon', 'The browser extension is planned to use a limited, revokable Lens token instead of your main login token. It will not be available to users until browser-store release.'],
@@ -2252,7 +2364,7 @@ function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, ico
   );
 }
 
-function Dashboard({ onBack, onOpenHowTo }) {
+function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [tab, setTab] = useState(() => dashboardTabFromHash());
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -2288,7 +2400,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
 
   const requireSignIn = useCallback((action = 'do this') => {
     if (!authEnabled || session) return true;
-    setError(`Sign in with Google to ${action}.`);
+    setError(`Sign in to ${action}.`);
     setNotice('');
     return false;
   }, [authEnabled, session]);
@@ -2419,18 +2531,6 @@ function Dashboard({ onBack, onOpenHowTo }) {
     }, 3500);
     return () => window.clearInterval(timer);
   }, [canUsePrivateActions, indexingActivity.activeTotal, loadItems]);
-
-  const handleGoogleSignIn = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      await startGoogleSignIn();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const handleAvatarFile = (event) => {
     const file = event.target.files?.[0];
@@ -2711,7 +2811,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
           <div className="border-b border-white/5 px-5 py-3">
             <button
               type="button"
-              onClick={handleGoogleSignIn}
+              onClick={onOpenLogin}
               disabled={busy}
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-60"
             >
@@ -2775,9 +2875,9 @@ function Dashboard({ onBack, onOpenHowTo }) {
                 {authEnabled && !session && tab === 'library' && (
                   <AuthRequiredPanel
                     title="Your library is private."
-                    copy="You can visit this page, but your saved posts only load after Google sign-in."
+                    copy="You can visit this page, but your saved posts only load after sign-in."
                     busy={busy}
-                    onSignIn={handleGoogleSignIn}
+                    onSignIn={onOpenLogin}
                   />
                 )}
                 {authEnabled && session && profileRequired && tab === 'library' && (
@@ -2815,7 +2915,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
                     title="Sign in to view your graph."
                     copy="The graph is built from your private saved library."
                     busy={busy}
-                    onSignIn={handleGoogleSignIn}
+                    onSignIn={onOpenLogin}
                   />
                 )}
                 {authEnabled && session && profileRequired && tab === 'graph' && (
@@ -2843,9 +2943,9 @@ function Dashboard({ onBack, onOpenHowTo }) {
                 {authEnabled && !session && tab === 'upload' && (
                   <AuthRequiredPanel
                     title="Sign in before importing."
-                    copy="Imports are tied to your private account, so Google sign-in is required."
+                    copy="Imports are tied to your private account, so sign-in is required."
                     busy={busy}
-                    onSignIn={handleGoogleSignIn}
+                    onSignIn={onOpenLogin}
                   />
                 )}
                 {authEnabled && session && profileRequired && tab === 'upload' && (
@@ -2880,7 +2980,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
                     title="Sign in to manage keys."
                     copy="API keys and privacy settings belong to your account."
                     busy={busy}
-                    onSignIn={handleGoogleSignIn}
+                    onSignIn={onOpenLogin}
                   />
                 )}
                 {authEnabled && session && profileRequired && tab === 'settings' && (
@@ -3138,7 +3238,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                   <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Account</div>
                   <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Your login</h3>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    This email comes from Google sign-in. To use another email, log out and sign in with a different Google account.
+                    This is the email connected to your login. To use another email, log out and sign in with that email or Google account.
                   </p>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
@@ -3282,7 +3382,7 @@ function AuthRequiredPanel({ title, copy, busy, onSignIn }) {
           className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground disabled:opacity-60"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          Continue with Google
+          Sign in
         </button>
         <p className="mt-4 text-xs leading-5 text-muted-foreground">By continuing, you agree to the Terms of Service and Privacy Policy.</p>
       </div>
