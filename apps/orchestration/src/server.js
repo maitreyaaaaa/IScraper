@@ -36,7 +36,7 @@ const EXPORT_UPLOAD_MIME_TYPES = new Set([
   '',
 ]);
 const IMPORT_UPLOAD_BUCKET = 'import-uploads';
-const IMPORT_CHUNK_SIZE_BYTES = 4 * 1024 * 1024;
+const IMPORT_CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
 const rateBuckets = new Map();
 const aiSearchCache = new Map();
 const aiUsageBuckets = new Map();
@@ -1131,9 +1131,6 @@ function createApp({ store, config = {} }) {
   }));
 
   app.use((error, _req, res, _next) => {
-    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(413).json({ error: 'Upload chunk is too large. Please refresh and try again.' });
-    }
     const statusCode = error.statusCode || (error instanceof multer.MulterError || /Upload Instagram/.test(error.message) ? 400 : 500);
     if (statusCode >= 500) console.error(error);
     res.status(statusCode).json({ error: error.message });
