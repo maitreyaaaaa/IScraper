@@ -963,12 +963,8 @@ function createApp({ store, config = {} }) {
       const file = signedUploadFileFromBody(requestedFile);
       assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024);
       const storagePath = storagePathForUpload(req.user.id, file.originalname);
-      const { data, error } = await store.client.storage.from(bucket).createSignedUploadUrl(storagePath);
-      if (error) throw error;
       uploads.push({
         path: storagePath,
-        token: data.token,
-        signedUrl: data.signedUrl,
         name: file.originalname,
         type: file.mimetype,
         size: file.size,

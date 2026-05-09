@@ -322,7 +322,7 @@ test('POST /api/imports/storage imports files uploaded through storage', async (
   }
 });
 
-test('POST /api/imports/upload-urls creates signed storage uploads', async () => {
+test('POST /api/imports/upload-urls creates short authenticated storage upload paths', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   store.client = {
@@ -333,13 +333,7 @@ test('POST /api/imports/upload-urls creates signed storage uploads', async () =>
       },
       from(bucket) {
         assert.equal(bucket, 'import-uploads');
-        return {
-          async createSignedUploadUrl(storagePath) {
-            assert.match(storagePath, /^local-dev-user\/\d+-[a-f0-9-]+\.zip$/);
-            assert.ok(storagePath.length < 100);
-            return { data: { signedUrl: `https://storage.example/${storagePath}`, token: 'signed-token' }, error: null };
-          },
-        };
+        throw new Error('signed upload URLs should not be created for import uploads');
       },
     },
   };
@@ -364,7 +358,10 @@ test('POST /api/imports/upload-urls creates signed storage uploads', async () =>
     assert.equal(response.status, 200);
     assert.equal(body.bucket, 'import-uploads');
     assert.equal(body.uploads.length, 1);
-    assert.equal(body.uploads[0].token, 'signed-token');
+    assert.match(body.uploads[0].path, /^local-dev-user\/\d+-[a-f0-9-]+\.zip$/);
+    assert.ok(body.uploads[0].path.length < 100);
+    assert.equal(body.uploads[0].token, undefined);
+    assert.equal(body.uploads[0].signedUrl, undefined);
     assert.equal(body.uploads[0].name, 'instagram-maitreya_iguess-2026-05-09-0WPnfek7-with-a-very-long-original-export-name.zip');
   } finally {
     await new Promise((resolve) => server.close(resolve));
