@@ -5,6 +5,9 @@ const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require(
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
 
+const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
+const IMPORT_INSERT_BATCH_SIZE = 500;
+
 function createSupabaseStore({ url, serviceRoleKey }) {
   if (!url || !serviceRoleKey) {
     throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for Supabase mode.');
@@ -216,22 +219,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
 
       const ids = [...new Set(parsed.items.map((item) => item.id).filter(Boolean))];
       const urls = [...new Set(parsed.items.map((item) => item.url).filter(Boolean))];
-      const existingKeys = new Set();
-      if (ids.length || urls.length) {
-        const filters = [];
-        if (ids.length) filters.push(`id.in.(${ids.map(escapeSupabaseListValue).join(',')})`);
-        if (urls.length) filters.push(`url.in.(${urls.map(escapeSupabaseListValue).join(',')})`);
-        const { data: existing, error: existingError } = await client
-          .from('saved_items')
-          .select('id,url')
-          .eq('user_id', userId)
-          .or(filters.join(','));
-        if (existingError) throw existingError;
-        for (const row of existing || []) {
-          existingKeys.add(`id:${row.id}`);
-          existingKeys.add(`url:${row.url}`);
-        }
-      }
+      const existingKeys = await getExistingSavedItemKeys(client, { userId, ids, urls });
 
       const items = parsed.items
         .filter((item) => !existingKeys.has(`id:${item.id}`) && !existingKeys.has(`url:${item.url}`))
@@ -257,9 +245,13 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         status: initialStatus,
       }));
       if (!items.length) return [];
-      const { data, error } = await client.from('saved_items').insert(items).select('*');
-      if (error) throw error;
-      return data.map(mapItem);
+      const inserted = [];
+      for (const batch of chunkValues(items, IMPORT_INSERT_BATCH_SIZE)) {
+        const { data, error } = await client.from('saved_items').insert(batch).select('*');
+        if (error) throw error;
+        inserted.push(...(data || []));
+      }
+      return inserted.map(mapItem);
     },
     async updateSavedItem(userId, id, patch = {}) {
       const { data, error } = await client
@@ -806,8 +798,44 @@ function mapImport(row) {
   return { id: row.id, userId: row.user_id, source: row.source, mode: row.mode, status: row.status };
 }
 
-function escapeSupabaseListValue(value) {
-  return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+function chunkValues(values, size = EXISTING_ITEM_LOOKUP_BATCH_SIZE) {
+  const chunks = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
+async function addExistingSavedItemKeys(client, { userId, field, values, existingKeys }) {
+  for (const batch of chunkValues(values)) {
+    const { data, error } = await client
+      .from('saved_items')
+      .select('id,url')
+      .eq('user_id', userId)
+      .in(field, batch);
+    if (error) throw error;
+    for (const row of data || []) {
+      existingKeys.add(`id:${row.id}`);
+      existingKeys.add(`url:${row.url}`);
+    }
+  }
+}
+
+async function getExistingSavedItemKeys(client, { userId, ids = [], urls = [] }) {
+  const existingKeys = new Set();
+  await addExistingSavedItemKeys(client, {
+    userId,
+    field: 'id',
+    values: ids,
+    existingKeys,
+  });
+  await addExistingSavedItemKeys(client, {
+    userId,
+    field: 'url',
+    values: urls,
+    existingKeys,
+  });
+  return existingKeys;
 }
 
 async function countRows(client, table, apply = null) {
@@ -1117,4 +1145,5 @@ function mergeSearchResults({ items, keywordResults, semanticMatches, filters = 
 
 module.exports = {
   createSupabaseStore,
+  getExistingSavedItemKeys,
 };
