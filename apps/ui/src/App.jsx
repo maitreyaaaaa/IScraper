@@ -287,7 +287,33 @@ function RotatingPlatformLogo() {
   );
 }
 
-function getRouteFromHash() {
+const ROUTE_PATHS = {
+  landing: '/',
+  app: '/app',
+  login: '/login',
+  'how-to-use': '/how-to-use',
+  terms: '/terms',
+  privacy: '/privacy',
+  help: '/help',
+  security: '/security',
+  'data-deletion': '/data-deletion',
+  cookies: '/cookies',
+};
+
+const ROUTE_TITLES = {
+  landing: 'IScraper',
+  app: 'IScraper App',
+  login: 'Log in to IScraper',
+  'how-to-use': 'How to Use IScraper',
+  terms: 'IScraper Terms',
+  privacy: 'IScraper Privacy',
+  help: 'IScraper Help',
+  security: 'IScraper Security',
+  'data-deletion': 'Delete IScraper Data',
+  cookies: 'IScraper Cookies',
+};
+
+function legacyRouteFromHash() {
   const hash = window.location.hash || '';
   if (hash === '#app' || hash.startsWith('#app?')) return 'app';
   if (window.location.hash === '#login') return 'login';
@@ -301,10 +327,31 @@ function getRouteFromHash() {
   return 'landing';
 }
 
-function pendingSaveFromHash() {
+function getRouteFromLocation() {
+  const path = window.location.pathname.replace(/^\/+|\/+$/g, '');
+  if (path === 'auth/callback') return 'app';
+  if (!path) return legacyRouteFromHash();
+  return Object.keys(ROUTE_PATHS).find((route) => route !== 'landing' && route === path) || 'landing';
+}
+
+function appParamsFromLocation() {
+  if (window.location.pathname.replace(/\/+$/g, '') === '/app') return new URLSearchParams(window.location.search);
   const hash = window.location.hash || '';
-  if (!hash.startsWith('#app?')) return null;
-  const params = new URLSearchParams(hash.slice('#app?'.length));
+  if (hash.startsWith('#app?')) return new URLSearchParams(hash.slice('#app?'.length));
+  return new URLSearchParams();
+}
+
+function canonicalizeLegacyHashRoute() {
+  const hash = window.location.hash || '';
+  if (!hash.startsWith('#')) return;
+  const route = legacyRouteFromHash();
+  if (route === 'landing') return;
+  const query = hash.startsWith('#app?') ? `?${hash.slice('#app?'.length)}` : '';
+  window.history.replaceState({}, ROUTE_TITLES[route], `${ROUTE_PATHS[route]}${query}`);
+}
+
+function pendingSaveFromLocation() {
+  const params = appParamsFromLocation();
   const url = params.get('url') || params.get('saveUrl');
   if (!url) return null;
   return {
@@ -317,16 +364,12 @@ function pendingSaveFromHash() {
   };
 }
 
-function itemIdFromHash() {
-  const hash = window.location.hash || '';
-  if (!hash.startsWith('#app?')) return '';
-  return new URLSearchParams(hash.slice('#app?'.length)).get('item') || '';
+function itemIdFromLocation() {
+  return appParamsFromLocation().get('item') || '';
 }
 
-function dashboardTabFromHash() {
-  const hash = window.location.hash || '';
-  if (!hash.startsWith('#app?')) return 'library';
-  const tab = new URLSearchParams(hash.slice('#app?'.length)).get('tab');
+function dashboardTabFromLocation() {
+  const tab = appParamsFromLocation().get('tab');
   return ['library', 'graph', 'upload', 'settings'].includes(tab) ? tab : 'library';
 }
 
@@ -340,12 +383,12 @@ function cleanAuthCallbackUrl() {
     }
   }
   if (url.pathname === '/auth/callback') {
-    url.pathname = '/';
-    url.hash = '#app';
+    url.pathname = '/app';
+    url.hash = '';
     changed = true;
   }
   if (changed) {
-    window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash || '#app'}`);
+    window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
   }
 }
 
@@ -354,7 +397,7 @@ async function startGoogleSignIn() {
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      redirectTo: `${window.location.origin}/#app`,
+      redirectTo: `${window.location.origin}/app`,
       queryParams: {
         prompt: 'select_account',
       },
@@ -369,7 +412,7 @@ async function sendEmailOtp(email) {
     email,
     options: {
       shouldCreateUser: true,
-      emailRedirectTo: `${window.location.origin}/#app`,
+      emailRedirectTo: `${window.location.origin}/app`,
     },
   });
   if (error) throw error;
@@ -421,7 +464,7 @@ function groupProviderCredentials(credentials = []) {
 }
 
 function rememberPendingSave() {
-  const pending = pendingSaveFromHash();
+  const pending = pendingSaveFromLocation();
   if (!pending) return;
   window.localStorage.setItem('iscraper.pendingSaveLink', JSON.stringify(pending));
 }
@@ -429,22 +472,35 @@ function rememberPendingSave() {
 export default function App() {
   const [route, setRoute] = useState(() => {
     rememberPendingSave();
-    return getRouteFromHash();
+    return getRouteFromLocation();
   });
 
   const navigate = useCallback((nextRoute) => {
-    setRoute(nextRoute);
-    window.location.hash = ['app', 'login', 'how-to-use', 'terms', 'privacy', 'help', 'security', 'data-deletion', 'cookies'].includes(nextRoute) ? nextRoute : '';
+    const routeName = ROUTE_PATHS[nextRoute] ? nextRoute : 'landing';
+    setRoute(routeName);
+    window.history.pushState({}, ROUTE_TITLES[routeName], ROUTE_PATHS[routeName]);
+    document.title = ROUTE_TITLES[routeName];
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
   useEffect(() => {
-    const onHashChange = () => {
+    document.title = ROUTE_TITLES[route] || 'IScraper';
+  }, [route]);
+
+  useEffect(() => {
+    const onRouteChange = () => {
       rememberPendingSave();
-      setRoute(getRouteFromHash());
+      const nextRoute = getRouteFromLocation();
+      setRoute(nextRoute);
+      canonicalizeLegacyHashRoute();
     };
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    canonicalizeLegacyHashRoute();
+    window.addEventListener('popstate', onRouteChange);
+    window.addEventListener('hashchange', onRouteChange);
+    return () => {
+      window.removeEventListener('popstate', onRouteChange);
+      window.removeEventListener('hashchange', onRouteChange);
+    };
   }, []);
 
   if (route === 'app') return <Dashboard onBack={() => navigate('landing')} onOpenLogin={() => navigate('login')} onOpenHowTo={() => navigate('how-to-use')} />;
@@ -1686,7 +1742,8 @@ function HowToUsePage({ onBack, onOpenApp }) {
   const [activeGuide, setActiveGuide] = useState(null);
   const activeGuideDetails = HOW_TO_GUIDES.find((guide) => guide.key === activeGuide);
   const openKeysPrivacy = () => {
-    window.location.hash = '#app?tab=settings';
+    window.history.pushState({}, 'IScraper App', '/app?tab=settings');
+    window.dispatchEvent(new PopStateEvent('popstate'));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -2379,7 +2436,7 @@ function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, ico
 }
 
 function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
-  const [tab, setTab] = useState(() => dashboardTabFromHash());
+  const [tab, setTab] = useState(() => dashboardTabFromLocation());
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [collectionFilter, setCollectionFilter] = useState('all');
@@ -2660,7 +2717,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
 
   useEffect(() => {
     if (pendingItemHandledRef.current || loading || (authEnabled && (!session || profileRequired))) return;
-    const itemId = itemIdFromHash();
+    const itemId = itemIdFromLocation();
     if (!itemId) return;
     pendingItemHandledRef.current = true;
     const timer = window.setTimeout(() => {

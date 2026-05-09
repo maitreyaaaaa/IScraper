@@ -33,7 +33,7 @@ const SHOWCASE_ITEMS = [
     title: 'Push the good saves into notes you can reuse.',
     summary: 'Each useful post becomes a clean note instead of staying trapped in Instagram.',
     detail:
-      'Harness can turn the saved post into note-ready output with title, summary, transcript, tags, and linked context so the material survives beyond the app.',
+      'IScraper can turn the saved post into note-ready output with title, summary, transcript, tags, and linked context so the material survives beyond the app.',
     chips: ['Vault ready', 'Linked notes', 'Clean metadata'],
     previewTitle: 'Vault note snapshot',
     previewLines: [
@@ -71,7 +71,7 @@ const SHOWCASE_ITEMS = [
     title: 'Get usable summaries, tags, and next-step context.',
     summary: 'The output is already cleaned enough for prompting, planning, or repurposing.',
     detail:
-      'Harness enriches each saved post with transcript, OCR text, summary, likely tools, topics, and why it matters, so you start with structured context instead of raw media.',
+      'IScraper enriches each saved post with transcript, OCR text, summary, likely tools, topics, and why it matters, so you start with structured context instead of raw media.',
     chips: ['Transcript', 'OCR text', 'Why useful'],
     previewTitle: 'Enrichment snapshot',
     previewLines: [
@@ -223,11 +223,11 @@ function ShowcaseSection() {
       <div className="showcase-section-header">
         <span className="showcase-section-label">Showcase</span>
         <h2 id="showcase-section-title">The outcome is usable memory, not just another import screen.</h2>
-        <p>Open any result to inspect what Harness gives you after the raw Instagram save is processed.</p>
+        <p>Open any result to inspect what IScraper gives you after the raw Instagram save is processed.</p>
       </div>
 
       <div className="showcase-shell">
-        <div className="showcase-card-grid" aria-label="Harness result showcase">
+        <div className="showcase-card-grid" aria-label="IScraper result showcase">
           {SHOWCASE_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = item.id === activeId;

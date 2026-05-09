@@ -14,7 +14,7 @@ const SYSTEM_STEPS = [
     eyebrow: 'Raw input',
     summary: 'Bring in the Instagram saves you already collected.',
     detail:
-      'Harness starts with the raw export: post URLs, captions, and the media you actually cared enough to save. Nothing useful is assumed yet.',
+      'IScraper starts with the raw export: post URLs, captions, and the media you actually cared enough to save. Nothing useful is assumed yet.',
     outputs: ['URLs', 'Captions', 'Media files'],
     icon: SearchCheck,
   },
@@ -247,7 +247,7 @@ function SystemMapSection() {
       </div>
 
       <div className="system-map-shell">
-        <ol className="system-map-canvas" aria-label="Harness system flow">
+        <ol className="system-map-canvas" aria-label="IScraper system flow">
           {SYSTEM_STEPS.map((step, index) => {
             const Icon = step.icon;
             const isActive = step.id === activeStepId;

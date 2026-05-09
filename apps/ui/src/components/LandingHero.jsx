@@ -60,13 +60,13 @@ function LandingHero({ opening = false, reducedMotion = false, onEnterApp, onExp
         ) : null}
       </div>
       <h1 id="landing-title" className="sr-only">
-        Harness
+        IScraper
       </h1>
       <img
         ref={logoRef}
         className="landing-logo"
         src="/logo.png"
-        alt="Harness logo"
+        alt="IScraper logo"
         width="220"
         height="110"
         onError={(event) => {
