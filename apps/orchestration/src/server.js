@@ -12,6 +12,7 @@ const { credentialOptions } = require('./services/providers');
 const { testProviderCredential } = require('./services/providerClients');
 const { formatPrice } = require('./services/credits');
 const { buildKnowledgeGraph, buildObsidianFiles } = require('./services/graph');
+const { createDeepSeekSearchAnswer } = require('./services/aiSearch');
 const { parseManualLinkPayload } = require('./services/linkSaver');
 const { validateProfileInput } = require('./services/profiles');
 const {
@@ -34,7 +35,10 @@ const EXPORT_UPLOAD_MIME_TYPES = new Set([
   'application/vnd.ms-excel',
   '',
 ]);
+const IMPORT_UPLOAD_BUCKET = 'import-uploads';
 const rateBuckets = new Map();
+const aiSearchCache = new Map();
+const aiUsageBuckets = new Map();
 
 async function getUser(req, store) {
   const auth = req.header('authorization') || '';
@@ -161,6 +165,81 @@ function createRateLimiter({ windowMs, max, name, namespace = 'app' }) {
   };
 }
 
+function currentUtcDay() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function assertAiSearchUsageAllowed(req, config) {
+  const now = Date.now();
+  const userKey = req.user?.id || clientIp(req);
+  const minuteKey = `minute:${userKey}`;
+  const dayKey = `day:${currentUtcDay()}:${userKey}`;
+  const minuteMax = config.aiSearchRateLimitMax || 60;
+  const dayMax = config.aiSearchDailyLimit || 1000;
+  const minute = aiUsageBuckets.get(minuteKey);
+  const minuteBucket = minute && minute.resetAt > now ? minute : { count: 0, resetAt: now + 60 * 1000 };
+  const day = aiUsageBuckets.get(dayKey);
+  const dayBucket = day && day.resetAt > now ? day : { count: 0, resetAt: now + 24 * 60 * 60 * 1000 };
+
+  minuteBucket.count += 1;
+  dayBucket.count += 1;
+  aiUsageBuckets.set(minuteKey, minuteBucket);
+  aiUsageBuckets.set(dayKey, dayBucket);
+
+  if (minuteBucket.count > minuteMax || dayBucket.count > dayMax) {
+    const error = new Error('AI search is busy. Please try again later.');
+    error.statusCode = 429;
+    throw error;
+  }
+
+  if (aiUsageBuckets.size > 5000) {
+    for (const [bucketKey, value] of aiUsageBuckets.entries()) {
+      if (value.resetAt <= now) aiUsageBuckets.delete(bucketKey);
+    }
+  }
+}
+
+function aiSearchCacheKey({ userId, query, results, model }) {
+  const ids = results.map((item) => item.id).join(',');
+  return crypto
+    .createHash('sha256')
+    .update([userId, model, String(query || '').trim().toLowerCase(), ids].join('\n'))
+    .digest('hex');
+}
+
+async function runAiSearchAnswer({ config, req, userId, query, results }) {
+  if (config.aiSearchEnabled === false || !config.deepSeekApiKey || !query || !results.length) return null;
+  const topResults = results.slice(0, Math.max(1, Math.min(config.aiSearchResultLimit || 8, 12)));
+  const model = config.deepSeekModel || 'deepseek-v4-flash';
+  const cacheKey = aiSearchCacheKey({ userId, query, results: topResults, model });
+  const cached = aiSearchCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return { ...cached.value, cached: true };
+
+  assertAiSearchUsageAllowed(req, config);
+  const ai = await createDeepSeekSearchAnswer({
+    apiKey: config.deepSeekApiKey,
+    model,
+    query,
+    results: topResults,
+  });
+  if (!ai) return null;
+
+  const value = { ...ai, model, resultIds: topResults.map((item) => item.id), cached: false };
+  aiSearchCache.set(cacheKey, {
+    value,
+    expiresAt: now + (config.aiSearchCacheTtlMs || 6 * 60 * 60 * 1000),
+  });
+
+  if (aiSearchCache.size > 500) {
+    for (const [entryKey, entry] of aiSearchCache.entries()) {
+      if (entry.expiresAt <= now || aiSearchCache.size > 500) aiSearchCache.delete(entryKey);
+    }
+  }
+
+  return value;
+}
+
 function securityHeaders(_req, res, next) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -196,6 +275,129 @@ function uploadFileFilter(_req, file, callback) {
     return callback(new Error('Upload Instagram HTML files or Pinterest export ZIP/JSON/CSV files.'));
   }
   return callback(null, true);
+}
+
+function assertImportFileAllowed(file, maxUploadFileSizeBytes) {
+  const extension = path.extname(file.originalname || '').toLowerCase();
+  if (!EXPORT_UPLOAD_EXTENSIONS.has(extension) || !EXPORT_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
+    const error = new Error('Upload Instagram HTML files or Pinterest export ZIP/JSON/CSV files.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (file.size > maxUploadFileSizeBytes) {
+    const error = new Error(`Upload files must be ${(maxUploadFileSizeBytes / (1024 * 1024)).toFixed(0)} MB or smaller.`);
+    error.statusCode = 413;
+    throw error;
+  }
+}
+
+async function createImportFromFiles({ store, userId, files, config }) {
+  const parsed = await parseImportExport(files);
+  if (!parsed.items.length) {
+    const error = new Error('No saves were found in those files. Upload Instagram saved-post HTML files or the Pinterest export ZIP.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const importEntry = await store.createImport({
+    userId,
+    source: parsed.source || 'user-export',
+    mode: 'export',
+    fileNames: files.map((file) => file.originalname),
+  });
+  const items = await store.upsertImportData({ userId, importId: importEntry.id, parsed });
+  const jobs = await store.createJobs({ userId, importId: importEntry.id, items });
+
+  return {
+    import: importEntry,
+    itemCount: parsed.items.length,
+    totalItemCount: parsed.items.length,
+    newItemCount: items.length,
+    skippedDuplicateCount: Math.max(parsed.items.length - items.length, 0),
+    collectionCount: parsed.collections.length,
+    queuedJobCount: jobs.length,
+    jobCount: jobs.length,
+  };
+}
+
+function storagePathBelongsToUser(userId, storagePath = '') {
+  const normalized = String(storagePath).replace(/^\/+/, '');
+  return normalized.startsWith(`${userId}/`);
+}
+
+async function ensureImportUploadBucket(store, config) {
+  if (!store.client?.storage) {
+    const error = new Error('Large file upload storage is not configured.');
+    error.statusCode = 503;
+    throw error;
+  }
+  const bucket = config.importUploadBucket || IMPORT_UPLOAD_BUCKET;
+  const options = {
+    public: false,
+    fileSizeLimit: config.maxUploadFileSizeBytes || 25 * 1024 * 1024,
+    allowedMimeTypes: [...EXPORT_UPLOAD_MIME_TYPES].filter(Boolean),
+  };
+  const { error } = await store.client.storage.getBucket(bucket);
+  if (!error) return bucket;
+
+  const created = await store.client.storage.createBucket(bucket, options);
+  if (created.error && !/already exists/i.test(created.error.message || '')) {
+    throw created.error;
+  }
+  return bucket;
+}
+
+function fileNameForStorage(fileName = 'upload') {
+  return String(fileName)
+    .replace(/[\\/]/g, '-')
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 120) || 'upload';
+}
+
+function signedUploadFileFromBody(file = {}) {
+  return {
+    originalname: String(file.name || 'upload'),
+    mimetype: String(file.type || 'application/octet-stream'),
+    size: Number(file.size || 0),
+  };
+}
+
+async function loadImportFilesFromStorage({ store, userId, storageFiles, config }) {
+  if (!store.client?.storage) {
+    const error = new Error('Large file upload storage is not configured.');
+    error.statusCode = 503;
+    throw error;
+  }
+  const bucket = config.importUploadBucket || IMPORT_UPLOAD_BUCKET;
+  const files = [];
+  const pathsToRemove = [];
+
+  for (const entry of storageFiles) {
+    const storagePath = String(entry.path || '').replace(/^\/+/, '');
+    const originalname = String(entry.name || path.basename(storagePath));
+    const mimetype = String(entry.type || 'application/octet-stream');
+
+    if (!storagePath || !storagePathBelongsToUser(userId, storagePath)) {
+      const error = new Error('Uploaded file path is invalid.');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const { data, error } = await store.client.storage.from(bucket).download(storagePath);
+    if (error) throw error;
+    const buffer = Buffer.from(await data.arrayBuffer());
+    const file = {
+      originalname,
+      mimetype,
+      size: buffer.length,
+      buffer,
+    };
+    assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024);
+    files.push(file);
+    pathsToRemove.push(storagePath);
+  }
+
+  return { files, bucket, pathsToRemove };
 }
 
 function cleanText(value, maxLength) {
@@ -739,29 +941,59 @@ function createApp({ store, config = {} }) {
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
     if (!files.length) return res.status(400).json({ error: 'Upload Instagram HTML files or your Pinterest export ZIP.' });
 
-    const parsed = await parseImportExport(files);
-    if (!parsed.items.length) {
-      return res.status(400).json({ error: 'No saves were found in those files. Upload Instagram saved-post HTML files or the Pinterest export ZIP.' });
-    }
-    const importEntry = await store.createImport({
-      userId: req.user.id,
-      source: parsed.source || 'user-export',
-      mode: 'export',
-      fileNames: files.map((file) => file.originalname),
-    });
-    const items = await store.upsertImportData({ userId: req.user.id, importId: importEntry.id, parsed });
-    const jobs = await store.createJobs({ userId: req.user.id, importId: importEntry.id, items });
+    files.forEach((file) => assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024));
+    res.json(await createImportFromFiles({ store, userId: req.user.id, files, config }));
+  }));
 
-    res.json({
-      import: importEntry,
-      itemCount: parsed.items.length,
-      totalItemCount: parsed.items.length,
-      newItemCount: items.length,
-      skippedDuplicateCount: Math.max(parsed.items.length - items.length, 0),
-      collectionCount: parsed.collections.length,
-      queuedJobCount: jobs.length,
-      jobCount: jobs.length,
+  app.post('/api/imports/upload-urls', importRateLimit, asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    const requestedFiles = Array.isArray(req.body?.files) ? req.body.files : [];
+    if (!requestedFiles.length) return res.status(400).json({ error: 'Choose files before uploading.' });
+    if (requestedFiles.length > 20) return res.status(400).json({ error: 'Upload 20 files or fewer at once.' });
+
+    const bucket = await ensureImportUploadBucket(store, config);
+    const uploads = [];
+    for (const requestedFile of requestedFiles) {
+      const file = signedUploadFileFromBody(requestedFile);
+      assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024);
+      const storagePath = `${req.user.id}/${Date.now()}-${crypto.randomUUID()}-${fileNameForStorage(file.originalname)}`;
+      const { data, error } = await store.client.storage.from(bucket).createSignedUploadUrl(storagePath);
+      if (error) throw error;
+      uploads.push({
+        path: storagePath,
+        token: data.token,
+        signedUrl: data.signedUrl,
+        name: file.originalname,
+        type: file.mimetype,
+        size: file.size,
+      });
+    }
+
+    res.json({ bucket, uploads });
+  }));
+
+  app.post('/api/imports/storage', importRateLimit, asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    const storageFiles = Array.isArray(req.body?.files) ? req.body.files : [];
+    if (!storageFiles.length) return res.status(400).json({ error: 'Upload files to storage before importing.' });
+    if (storageFiles.length > 20) return res.status(400).json({ error: 'Upload 20 files or fewer at once.' });
+
+    const { files, bucket, pathsToRemove } = await loadImportFilesFromStorage({
+      store,
+      userId: req.user.id,
+      storageFiles,
+      config,
     });
+
+    try {
+      res.json(await createImportFromFiles({ store, userId: req.user.id, files, config }));
+    } finally {
+      if (pathsToRemove.length) {
+        await store.client.storage.from(bucket).remove(pathsToRemove).catch((error) => {
+          console.warn(`Could not remove import upload files: ${error.message}`);
+        });
+      }
+    }
   }));
 
   app.post('/api/saves/link', importRateLimit, asyncRoute(async (req, res) => {
@@ -821,7 +1053,17 @@ function createApp({ store, config = {} }) {
   app.post('/api/search', searchRateLimit, asyncRoute(async (req, res) => {
     const query = String(req.body.query || '').trim().slice(0, 240);
     const results = await runSearch({ store, config, userId: req.user.id, query, filters: req.body.filters || {} });
-    res.json({ results });
+    let ai = null;
+    if (req.body.includeAi && query && results.length) {
+      try {
+        ai = await runAiSearchAnswer({ config, req, userId: req.user.id, query, results });
+      } catch (error) {
+        if (error.statusCode === 429) throw error;
+        console.warn(`AI search answer failed: ${error.message}`);
+        ai = { error: 'AI answer is unavailable right now. Showing regular search results.' };
+      }
+    }
+    res.json({ results, ai });
   }));
 
   app.use((error, _req, res, _next) => {

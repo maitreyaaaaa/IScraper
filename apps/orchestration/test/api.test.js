@@ -154,6 +154,108 @@ test('POST /api/imports accepts Pinterest export zip files', async () => {
   }
 });
 
+test('POST /api/imports/storage imports files uploaded through storage', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const html = `
+    <main>
+      <div class="_a6-g"><table>
+        <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/reel/STORED111/">x</a></div></td></tr>
+        <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Stored upload reel</td></tr>
+      </table></div>
+    </main>`;
+  const removedPaths = [];
+  store.client = {
+    storage: {
+      from() {
+        return {
+          async download(storagePath) {
+            assert.equal(storagePath, 'local-dev-user/imports/saved_posts.html');
+            return { data: new Blob([html], { type: 'text/html' }), error: null };
+          },
+          async remove(paths) {
+            removedPaths.push(...paths);
+            return { data: paths, error: null };
+          },
+        };
+      },
+    },
+  };
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports/storage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: [{
+          path: 'local-dev-user/imports/saved_posts.html',
+          name: 'saved_posts.html',
+          type: 'text/html',
+        }],
+      }),
+    });
+    const body = await response.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.itemCount, 1);
+    assert.equal(body.newItemCount, 1);
+    assert.equal(items[0].id, 'STORED111');
+    assert.deepEqual(removedPaths, ['local-dev-user/imports/saved_posts.html']);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/imports/upload-urls creates signed storage uploads', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  store.client = {
+    storage: {
+      async getBucket(bucket) {
+        assert.equal(bucket, 'import-uploads');
+        return { data: { id: bucket }, error: null };
+      },
+      from(bucket) {
+        assert.equal(bucket, 'import-uploads');
+        return {
+          async createSignedUploadUrl(storagePath) {
+            assert.match(storagePath, /^local-dev-user\/.+saved_posts\.html$/);
+            return { data: { signedUrl: `https://storage.example/${storagePath}`, token: 'signed-token' }, error: null };
+          },
+        };
+      },
+    },
+  };
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports/upload-urls`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: [{ name: 'saved_posts.html', type: 'text/html', size: 1024 }],
+      }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.bucket, 'import-uploads');
+    assert.equal(body.uploads.length, 1);
+    assert.equal(body.uploads[0].token, 'signed-token');
+    assert.equal(body.uploads[0].name, 'saved_posts.html');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/saves/link stores one deduped web save', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

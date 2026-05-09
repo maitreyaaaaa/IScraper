@@ -347,6 +347,9 @@ function searchItems(items, query, filters = {}) {
     .filter(({ item, score }) => {
       if (!score) return false;
       if (filters.contentType && item.contentType !== filters.contentType) return false;
+      if (filters.status && item.status !== filters.status) return false;
+      if (filters.platform && item.platform !== filters.platform) return false;
+      if (filters.collection && !(item.collections || []).includes(filters.collection)) return false;
       return true;
     })
     .sort((a, b) => b.score - a.score)

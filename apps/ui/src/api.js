@@ -11,6 +11,9 @@ async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 413) {
+      throw new Error('This file is too large. Upload files must be 20 MB or smaller.');
+    }
     throw new Error(body.error || `Request failed: ${response.status}`);
   }
   return body;
@@ -163,6 +166,28 @@ export function importInstagramExport({ files }) {
   });
 }
 
+export function importStoredExport({ files }) {
+  return request('/imports/storage', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files }),
+  });
+}
+
+export function createImportUploadUrls({ files }) {
+  return request('/imports/upload-urls', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      files: files.map((file) => ({
+        name: file.name,
+        type: file.type || 'application/octet-stream',
+        size: file.size,
+      })),
+    }),
+  });
+}
+
 export function saveLink(payload) {
   return request('/saves/link', {
     method: 'POST',
@@ -187,10 +212,10 @@ export function restartQueue(importId = null) {
   });
 }
 
-export function searchItems(query, filters = {}) {
+export function searchItems(query, filters = {}, options = {}) {
   return request('/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, filters }),
+    body: JSON.stringify({ query, filters, ...options }),
   });
 }

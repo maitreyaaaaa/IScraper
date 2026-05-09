@@ -117,6 +117,35 @@ test('searchItems expands broad security queries to compliance concepts', () => 
   assert.deepEqual(results.map((item) => item.id), ['soc2']);
 });
 
+test('searchItems can filter by status, platform, and collection', () => {
+  const items = [
+    {
+      id: 'match',
+      status: 'done',
+      platform: 'Instagram',
+      collections: ['Research'],
+      caption: 'SOC 2 compliance checklist',
+      analysis: { title: 'SOC 2 security controls' },
+    },
+    {
+      id: 'wrong-platform',
+      status: 'done',
+      platform: 'Pinterest',
+      collections: ['Research'],
+      caption: 'SOC 2 compliance checklist',
+      analysis: { title: 'SOC 2 security controls' },
+    },
+  ];
+
+  const results = searchItems(items, 'SOC 2', {
+    status: 'done',
+    platform: 'Instagram',
+    collection: 'Research',
+  });
+
+  assert.deepEqual(results.map((item) => item.id), ['match']);
+});
+
 test('buildOpenRouterAnalysisRequest creates a structured JSON chat request without exposing secrets', () => {
   const request = buildOpenRouterAnalysisRequest({
     model: 'deepseek/deepseek-v4-pro',

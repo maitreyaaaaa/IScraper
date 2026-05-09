@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import {
   approveReviewItem,
+  createImportUploadUrls,
   deleteProviderCredential,
   downloadObsidianGraph,
   getItem,
@@ -52,6 +53,7 @@ import {
   getPublicFeedback,
   getProviderCredentials,
   importInstagramExport,
+  importStoredExport,
   restartQueue,
   revealProviderCredential,
   saveLink,
@@ -83,6 +85,8 @@ const STATUS_META = {
 
 const STATUSES = ['all', 'needs_review', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
+const DIRECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+const IMPORT_UPLOAD_BUCKET = 'import-uploads';
 const HERO_PLATFORMS = [
   { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
   { name: 'X', src: '/platforms/x.svg', bg: '#fff' },
@@ -476,6 +480,35 @@ function rememberPendingSave() {
   const pending = pendingSaveFromLocation();
   if (!pending) return;
   window.localStorage.setItem('iscraper.pendingSaveLink', JSON.stringify(pending));
+}
+
+async function uploadImportFilesToStorage(files) {
+  if (!supabase) {
+    throw new Error('Large uploads need Supabase Storage. Sign in again and try once more.');
+  }
+
+  const { bucket, uploads } = await createImportUploadUrls({ files });
+  const uploaded = [];
+  try {
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const upload = uploads[index];
+      const { error } = await supabase.storage.from(bucket || IMPORT_UPLOAD_BUCKET).uploadToSignedUrl(upload.path, upload.token, file);
+      if (error) throw error;
+      uploaded.push({
+        path: upload.path,
+        name: file.name,
+        type: file.type || 'application/octet-stream',
+        size: file.size,
+      });
+    }
+    return uploaded;
+  } catch (error) {
+    if (uploaded.length) {
+      await supabase.storage.from(bucket || IMPORT_UPLOAD_BUCKET).remove(uploaded.map((file) => file.path));
+    }
+    throw error;
+  }
 }
 
 export default function App() {
@@ -2449,6 +2482,7 @@ function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, ico
 function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [tab, setTab] = useState(() => dashboardTabFromLocation());
   const [query, setQuery] = useState('');
+  const [aiSearch, setAiSearch] = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
   const [collectionFilter, setCollectionFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
@@ -2658,12 +2692,19 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (!requireSignIn('search your library')) return;
     setBusy(true);
     setError('');
+    setAiSearch(null);
     try {
       if (!query.trim()) {
         await loadItems();
       } else {
-        const body = await searchItems(query);
+        const filters = {
+          ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
+          ...(collectionFilter !== 'all' ? { collection: collectionFilter } : {}),
+          ...(platformFilter !== 'all' ? { platform: platformFilter } : {}),
+        };
+        const body = await searchItems(query, filters, { includeAi: true });
         setItems((body.results || []).map(mapItem));
+        setAiSearch(body.ai || null);
       }
     } catch (err) {
       setError(err.message);
@@ -2747,11 +2788,20 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setError('Upload Instagram HTML files or your Pinterest export ZIP.');
       return;
     }
+    const oversizedFile = files.find((file) => file.size > DIRECT_UPLOAD_MAX_BYTES);
+    if (oversizedFile) {
+      setError(`${oversizedFile.name} is too large. Upload files must be 20 MB or smaller.`);
+      setNotice('');
+      return;
+    }
     setBusy(true);
     setError('');
     setNotice('');
     try {
-      const result = await importInstagramExport({ files });
+      setNotice('Uploading files...');
+      const storedFiles = authEnabled ? await uploadImportFilesToStorage(files) : null;
+      setNotice('Importing saves...');
+      const result = storedFiles ? await importStoredExport({ files: storedFiles }) : await importInstagramExport({ files });
       const newCount = result.newItemCount ?? result.itemCount ?? 0;
       const skippedCount = result.skippedDuplicateCount ?? 0;
       setQuery('');
@@ -2995,16 +3045,29 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     items={filtered}
                     totalCount={items.length}
                     query={query}
-                    setQuery={setQuery}
+                    setQuery={(nextQuery) => {
+                      setAiSearch(null);
+                      setQuery(nextQuery);
+                    }}
                     onSearch={handleSearch}
+                    aiSearch={aiSearch}
                     busy={busy}
                     statusFilter={statusFilter}
-                    setStatusFilter={setStatusFilter}
+                    setStatusFilter={(nextStatus) => {
+                      setAiSearch(null);
+                      setStatusFilter(nextStatus);
+                    }}
                     collectionFilter={collectionFilter}
-                    setCollectionFilter={setCollectionFilter}
+                    setCollectionFilter={(nextCollection) => {
+                      setAiSearch(null);
+                      setCollectionFilter(nextCollection);
+                    }}
                     collections={collections}
                     platformFilter={platformFilter}
-                    setPlatformFilter={setPlatformFilter}
+                    setPlatformFilter={(nextPlatform) => {
+                      setAiSearch(null);
+                      setPlatformFilter(nextPlatform);
+                    }}
                     platforms={platforms}
                     onSelect={openDetail}
                     onRestart={handleStartIndexing}
@@ -3665,6 +3728,7 @@ function LibraryTab({
   onSelect,
   onRestart,
   indexingActivity,
+  aiSearch,
 }) {
   const boardRef = useRef(null);
   const [visibleCount, setVisibleCount] = useState(80);
@@ -3751,6 +3815,40 @@ function LibraryTab({
       </div>
 
       <IndexingProgressCard activity={indexingActivity} />
+
+      {aiSearch && (
+        <div className="mt-5 rounded-2xl border border-primary/25 bg-primary/5 p-5">
+          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.24em] text-primary">
+            <Bot className="h-4 w-4" />
+            AI search
+          </div>
+          {aiSearch.error ? (
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">{aiSearch.error}</p>
+          ) : (
+            <>
+              <p className="mt-3 max-w-4xl text-sm leading-6 text-foreground">{aiSearch.answer}</p>
+              {aiSearch.resultReasons?.length > 0 && (
+                <div className="mt-4 grid gap-2 md:grid-cols-2">
+                  {aiSearch.resultReasons.map((entry) => (
+                    <div key={entry.id} className="rounded-xl border border-white/10 bg-black/40 p-3 text-xs leading-5 text-muted-foreground">
+                      {entry.reason}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {aiSearch.suggestions?.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {aiSearch.suggestions.map((suggestion) => (
+                    <span key={suggestion} className="rounded-full border border-white/10 bg-black/50 px-3 py-1.5 text-xs text-muted-foreground">
+                      {suggestion}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {indexingNeeded && (
         <div className="mt-5 flex flex-col gap-4 rounded-2xl border border-primary/30 bg-primary/5 p-5 md:flex-row md:items-center md:justify-between">
@@ -4055,7 +4153,7 @@ function UploadTab({
       >
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
         <h3 className="mb-2 font-display text-xl font-bold">Upload your files here</h3>
-        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram HTML · Pinterest ZIP/JSON/CSV</p>
+        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram HTML / Pinterest ZIP/JSON/CSV / up to 20 MB per file</p>
         <button
           type="button"
           onClick={onOpenHowTo}
@@ -4070,10 +4168,19 @@ function UploadTab({
         </label>
         {files.length > 0 && (
           <div className="mt-6 space-y-2 text-left">
-            {files.map((file) => (
-              <div key={file.name} className="flex items-center justify-between rounded-lg border border-white/10 bg-black px-4 py-2 text-sm">
-                <span className="font-mono">{file.name}</span>
-                <span className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</span>
+            {files.map((file, index) => (
+              <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black px-4 py-2 text-sm">
+                <span className="min-w-0 truncate font-mono">{file.name}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</span>
+                <button
+                  type="button"
+                  onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 text-muted-foreground transition hover:border-destructive/60 hover:text-destructive"
+                  aria-label={`Remove ${file.name}`}
+                  title="Remove file"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
             ))}
           </div>
@@ -4935,3 +5042,4 @@ function Banner({ children, type = 'notice' }) {
     </div>
   );
 }
+

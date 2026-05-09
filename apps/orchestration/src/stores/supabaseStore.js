@@ -1057,6 +1057,9 @@ function mapExtensionToken(row) {
 
 function matchesFilters(item, filters = {}) {
   if (filters.contentType && item.contentType !== filters.contentType) return false;
+  if (filters.status && item.status !== filters.status) return false;
+  if (filters.platform && item.platform !== filters.platform) return false;
+  if (filters.collection && !(item.collections || []).includes(filters.collection)) return false;
   return true;
 }
 
