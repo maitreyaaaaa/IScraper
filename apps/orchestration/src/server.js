@@ -601,7 +601,9 @@ function createApp({ store, config = {} }) {
     assertWorker(req, config);
     if (typeof store.getProcessableJobScopes !== 'function') return res.status(501).json({ error: 'Worker job discovery is not available.' });
 
-    const maxJobs = Math.max(1, Math.min(Number(req.body?.maxJobs || req.query?.maxJobs) || config.workerBatchSize || 10, 50));
+    const workerBatchCap = Math.max(1, Math.min(Number(config.workerBatchSize) || 2, 5));
+    const requestedMaxJobs = Number(req.body?.maxJobs || req.query?.maxJobs) || workerBatchCap;
+    const maxJobs = Math.max(1, Math.min(requestedMaxJobs, workerBatchCap));
     const downloadValue = req.body?.download ?? req.query?.download;
     const scopes = await store.getProcessableJobScopes({ limit: maxJobs });
     const processed = [];
@@ -613,7 +615,7 @@ function createApp({ store, config = {} }) {
         userId: scope.userId,
         importId: scope.importId,
         config,
-        shouldDownload: downloadValue !== false && downloadValue !== 'false',
+        shouldDownload: downloadValue === true || downloadValue === 'true',
         maxJobs: Math.max(1, maxJobs - processed.length),
       });
       processed.push(...batch);
@@ -1110,7 +1112,7 @@ function createApp({ store, config = {} }) {
     files.forEach((file) => assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024));
     const result = await createImportFromFiles({ store, userId: req.user.id, files, config });
     if (result.queuedJobCount && config.inlineIndexingEnabled === true) {
-      startProcessing({ store, userId: req.user.id, importId: result.import.id, config, shouldDownload: true });
+      startProcessing({ store, userId: req.user.id, importId: result.import.id, config, shouldDownload: false });
     }
     res.json(result);
   }));
@@ -1188,7 +1190,7 @@ function createApp({ store, config = {} }) {
       }
     }
     if (result.queuedJobCount && config.inlineIndexingEnabled === true) {
-      startProcessing({ store, userId: req.user.id, importId: result.import.id, config, shouldDownload: true });
+      startProcessing({ store, userId: req.user.id, importId: result.import.id, config, shouldDownload: false });
     }
     res.json(result);
   }));
@@ -1207,7 +1209,7 @@ function createApp({ store, config = {} }) {
     const jobs = initialStatus === 'queued' ? await store.createJobs({ userId: req.user.id, importId: importEntry.id, items }) : [];
 
     if (jobs.length && config.inlineIndexingEnabled === true) {
-      startProcessing({ store, userId: req.user.id, importId: importEntry.id, config, shouldDownload: true });
+      startProcessing({ store, userId: req.user.id, importId: importEntry.id, config, shouldDownload: false });
     }
 
     res.status(201).json({
@@ -1272,13 +1274,13 @@ function createApp({ store, config = {} }) {
   return app;
 }
 
-function startProcessing({ store, userId, importId, config, shouldDownload = true }) {
-  runProcessImportJobs({ store, userId, importId, config, shouldDownload }).catch((error) => {
+function startProcessing({ store, userId, importId, config, shouldDownload = false, maxJobs = null }) {
+  runProcessImportJobs({ store, userId, importId, config, shouldDownload, maxJobs: maxJobs || config.workerBatchSize || 2 }).catch((error) => {
     console.error('Background processing failed:', error);
   });
 }
 
-function runProcessImportJobs({ store, userId, importId, config, shouldDownload = true, maxJobs = Infinity }) {
+function runProcessImportJobs({ store, userId, importId, config, shouldDownload = false, maxJobs = null }) {
   return processImportJobs({
     store,
     userId,
@@ -1293,7 +1295,7 @@ function runProcessImportJobs({ store, userId, importId, config, shouldDownload 
     embeddingDimensions: config.embeddingDimensions,
     indexingConcurrency: config.indexingConcurrency,
     credentialEncryptionKey: config.credentialEncryptionKey,
-    maxJobs,
+    maxJobs: maxJobs || config.workerBatchSize || 2,
   });
 }
 

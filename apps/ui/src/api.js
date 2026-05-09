@@ -205,7 +205,7 @@ export function startIndexing(payload = {}) {
   return request('/indexing/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ download: true, ...payload }),
+    body: JSON.stringify({ download: false, ...payload }),
   });
 }
 
@@ -221,7 +221,7 @@ export function processImport(importId) {
   return request(`/imports/${importId}/process`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ download: true }),
+    body: JSON.stringify({ download: false }),
   });
 }
 
@@ -229,7 +229,7 @@ export function restartQueue(importId = null) {
   return request('/jobs/restart', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ importId, download: true }),
+    body: JSON.stringify({ importId, download: false }),
   });
 }
 

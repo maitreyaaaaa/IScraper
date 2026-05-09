@@ -7,7 +7,7 @@ const path = require('node:path');
 const { processImportJobs } = require('../src/services/worker');
 const { createLocalStore } = require('../src/stores/localStore');
 
-test('media job pauses when no supported media provider is available', async () => {
+test('media job pauses only when no text provider is available', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const userId = 'u1';
@@ -49,7 +49,7 @@ test('media job pauses when no supported media provider is available', async () 
     assert.equal(job.status, 'paused_missing_provider');
     assert.equal(item.status, 'paused_missing_provider');
     assert.equal(item.analysis, null);
-    assert.match(item.error, /no supported image\/video provider/i);
+    assert.match(item.error, /no text AI provider/i);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

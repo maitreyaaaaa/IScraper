@@ -155,11 +155,8 @@ async function processOneJob({
 
     await store.updateJob(userId, currentJob.id, { status: 'analyzing', error: null });
     await store.setItemStatus?.(userId, item.id, 'analyzing', null);
-    if (requiresMediaAnalysis(item) && !mediaPaths.length) {
-      throw new Error('Media file could not be downloaded for analysis.');
-    }
 
-    const mediaAnalysis = analysisPlan.mediaCredential
+    const mediaAnalysis = analysisPlan.mediaCredential && mediaPaths.length
       ? await analyzeMediaWithCredential({
           credential: analysisPlan.mediaCredential,
           mediaPaths,
@@ -274,7 +271,7 @@ async function chooseAnalysisPlan({
       ? await store.getPreferredProviderCredential(userId, 'embedding', credentialEncryptionKey)
       : null;
 
-  if ((needsMedia && mediaUserCredential) || (!needsMedia && textUserCredential)) {
+  if (mediaUserCredential || textUserCredential) {
     return {
       source: 'byok',
       mediaCredential: mediaUserCredential,
@@ -294,7 +291,7 @@ async function chooseAnalysisPlan({
     ? appOpenRouterCredential({ purpose: 'embedding', apiKey: openRouterApiKey, model: openRouterEmbeddingModel })
     : null;
 
-  if ((!needsMedia || appMediaCredential) && appTextCredential && typeof store.getCredits === 'function') {
+  if (appTextCredential && typeof store.getCredits === 'function') {
     const credits = await store.getCredits(userId);
     if (credits.freeItemsRemaining > 0) {
       return {
@@ -317,9 +314,6 @@ async function chooseAnalysisPlan({
     throw pauseError('paused_needs_billing', 'Saved post did not process because the free indexing allowance is used up.');
   }
 
-  if (needsMedia) {
-    throw pauseError('paused_missing_provider', 'Saved post did not process because no supported image/video provider key is connected.');
-  }
   throw pauseError('paused_missing_provider', 'Saved post did not process because no text AI provider key is connected.');
 }
 
@@ -354,6 +348,7 @@ async function pauseJob({ store, userId, item, job, status, message }) {
 
 module.exports = {
   analyzeItem,
+  chooseAnalysisPlan,
   processImportJobs,
   requiresMediaAnalysis,
 };
