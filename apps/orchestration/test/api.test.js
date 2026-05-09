@@ -335,7 +335,8 @@ test('POST /api/imports/upload-urls creates signed storage uploads', async () =>
         assert.equal(bucket, 'import-uploads');
         return {
           async createSignedUploadUrl(storagePath) {
-            assert.match(storagePath, /^local-dev-user\/.+saved_posts\.html$/);
+            assert.match(storagePath, /^local-dev-user\/\d+-[a-f0-9-]+\.zip$/);
+            assert.ok(storagePath.length < 100);
             return { data: { signedUrl: `https://storage.example/${storagePath}`, token: 'signed-token' }, error: null };
           },
         };
@@ -351,7 +352,11 @@ test('POST /api/imports/upload-urls creates signed storage uploads', async () =>
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        files: [{ name: 'saved_posts.html', type: 'text/html', size: 1024 }],
+        files: [{
+          name: 'instagram-maitreya_iguess-2026-05-09-0WPnfek7-with-a-very-long-original-export-name.zip',
+          type: 'application/zip',
+          size: 1024,
+        }],
       }),
     });
     const body = await response.json();
@@ -360,7 +365,7 @@ test('POST /api/imports/upload-urls creates signed storage uploads', async () =>
     assert.equal(body.bucket, 'import-uploads');
     assert.equal(body.uploads.length, 1);
     assert.equal(body.uploads[0].token, 'signed-token');
-    assert.equal(body.uploads[0].name, 'saved_posts.html');
+    assert.equal(body.uploads[0].name, 'instagram-maitreya_iguess-2026-05-09-0WPnfek7-with-a-very-long-original-export-name.zip');
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });

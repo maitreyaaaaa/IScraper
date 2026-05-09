@@ -354,6 +354,12 @@ function fileNameForStorage(fileName = 'upload') {
     .slice(0, 120) || 'upload';
 }
 
+function storagePathForUpload(userId, originalName = 'upload') {
+  const extension = path.extname(fileNameForStorage(originalName)).toLowerCase();
+  const safeExtension = EXPORT_UPLOAD_EXTENSIONS.has(extension) ? extension : '';
+  return `${userId}/${Date.now()}-${crypto.randomUUID()}${safeExtension}`;
+}
+
 function signedUploadFileFromBody(file = {}) {
   return {
     originalname: String(file.name || 'upload'),
@@ -956,7 +962,7 @@ function createApp({ store, config = {} }) {
     for (const requestedFile of requestedFiles) {
       const file = signedUploadFileFromBody(requestedFile);
       assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024);
-      const storagePath = `${req.user.id}/${Date.now()}-${crypto.randomUUID()}-${fileNameForStorage(file.originalname)}`;
+      const storagePath = storagePathForUpload(req.user.id, file.originalname);
       const { data, error } = await store.client.storage.from(bucket).createSignedUploadUrl(storagePath);
       if (error) throw error;
       uploads.push({
