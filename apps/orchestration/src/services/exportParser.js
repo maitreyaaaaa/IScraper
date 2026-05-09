@@ -1,6 +1,9 @@
 const path = require('path');
+const JSZip = require('jszip');
 const { parseInstagramExport } = require('./instagramParser');
 const { parsePinterestExport } = require('./pinterestParser');
+
+const INSTAGRAM_EXPORT_EXTENSIONS = new Set(['.html', '.htm', '.json']);
 
 function mergeParsedResults(results) {
   const collections = [];
@@ -28,8 +31,42 @@ function mergeParsedResults(results) {
   };
 }
 
+async function instagramFilesFromUploads(files = []) {
+  const instagramFiles = [];
+
+  for (const file of files) {
+    const sourceName = file.originalname || file.filename || 'instagram-export';
+    const extension = path.extname(sourceName).toLowerCase();
+
+    if (INSTAGRAM_EXPORT_EXTENSIONS.has(extension)) {
+      instagramFiles.push(file);
+      continue;
+    }
+
+    if (extension !== '.zip') continue;
+
+    const zip = await JSZip.loadAsync(file.buffer);
+    for (const entry of Object.values(zip.files)) {
+      if (entry.dir) continue;
+      const entryExtension = path.extname(entry.name || '').toLowerCase();
+      if (!INSTAGRAM_EXPORT_EXTENSIONS.has(entryExtension)) continue;
+      const buffer = await entry.async('nodebuffer');
+      instagramFiles.push({
+        ...file,
+        originalname: entry.name,
+        filename: entry.name,
+        buffer,
+        size: buffer.length,
+        mimetype: entryExtension === '.json' ? 'application/json' : 'text/html',
+      });
+    }
+  }
+
+  return instagramFiles;
+}
+
 async function parseImportExport(files = []) {
-  const instagramFiles = files.filter((file) => ['.html', '.htm', '.json'].includes(path.extname(file.originalname || '').toLowerCase()));
+  const instagramFiles = await instagramFilesFromUploads(files);
   const instagramParsed = instagramFiles.length ? parseInstagramExport(instagramFiles) : { items: [], collections: [] };
   const pinterestParsed = await parsePinterestExport(files);
   const parsed = mergeParsedResults([instagramParsed, pinterestParsed]);

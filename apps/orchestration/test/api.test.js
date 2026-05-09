@@ -107,6 +107,78 @@ test('POST /api/imports accepts Instagram saved-post JSON files', async () => {
   }
 });
 
+test('POST /api/imports accepts Instagram zip files containing HTML exports', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const zip = new JSZip();
+    zip.file('your_instagram_activity/saved/saved_posts.html', `
+      <main>
+        <div class="_a6-g"><table>
+          <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/reel/ZIPHTML111/">x</a></div></td></tr>
+          <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Zipped Instagram HTML reel</td></tr>
+          <tr><td class="_a6_q">Username</td><td class="_2piu _a6_r">zip.creator</td></tr>
+        </table></div>
+      </main>`);
+    const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+    const form = new FormData();
+    form.append('exportFiles', new Blob([buffer], { type: 'application/zip' }), 'instagram-export.zip');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports`, { method: 'POST', body: form });
+    const body = await response.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.itemCount, 1);
+    assert.equal(body.newItemCount, 1);
+    assert.equal(body.queuedJobCount, 1);
+    assert.equal(items[0].platform, 'Instagram');
+    assert.equal(items[0].url, 'https://instagram.com/reel/ZIPHTML111');
+    assert.equal(items[0].caption, 'Zipped Instagram HTML reel');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/imports reads the official nested Instagram saved_post HTML path', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const zip = new JSZip();
+    zip.file('your_instagram_activity/saved/saved_post.html', `
+      <main>
+        <div class="_a6-g"><table>
+          <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/p/NESTED111/">x</a></div></td></tr>
+          <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Nested official Instagram saved post</td></tr>
+        </table></div>
+      </main>`);
+    const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+    const form = new FormData();
+    form.append('exportFiles', new Blob([buffer], { type: 'application/zip' }), 'instagram-maitreya_iguess-2026-05-09-0WPnfek7.zip');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports`, { method: 'POST', body: form });
+    const body = await response.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.itemCount, 1);
+    assert.equal(items[0].url, 'https://instagram.com/p/NESTED111');
+    assert.equal(items[0].sourceName, 'your_instagram_activity/saved/saved_post.html');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/imports skips already imported canonical duplicate URLs', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
@@ -507,7 +579,7 @@ test('POST /api/imports rejects unsupported uploads', async () => {
     const body = await response.json();
 
     assert.equal(response.status, 400);
-    assert.match(body.error, /Instagram HTML/);
+    assert.match(body.error, /Instagram ZIP\/HTML\/JSON/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
