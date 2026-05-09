@@ -493,12 +493,18 @@ test('provider credential API stores keys without returning secrets', async () =
     const created = await createResponse.json();
     const listResponse = await fetch(`http://127.0.0.1:${port}/api/provider-credentials`);
     const listed = await listResponse.json();
+    const revealResponse = await fetch(`http://127.0.0.1:${port}/api/provider-credentials/${created.credential.id}/reveal`, {
+      method: 'POST',
+    });
+    const revealed = await revealResponse.json();
 
     assert.equal(createResponse.status, 200);
     assert.equal(created.credential.keyHint, 'sk-...cret');
     assert.doesNotMatch(JSON.stringify(created), /sk-or-test-secret/);
     assert.equal(listed.credentials.length, 1);
     assert.doesNotMatch(JSON.stringify(listed), /sk-or-test-secret/);
+    assert.equal(revealResponse.status, 200);
+    assert.equal(revealed.apiKey, 'sk-or-test-secret');
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });

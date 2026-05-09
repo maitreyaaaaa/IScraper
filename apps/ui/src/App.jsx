@@ -12,8 +12,10 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  Copy,
   Database,
   Download,
+  EyeOff,
   ExternalLink,
   Eye,
   FileText,
@@ -32,6 +34,7 @@ import {
   Sparkles,
   Tag,
   Upload,
+  User,
   X,
   Zap,
   ZoomIn,
@@ -50,6 +53,7 @@ import {
   getProviderCredentials,
   importInstagramExport,
   restartQueue,
+  revealProviderCredential,
   saveLink,
   saveProfile,
   saveProviderCredential,
@@ -368,6 +372,30 @@ function keyValidationMessage(setup, apiKey) {
   return '';
 }
 
+function avatarUrlForSession(session, profile) {
+  return profile?.avatarUrl || session?.user?.user_metadata?.avatar_url || session?.user?.user_metadata?.picture || '';
+}
+
+function initialForSession(session, profile) {
+  return String(profile?.username || session?.user?.user_metadata?.name || session?.user?.email || 'U').trim().charAt(0).toUpperCase();
+}
+
+function groupProviderCredentials(credentials = []) {
+  return credentials.reduce((groups, credential) => {
+    const key = `${credential.provider}:${credential.keyHint}`;
+    if (!groups[key]) {
+      groups[key] = {
+        id: key,
+        provider: credential.provider,
+        keyHint: credential.keyHint,
+        credentials: [],
+      };
+    }
+    groups[key].credentials.push(credential);
+    return groups;
+  }, {});
+}
+
 function rememberPendingSave() {
   const pending = pendingSaveFromHash();
   if (!pending) return;
@@ -650,10 +678,46 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
   const [feedbackForm, setFeedbackForm] = useState({ feature: 'Search', message: '' });
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [feedbackNotice, setFeedbackNotice] = useState('');
+  const [landingSession, setLandingSession] = useState(null);
+  const [landingProfile, setLandingProfile] = useState(null);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const landingAvatarUrl = avatarUrlForSession(landingSession, landingProfile);
+  const landingInitial = initialForSession(landingSession, landingProfile);
 
   useEffect(() => {
     window.history.scrollRestoration = 'manual';
     window.scrollTo(0, 0);
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+    let cancelled = false;
+
+    const syncSession = async (session) => {
+      if (cancelled) return;
+      setLandingSession(session || null);
+      setApiAccessToken(session?.access_token);
+      if (!session) {
+        setLandingProfile(null);
+        return;
+      }
+      try {
+        const body = await getProfile();
+        if (!cancelled) setLandingProfile(body.profile || null);
+      } catch {
+        if (!cancelled) setLandingProfile(null);
+      }
+    };
+
+    supabase.auth.getSession().then(({ data }) => syncSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      syncSession(session);
+    });
+
+    return () => {
+      cancelled = true;
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -937,13 +1001,29 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
             <button type="button" onClick={onOpenHowTo} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">How to Use</button>
           </nav>
           <div className="nav-item pointer-events-auto flex items-center gap-2 justify-self-end">
-            <button
-              type="button"
-              onClick={onOpenLogin}
-              className="inline-flex rounded-full border border-white/15 bg-black/75 px-4 py-2 text-sm font-bold text-foreground shadow-[0_16px_55px_rgba(0,0,0,0.22)] backdrop-blur transition hover:bg-white/10"
-            >
-              Log in
-            </button>
+            {landingSession ? (
+              <button
+                type="button"
+                onClick={() => setAccountSettingsOpen(true)}
+                className="inline-flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-black/75 text-sm font-bold text-foreground shadow-[0_16px_55px_rgba(0,0,0,0.22)] backdrop-blur transition hover:scale-[1.04] hover:bg-white/10"
+                aria-label="Open account settings"
+                title={landingProfile?.username ? `@${landingProfile.username}` : 'Open account settings'}
+              >
+                {landingAvatarUrl ? (
+                  <img src={landingAvatarUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <span className="grid h-full w-full place-items-center bg-primary text-primary-foreground">{landingInitial}</span>
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onOpenLogin}
+                className="inline-flex rounded-full border border-white/15 bg-black/75 px-4 py-2 text-sm font-bold text-foreground shadow-[0_16px_55px_rgba(0,0,0,0.22)] backdrop-blur transition hover:bg-white/10"
+              >
+                Log in
+              </button>
+            )}
             <button
               type="button"
               onClick={onOpenApp}
@@ -954,6 +1034,16 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           </div>
         </div>
       </header>
+
+      {accountSettingsOpen && (
+        <AccountSettingsModal
+          open
+          onClose={() => setAccountSettingsOpen(false)}
+          session={landingSession}
+          profile={landingProfile}
+          onProfileSaved={(nextProfile) => setLandingProfile(nextProfile)}
+        />
+      )}
 
       <section className={`landing-hero relative flex min-h-screen items-center overflow-hidden bg-black ${launchOfferDismissed ? 'pt-36' : 'pt-48'}`}>
         <div className="parallax-grid radial-fade grid-bg absolute inset-0 opacity-60" />
@@ -2182,6 +2272,7 @@ function Dashboard({ onBack, onOpenHowTo }) {
   const [profile, setProfile] = useState(null);
   const [profileRequired, setProfileRequired] = useState(false);
   const [profileForm, setProfileForm] = useState({ username: '', avatarUrl: '' });
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -2192,6 +2283,8 @@ function Dashboard({ onBack, onOpenHowTo }) {
   const authEnabled = Boolean(supabase);
   const signedIn = !authEnabled || Boolean(session);
   const canUsePrivateActions = signedIn && (!authEnabled || !profileRequired);
+  const dashboardAvatarUrl = avatarUrlForSession(session, profile);
+  const dashboardInitial = initialForSession(session, profile);
 
   const requireSignIn = useCallback((action = 'do this') => {
     if (!authEnabled || session) return true;
@@ -2600,9 +2693,19 @@ function Dashboard({ onBack, onOpenHowTo }) {
           <BrandLogo className="h-14 w-40" />
         </button>
         {profile?.username && (
-          <div className="border-b border-white/5 px-5 py-3 text-xs text-muted-foreground">
-            Signed in as <span className="font-semibold text-foreground">@{profile.username}</span>
-          </div>
+          <button
+            type="button"
+            onClick={() => setAccountSettingsOpen(true)}
+            className="flex w-full items-center gap-3 border-b border-white/5 px-5 py-3 text-left text-xs text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
+          >
+            <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-primary text-sm font-bold text-primary-foreground">
+              {dashboardAvatarUrl ? <img src={dashboardAvatarUrl} alt="" className="h-full w-full object-cover" /> : dashboardInitial}
+            </span>
+            <span className="min-w-0">
+              <span className="block">Signed in as</span>
+              <span className="block truncate font-semibold text-foreground">@{profile.username}</span>
+            </span>
+          </button>
         )}
         {authEnabled && !session && (
           <div className="border-b border-white/5 px-5 py-3">
@@ -2650,7 +2753,15 @@ function Dashboard({ onBack, onOpenHowTo }) {
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
         <div className="dash-panel h-screen overflow-y-auto overflow-x-hidden">
           <div className="dash-panel-inner">
-            <MobileTopbar onBack={onBack} tab={tab} setTab={setTab} onOpenHowTo={onOpenHowTo} />
+            <MobileTopbar
+              onBack={onBack}
+              tab={tab}
+              setTab={setTab}
+              onOpenHowTo={onOpenHowTo}
+              session={session}
+              profile={profile}
+              onOpenAccount={() => setAccountSettingsOpen(true)}
+            />
             {(error || notice) && (
               <div className="mx-auto max-w-6xl px-6 pt-6 md:px-12">
                 {error && <Banner type="error">{error}</Banner>}
@@ -2809,6 +2920,350 @@ function Dashboard({ onBack, onOpenHowTo }) {
       </main>
 
       {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} busy={busy} />}
+      {accountSettingsOpen && (
+        <AccountSettingsModal
+          open
+          onClose={() => setAccountSettingsOpen(false)}
+          session={session}
+          profile={profile}
+          onProfileSaved={(nextProfile) => {
+            applyProfileState(nextProfile, false);
+            setNotice('Profile saved.');
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved }) {
+  const [activeTab, setActiveTab] = useState('account');
+  const [profileForm, setProfileForm] = useState({
+    username: profile?.username || '',
+    avatarUrl: profile?.avatarUrl || avatarUrlForSession(session, profile) || '',
+  });
+  const [credentials, setCredentials] = useState([]);
+  const [healthByGroup, setHealthByGroup] = useState({});
+  const [revealedByGroup, setRevealedByGroup] = useState({});
+  const [confirmRevealGroup, setConfirmRevealGroup] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const avatarUrl = avatarUrlForSession(session, profile);
+  const initial = initialForSession(session, profile);
+  const groupedCredentials = Object.values(groupProviderCredentials(credentials));
+  const email = session?.user?.email || 'Not available';
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', closeOnEscape);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [onClose, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    getProviderCredentials()
+      .then((body) => {
+        if (!cancelled) setCredentials(body.credentials || []);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  if (!open || !session) return null;
+
+  const handleAvatarFile = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setError('Profile picture must be PNG, JPEG, or WebP.');
+      return;
+    }
+    if (file.size > 250 * 1024) {
+      setError('Profile picture must be smaller than 250 KB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setProfileForm((current) => ({ ...current, avatarUrl: String(reader.result || '') }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleProfileSave = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const body = await saveProfile(profileForm);
+      onProfileSaved?.(body.profile);
+      setMessage('Profile saved.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleHealthCheck = async (group) => {
+    setHealthByGroup((current) => ({ ...current, [group.id]: 'checking' }));
+    setError('');
+    setMessage('');
+    try {
+      for (const credential of group.credentials) {
+        await testProviderCredential(credential.id);
+      }
+      setHealthByGroup((current) => ({ ...current, [group.id]: 'working' }));
+      setMessage(`${PROVIDER_DISPLAY_LABELS[group.provider] || group.provider} key is working.`);
+    } catch (err) {
+      setHealthByGroup((current) => ({ ...current, [group.id]: 'failed' }));
+      setError(err.message || 'This key needs attention.');
+    }
+  };
+
+  const handleReveal = async (group) => {
+    if (confirmRevealGroup !== group.id) {
+      setConfirmRevealGroup(group.id);
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const body = await revealProviderCredential(group.credentials[0].id);
+      setRevealedByGroup((current) => ({ ...current, [group.id]: body.apiKey || '' }));
+      setConfirmRevealGroup(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCopy = async (value) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setMessage('Copied.');
+    } catch {
+      setError('Could not copy automatically. Select the key and copy it manually.');
+    }
+  };
+
+  const handleLogout = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await supabase.auth.signOut();
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const healthCopy = {
+    checking: ['Checking', 'text-primary', Loader2],
+    working: ['Working', 'text-primary', CheckCircle2],
+    failed: ['Needs attention', 'text-destructive', AlertCircle],
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[220] grid place-items-center bg-black/75 px-3 py-5 backdrop-blur-md"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section className="flex h-[90vh] w-[94vw] max-w-6xl flex-col overflow-hidden rounded-[1.75rem] border border-white/10 bg-black text-foreground shadow-[0_30px_120px_rgba(0,0,0,0.75)] md:h-[70vh] md:w-[70vw]">
+        <header className="flex items-center justify-between gap-4 border-b border-white/10 p-4 md:p-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-primary font-display text-lg font-bold text-primary-foreground">
+              {avatarUrl ? <img src={avatarUrl} alt="" className="h-full w-full object-cover" /> : initial}
+            </span>
+            <div className="min-w-0">
+              <h2 className="font-display text-2xl font-bold tracking-tight">Account settings</h2>
+              <p className="truncate text-xs text-muted-foreground">{email}</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground" aria-label="Close settings">
+            <X className="h-5 w-5" />
+          </button>
+        </header>
+
+        <div className="grid min-h-0 flex-1 md:grid-cols-[13rem_1fr]">
+          <nav className="flex gap-2 overflow-x-auto border-b border-white/10 p-3 md:block md:space-y-2 md:overflow-visible md:border-b-0 md:border-r">
+            {[
+              ['account', User, 'Account'],
+              ['profile', Settings, 'Profile'],
+              ['api', KeyRound, 'API Health'],
+            ].map(([key, Icon, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveTab(key)}
+                className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition md:w-full ${
+                  activeTab === key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                }`}
+              >
+                <Icon className="h-4 w-4" /> {label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="min-h-0 overflow-y-auto p-4 md:p-6">
+            {(error || message) && (
+              <div className="mb-4">
+                {error ? <Banner type="error">{error}</Banner> : <Banner>{message}</Banner>}
+              </div>
+            )}
+
+            {activeTab === 'account' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Account</div>
+                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Your login</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    This email comes from Google sign-in. To use another email, log out and sign in with a different Google account.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <label className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Email</label>
+                  <div className="mt-2 rounded-xl border border-white/10 bg-black px-4 py-3 text-sm">{email}</div>
+                </div>
+                <button type="button" onClick={handleLogout} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-destructive/40 px-5 py-3 text-sm font-semibold text-destructive transition hover:bg-destructive/10 disabled:opacity-60">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+                  Log out
+                </button>
+              </div>
+            )}
+
+            {activeTab === 'profile' && (
+              <form onSubmit={handleProfileSave} className="space-y-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Profile</div>
+                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Name and picture</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">This is what IScraper uses inside your account.</p>
+                </div>
+                <div>
+                  <label className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Username</label>
+                  <input
+                    value={profileForm.username}
+                    onChange={(event) => setProfileForm((current) => ({ ...current, username: event.target.value.toLowerCase() }))}
+                    placeholder="your_username"
+                    pattern="[a-z0-9_]{3,24}"
+                    className="mt-2 w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Profile picture</label>
+                  <div className="mt-3 flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4 sm:flex-row sm:items-center">
+                    <div className="grid h-20 w-20 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-primary font-display text-2xl font-bold text-primary-foreground">
+                      {profileForm.avatarUrl ? <img src={profileForm.avatarUrl} alt="" className="h-full w-full object-cover" /> : initial}
+                    </div>
+                    <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleAvatarFile} className="min-w-0 text-xs text-muted-foreground file:mr-3 file:rounded-full file:border-0 file:bg-primary file:px-3 file:py-2 file:text-xs file:font-semibold file:text-primary-foreground" />
+                  </div>
+                </div>
+                <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                  Save profile
+                </button>
+              </form>
+            )}
+
+            {activeTab === 'api' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">API Health</div>
+                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Your saved keys</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">Keys stay hidden until you choose to reveal one.</p>
+                </div>
+                {groupedCredentials.length === 0 ? (
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-sm text-muted-foreground">
+                    No API keys saved yet. Add OpenRouter from Keys & privacy when you are ready.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {groupedCredentials.map((group) => {
+                      const revealed = revealedByGroup[group.id] || '';
+                      const health = healthByGroup[group.id];
+                      const [label, color, HealthIcon] = healthCopy[health] || ['Not checked', 'text-muted-foreground', ShieldCheck];
+                      return (
+                        <div key={group.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0">
+                              <div className="font-semibold">{PROVIDER_DISPLAY_LABELS[group.provider] || group.provider}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">{group.credentials.map((credential) => credential.purpose).join(', ')}</div>
+                            </div>
+                            <span className={`inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs ${color}`}>
+                              <HealthIcon className={`h-3.5 w-3.5 ${health === 'checking' ? 'animate-spin' : ''}`} /> {label}
+                            </span>
+                          </div>
+                          <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
+                            <div className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black px-4 py-3 font-mono text-xs">
+                              {revealed ? <span className="break-all">{revealed}</span> : <span>{group.keyHint}</span>}
+                            </div>
+                            <div className="flex gap-2">
+                              <button type="button" onClick={() => handleHealthCheck(group)} disabled={health === 'checking'} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-3 py-3 text-xs font-semibold transition hover:bg-white/5 disabled:opacity-60">
+                                {health === 'checking' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+                                Check
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (revealed) {
+                                    setRevealedByGroup((current) => ({ ...current, [group.id]: '' }));
+                                    return;
+                                  }
+                                  handleReveal(group);
+                                }}
+                                disabled={busy}
+                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-3 py-3 text-xs font-semibold transition hover:bg-white/5 disabled:opacity-60"
+                              >
+                                {revealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                {revealed ? 'Hide' : 'Reveal'}
+                              </button>
+                              {revealed && (
+                                <button type="button" onClick={() => handleCopy(revealed)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-3 py-3 text-xs font-semibold text-primary-foreground">
+                                  <Copy className="h-4 w-4" /> Copy
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {confirmRevealGroup === group.id && !revealed && (
+                            <div className="mt-3 rounded-xl border border-orange-500/40 bg-orange-500/10 p-3 text-sm leading-6 text-orange-100">
+                              Revealing an API key exposes the full secret on this screen. Only do this on your own device.
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <button type="button" onClick={() => handleReveal(group)} className="rounded-lg bg-orange-500 px-3 py-2 text-xs font-semibold text-black">Reveal key</button>
+                                <button type="button" onClick={() => setConfirmRevealGroup(null)} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-foreground">Cancel</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
@@ -2866,7 +3321,9 @@ function ProfileRequiredPanel({ profileForm, setProfileForm, onAvatarFile, onSav
   );
 }
 
-function MobileTopbar({ onBack, tab, setTab, onOpenHowTo }) {
+function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOpenAccount }) {
+  const avatarUrl = avatarUrlForSession(session, profile);
+  const initial = initialForSession(session, profile);
   return (
     <div className="sticky top-0 z-30 border-b border-white/10 bg-black/90 p-3 backdrop-blur md:hidden">
       <div className="mb-3 flex items-center justify-between">
@@ -2874,6 +3331,16 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo }) {
           <ArrowLeft className="h-4 w-4" />
           <BrandLogo className="h-10 w-36" />
         </button>
+        {session && (
+          <button
+            type="button"
+            onClick={onOpenAccount}
+            className="grid h-10 w-10 place-items-center overflow-hidden rounded-full border border-white/10 bg-primary text-sm font-bold text-primary-foreground"
+            aria-label="Open account settings"
+          >
+            {avatarUrl ? <img src={avatarUrl} alt="" className="h-full w-full object-cover" /> : initial}
+          </button>
+        )}
       </div>
       <div className="grid grid-cols-4 gap-2">
         {[

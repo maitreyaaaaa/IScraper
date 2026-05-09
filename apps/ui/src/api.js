@@ -137,6 +137,12 @@ export function testProviderCredential(id) {
   });
 }
 
+export function revealProviderCredential(id) {
+  return request(`/provider-credentials/${id}/reveal`, {
+    method: 'POST',
+  });
+}
+
 export function importInstagramExport({ files }) {
   const formData = new FormData();
   for (const file of files) {

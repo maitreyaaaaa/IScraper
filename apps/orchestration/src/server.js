@@ -589,6 +589,12 @@ function createApp({ store, config = {} }) {
     return res.json({ ok: true, provider: credential.provider, purpose: credential.purpose, model: credential.model });
   }));
 
+  app.post('/api/provider-credentials/:id/reveal', asyncRoute(async (req, res) => {
+    const credential = await store.getProviderCredential(req.user.id, req.params.id, config.credentialEncryptionKey);
+    if (!credential) return res.status(404).json({ error: 'Credential not found.' });
+    return res.json({ apiKey: credential.apiKey });
+  }));
+
   app.post('/api/imports', importRateLimit, upload.array('exportFiles', 20), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
