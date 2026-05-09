@@ -324,7 +324,10 @@ async function createImportFromFiles({ store, userId, files, config }) {
     mode: 'export',
     fileNames: files.map((file) => file.originalname),
   });
-  const items = await store.upsertImportData({ userId, importId: importEntry.id, parsed, initialStatus: 'needs_review' });
+  const items = await store.upsertImportData({ userId, importId: importEntry.id, parsed, initialStatus: 'queued' });
+  const jobs = typeof store.createJobs === 'function'
+    ? await store.createJobs({ userId, importId: importEntry.id, items })
+    : [];
 
   return {
     import: importEntry,
@@ -333,8 +336,8 @@ async function createImportFromFiles({ store, userId, files, config }) {
     newItemCount: items.length,
     skippedDuplicateCount: Math.max(parsed.items.length - items.length, 0),
     collectionCount: parsed.collections.length,
-    queuedJobCount: 0,
-    jobCount: 0,
+    queuedJobCount: jobs.length,
+    jobCount: jobs.length,
   };
 }
 
@@ -933,7 +936,7 @@ function createApp({ store, config = {} }) {
       items: selectedItems,
     });
 
-    if (jobs.length && req.body?.startProcessing !== false && config.inlineIndexingEnabled !== false) {
+    if (jobs.length && req.body?.startProcessing !== false && config.inlineIndexingEnabled === true) {
       startProcessing({ store, userId: req.user.id, importId: null, config, shouldDownload: req.body?.download !== false });
     }
 
@@ -1105,7 +1108,11 @@ function createApp({ store, config = {} }) {
     if (!files.length) return res.status(400).json({ error: 'Upload Instagram ZIP/HTML/JSON files or your Pinterest export ZIP/JSON/CSV.' });
 
     files.forEach((file) => assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024));
-    res.json(await createImportFromFiles({ store, userId: req.user.id, files, config }));
+    const result = await createImportFromFiles({ store, userId: req.user.id, files, config });
+    if (result.queuedJobCount && config.inlineIndexingEnabled === true) {
+      startProcessing({ store, userId: req.user.id, importId: result.import.id, config, shouldDownload: true });
+    }
+    res.json(result);
   }));
 
   app.post('/api/imports/upload-urls', importRateLimit, asyncRoute(async (req, res) => {
@@ -1170,8 +1177,9 @@ function createApp({ store, config = {} }) {
       config,
     });
 
+    let result;
     try {
-      res.json(await createImportFromFiles({ store, userId: req.user.id, files, config }));
+      result = await createImportFromFiles({ store, userId: req.user.id, files, config });
     } finally {
       if (pathsToRemove.length) {
         await store.client.storage.from(bucket).remove(pathsToRemove).catch((error) => {
@@ -1179,6 +1187,10 @@ function createApp({ store, config = {} }) {
         });
       }
     }
+    if (result.queuedJobCount && config.inlineIndexingEnabled === true) {
+      startProcessing({ store, userId: req.user.id, importId: result.import.id, config, shouldDownload: true });
+    }
+    res.json(result);
   }));
 
   app.post('/api/saves/link', importRateLimit, asyncRoute(async (req, res) => {
@@ -1190,12 +1202,12 @@ function createApp({ store, config = {} }) {
       mode: 'export',
       fileNames: [parsed.items[0].url],
     });
-    const initialStatus = req.body?.startProcessing === true ? 'queued' : 'needs_review';
+    const initialStatus = req.body?.review === true ? 'needs_review' : 'queued';
     const items = await store.upsertImportData({ userId: req.user.id, importId: importEntry.id, parsed, initialStatus });
     const jobs = initialStatus === 'queued' ? await store.createJobs({ userId: req.user.id, importId: importEntry.id, items }) : [];
 
-    if (req.body?.startProcessing === true && jobs.length) {
-      startProcessing({ store, userId: req.user.id, importId: importEntry.id, config, shouldDownload: false });
+    if (jobs.length && config.inlineIndexingEnabled === true) {
+      startProcessing({ store, userId: req.user.id, importId: importEntry.id, config, shouldDownload: true });
     }
 
     res.status(201).json({

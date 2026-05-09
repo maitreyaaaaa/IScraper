@@ -2811,11 +2811,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setCollectionFilter('all');
       setPlatformFilter('all');
       setTab('upload');
-      setNotice(`Added ${newCount} new saves to your library. ${skippedCount} already existed. Click Start indexing when you want AI summaries and search upgrades.`);
+      setNotice(`Added ${newCount} new saves. ${skippedCount} already existed. New saves are queued for indexing automatically.`);
       await loadItems();
-      if (newCount > 0) {
-        setIndexingReminder({ open: true, count: newCount });
-      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -3692,7 +3689,7 @@ function summarizeIndexing(items) {
   const activeTotal = queued + active;
   const total = items.filter((item) => item.sourceStatus !== 'needs_review').length;
   const parallelAgents = 3;
-  const etaSeconds = activeTotal > 0 ? Math.max(10, Math.ceil(((queued * 35) + (active * 20)) / parallelAgents)) : 0;
+  const etaSeconds = activeTotal > 0 ? Math.max(60, Math.ceil(((queued * 35) + (active * 20)) / parallelAgents)) : 0;
   const progress = total > 0 ? Math.round((done / total) * 100) : 0;
 
   return {
@@ -3731,23 +3728,23 @@ function IndexingProgressCard({ activity }) {
   const progress = Math.min(99, Math.max(2, activity.progress));
 
   return (
-    <div className="mt-5 overflow-hidden rounded-2xl border border-primary/30 bg-primary/5 p-5">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="mt-5 overflow-hidden rounded-xl border border-primary/25 bg-primary/5 p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Indexing in progress</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">
+          <h2 className="mt-1 font-display text-xl font-bold tracking-tight">
             {activity.activeTotal} saves left · about {formatDuration(remainingSeconds)}
           </h2>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            Running up to {activity.parallelAgents} indexing workers in parallel. This estimate updates as saves finish.
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            The library is usable while indexing continues.
           </p>
         </div>
-        <div className="grid min-w-36 gap-1 rounded-xl border border-white/10 bg-black px-4 py-3 text-center">
-          <span className="font-display text-3xl font-bold text-primary">{activity.active}</span>
+        <div className="grid min-w-28 gap-1 rounded-lg border border-white/10 bg-black px-3 py-2 text-center">
+          <span className="font-display text-2xl font-bold text-primary">{activity.active}</span>
           <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">active now</span>
         </div>
       </div>
-      <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
         <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${progress}%` }} />
       </div>
       <div className="mt-3 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -4074,10 +4071,6 @@ function UploadTab({
   onSaveLink,
   onImport,
   onRestart,
-  pendingReviews,
-  onApproveReview,
-  onUpdateReview,
-  onSelect,
   busy,
   onOpenHowTo,
   indexingActivity,
@@ -4088,7 +4081,7 @@ function UploadTab({
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <h1 className="font-display text-4xl font-bold tracking-tight">Add your saved posts</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Add saves to your library first. Start indexing only when you are ready to spend AI usage.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Upload an Instagram or Pinterest export. New saves are queued for indexing automatically.</p>
         </div>
         <button
           type="button"
@@ -4097,19 +4090,6 @@ function UploadTab({
         >
           <FileText className="h-4 w-4" /> How to Use
         </button>
-      </div>
-
-      <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Launch offer</div>
-            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">First 200 imported saves are on us.</h2>
-          </div>
-          <span className="rounded-full bg-primary px-4 py-2 font-display text-xl font-bold text-primary-foreground">200</span>
-        </div>
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Use your free included allowance to build the first version of your searchable brain. Review saves before indexing so the free allowance goes toward posts you actually want.
-        </p>
       </div>
 
       <IndexingProgressCard activity={indexingActivity} />
@@ -4146,42 +4126,9 @@ function UploadTab({
         />
         <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-          Save to review inbox
+          Save and index
         </button>
       </form>
-
-      {pendingReviews.length > 0 && (
-        <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
-          <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Review inbox</div>
-              <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saves waiting</h2>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">These saves are in your library but not indexed yet. Without indexing, AI summaries, OCR, transcripts, graph links, and smarter search will not be created.</p>
-            </div>
-            <button
-              type="button"
-              onClick={onRestart}
-              disabled={busy}
-              className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              Start indexing all
-            </button>
-          </div>
-          <div className="grid gap-4 lg:grid-cols-2">
-            {pendingReviews.map((item) => (
-              <ReviewCard
-                key={item.id}
-                item={item}
-                busy={busy}
-                onSelect={onSelect}
-                onUpdate={onUpdateReview}
-                onApprove={onApproveReview}
-              />
-            ))}
-          </div>
-        </section>
-      )}
 
       <div
         onDragOver={(event) => {
@@ -4235,97 +4182,14 @@ function UploadTab({
       <div className="grid gap-3 md:grid-cols-2">
         <button onClick={onImport} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-          Add to library
+          Import and index
         </button>
         <button onClick={onRestart} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-5 py-3 font-semibold text-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
-          {pendingReviews.length > 0 ? `Start indexing ${pendingReviews.length} waiting saves` : 'Start indexing'}
+          Retry indexing queue
         </button>
       </div>
     </div>
-  );
-}
-
-function ReviewCard({ item, busy, onSelect, onUpdate, onApprove }) {
-  const [draft, setDraft] = useState({
-    sourceTitle: item.sourceTitle || item.title || '',
-    sourceAuthor: item.sourceAuthor || '',
-    sourceDescription: item.sourceDescription || '',
-    collection: item.collection === 'Unsorted' ? '' : item.collection,
-  });
-
-  const payload = {
-    ...draft,
-    collections: draft.collection ? [draft.collection] : item.raw?.collections || [],
-  };
-
-  return (
-    <article className="rounded-2xl border border-white/10 bg-black p-4">
-      <div className="mb-4 flex items-start gap-3">
-        {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="h-20 w-20 shrink-0 rounded-xl object-cover" loading="lazy" /> : null}
-        <div className="min-w-0 flex-1">
-          <div className="mb-2 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-widest text-primary">
-            <span>{item.platform}</span>
-            <span className="text-muted-foreground">{item.sourceStatus}</span>
-          </div>
-          <button type="button" onClick={() => onSelect(item)} className="line-clamp-2 text-left font-display text-xl font-bold tracking-tight hover:text-primary">
-            {item.sourceTitle || item.title}
-          </button>
-        </div>
-      </div>
-      <div className="space-y-3">
-        <input
-          value={draft.sourceTitle}
-          onChange={(event) => setDraft((current) => ({ ...current, sourceTitle: event.target.value }))}
-          placeholder="Clean title"
-          maxLength={160}
-          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm outline-none focus:border-primary"
-        />
-        <div className="grid gap-3 md:grid-cols-2">
-          <input
-            value={draft.sourceAuthor}
-            onChange={(event) => setDraft((current) => ({ ...current, sourceAuthor: event.target.value }))}
-            placeholder="Creator or source"
-            maxLength={120}
-            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm outline-none focus:border-primary"
-          />
-          <input
-            value={draft.collection}
-            onChange={(event) => setDraft((current) => ({ ...current, collection: event.target.value }))}
-            placeholder="Collection"
-            maxLength={80}
-            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm outline-none focus:border-primary"
-          />
-        </div>
-        <textarea
-          value={draft.sourceDescription}
-          onChange={(event) => setDraft((current) => ({ ...current, sourceDescription: event.target.value }))}
-          placeholder="Short note or reason you saved it"
-          maxLength={500}
-          className="min-h-24 w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm leading-6 outline-none focus:border-primary"
-        />
-      </div>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => onUpdate(item, payload)}
-          disabled={busy}
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-60"
-        >
-          <Check className="h-4 w-4" />
-          Save edits
-        </button>
-        <button
-          type="button"
-          onClick={() => onApprove(item, payload)}
-          disabled={busy}
-          className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-        >
-          <Sparkles className="h-4 w-4" />
-          Index this
-        </button>
-      </div>
-    </article>
   );
 }
 

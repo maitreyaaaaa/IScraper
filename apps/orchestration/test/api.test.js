@@ -30,7 +30,7 @@ test('API responses include a restrictive content security policy', async () => 
   }
 });
 
-test('POST /api/imports adds uploaded export files to library without indexing jobs', async () => {
+test('POST /api/imports adds uploaded export files and queues indexing jobs', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const app = createApp({ store });
@@ -60,8 +60,8 @@ test('POST /api/imports adds uploaded export files to library without indexing j
     assert.equal(body.totalItemCount, 2);
     assert.equal(body.newItemCount, 2);
     assert.equal(body.skippedDuplicateCount, 0);
-    assert.equal(body.queuedJobCount, 0);
-    assert.equal(body.jobCount, 0);
+    assert.equal(body.queuedJobCount, 2);
+    assert.equal(body.jobCount, 2);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -97,8 +97,8 @@ test('POST /api/imports accepts Instagram saved-post JSON files', async () => {
     assert.equal(response.status, 200);
     assert.equal(body.itemCount, 1);
     assert.equal(body.newItemCount, 1);
-    assert.equal(body.queuedJobCount, 0);
-    assert.equal(items[0].status, 'needs_review');
+    assert.equal(body.queuedJobCount, 1);
+    assert.equal(items[0].status, 'queued');
     assert.equal(items[0].platform, 'Instagram');
     assert.equal(items[0].url, 'https://instagram.com/reel/APIJSON111');
     assert.equal(items[0].caption, 'JSON reel import #systems');
@@ -136,8 +136,8 @@ test('POST /api/imports accepts Instagram zip files containing HTML exports', as
     assert.equal(response.status, 200);
     assert.equal(body.itemCount, 1);
     assert.equal(body.newItemCount, 1);
-    assert.equal(body.queuedJobCount, 0);
-    assert.equal(items[0].status, 'needs_review');
+    assert.equal(body.queuedJobCount, 1);
+    assert.equal(items[0].status, 'queued');
     assert.equal(items[0].platform, 'Instagram');
     assert.equal(items[0].url, 'https://instagram.com/reel/ZIPHTML111');
     assert.equal(items[0].caption, 'Zipped Instagram HTML reel');
@@ -227,10 +227,10 @@ test('POST /api/imports skips already imported canonical duplicate URLs', async 
     assert.equal(secondBody.totalItemCount, 2);
     assert.equal(secondBody.newItemCount, 1);
     assert.equal(secondBody.skippedDuplicateCount, 1);
-    assert.equal(secondBody.queuedJobCount, 0);
-    assert.equal(secondBody.jobCount, 0);
-    assert.equal(allJobs.length, 0);
-    assert.equal(allJobs.filter((job) => job.itemId === 'AAA111').length, 0);
+    assert.equal(secondBody.queuedJobCount, 1);
+    assert.equal(secondBody.jobCount, 1);
+    assert.equal(allJobs.length, 2);
+    assert.equal(allJobs.filter((job) => job.itemId === 'AAA111').length, 1);
     assert.equal(existingItem.status, 'done');
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -548,8 +548,8 @@ test('POST /api/saves/link stores one deduped web save', async () => {
     assert.equal(firstResponse.status, 201);
     assert.equal(secondResponse.status, 201);
     assert.equal(first.newItemCount, 1);
-    assert.equal(first.queuedJobCount, 0);
-    assert.equal(first.item.status, 'needs_review');
+    assert.equal(first.queuedJobCount, 1);
+    assert.equal(first.item.status, 'queued');
     assert.equal(second.newItemCount, 0);
     assert.equal(second.skippedDuplicateCount, 1);
     assert.equal(store.getItems('local-dev-user').length, 1);
@@ -596,7 +596,7 @@ test('POST /api/items/:id/approve queues a reviewed web save', async () => {
     assert.equal(approved.item.status, 'queued');
     assert.equal(approved.item.sourceTitle, 'Clean title');
     assert.deepEqual(approved.item.collections, ['Research']);
-    assert.equal(approved.queuedJobCount, 1);
+    assert.equal(approved.queuedJobCount, 0);
     assert.equal(jobs.length, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));

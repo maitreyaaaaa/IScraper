@@ -7,6 +7,7 @@ const { publicExtensionToken } = require('../services/extensionTokens');
 
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
 const IMPORT_INSERT_BATCH_SIZE = 500;
+const JOB_INSERT_BATCH_SIZE = 500;
 
 function createSupabaseStore({ url, serviceRoleKey }) {
   if (!url || !serviceRoleKey) {
@@ -272,9 +273,13 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         status: 'queued',
       }));
       if (!rows.length) return [];
-      const { data, error } = await client.from('processing_jobs').upsert(rows, { onConflict: 'import_id,item_id' }).select('*');
-      if (error) throw error;
-      return data.map(mapJob);
+      const jobs = [];
+      for (const batch of chunkValues(rows, JOB_INSERT_BATCH_SIZE)) {
+        const { data, error } = await client.from('processing_jobs').upsert(batch, { onConflict: 'import_id,item_id' }).select('*');
+        if (error) throw error;
+        jobs.push(...(data || []));
+      }
+      return jobs.map(mapJob);
     },
     async getItems(userId) {
       const { data, error } = await client

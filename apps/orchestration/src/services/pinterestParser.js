@@ -68,6 +68,7 @@ function textFromBuffer(buffer) {
 function extractPinterestItemsFromText(text, sourceName) {
   const byUrl = new Map();
   const urls = String(text || '').match(/https?:\/\/(?:[^"'\s<>\\]|\\\/)+/gi) || [];
+  const collectionName = collectionNameForPinterestSource(sourceName);
 
   for (const rawUrl of urls) {
     const url = normalizePinterestUrl(rawUrl);
@@ -83,7 +84,7 @@ function extractPinterestItemsFromText(text, sourceName) {
       ownerName: 'Pinterest',
       ownerUsername: '',
       savedAt: '',
-      collections: ['Pinterest export'],
+      collections: [collectionName],
       sourceName,
       platform: 'Pinterest',
       platformKey: 'pinterest',
@@ -97,6 +98,13 @@ function extractPinterestItemsFromText(text, sourceName) {
   }
 
   return [...byUrl.values()];
+}
+
+function collectionNameForPinterestSource(sourceName = '') {
+  const normalized = String(sourceName || '').replace(/\\/g, '/').toLowerCase();
+  if (normalized.includes('boards_followed')) return 'Pinterest followed boards';
+  if (normalized.includes('/boards/') || path.basename(normalized, path.extname(normalized)) === 'boards') return 'Pinterest boards';
+  return 'Pinterest pins';
 }
 
 function mergeItems(items) {
@@ -185,4 +193,5 @@ module.exports = {
   parsePinterestExport,
   normalizePinterestUrl,
   isPinterestExportEntry,
+  collectionNameForPinterestSource,
 };

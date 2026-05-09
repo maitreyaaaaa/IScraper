@@ -1,6 +1,8 @@
 const cheerio = require('cheerio');
 const path = require('path');
 
+const DEFAULT_INSTAGRAM_COLLECTION = 'Instagram saved posts';
+
 function normalizeText(value = '') {
   return String(value)
     .replace(/\u00a0/g, ' ')
@@ -116,7 +118,7 @@ function parsePostsHtml(html, sourceName, collectionName = null) {
       ownerName,
       ownerUsername,
       savedAt,
-      collections: collectionName ? [collectionName] : [],
+      collections: collectionName ? [collectionName] : [DEFAULT_INSTAGRAM_COLLECTION],
       sourceName,
       platform: 'Instagram',
       platformKey: 'instagram',
@@ -202,7 +204,7 @@ function itemFromJsonUrl(url, sourceName, record = {}, collectionName = null) {
     ownerName,
     ownerUsername,
     savedAt,
-    collections: collectionName ? [collectionName] : [],
+    collections: collectionName ? [collectionName] : [DEFAULT_INSTAGRAM_COLLECTION],
     sourceName,
     platform: 'Instagram',
     platformKey: 'instagram',
