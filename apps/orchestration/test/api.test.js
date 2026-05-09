@@ -322,7 +322,71 @@ test('POST /api/imports/storage imports files uploaded through storage', async (
   }
 });
 
-test('POST /api/imports/upload-urls creates signed uploads with short storage paths', async () => {
+test('POST /api/imports/storage imports chunked upload parts', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const html = `
+    <main>
+      <div class="_a6-g"><table>
+        <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/reel/CHUNK111/">x</a></div></td></tr>
+        <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Chunked upload reel</td></tr>
+      </table></div>
+    </main>`;
+  const partA = Buffer.from(html.slice(0, Math.floor(html.length / 2)));
+  const partB = Buffer.from(html.slice(Math.floor(html.length / 2)));
+  const removedPaths = [];
+  store.client = {
+    storage: {
+      from() {
+        return {
+          async download(storagePath) {
+            if (storagePath.endsWith('/00000')) return { data: new Blob([partA], { type: 'application/octet-stream' }), error: null };
+            if (storagePath.endsWith('/00001')) return { data: new Blob([partB], { type: 'application/octet-stream' }), error: null };
+            return { data: null, error: new Error(`Unexpected path ${storagePath}`) };
+          },
+          async remove(paths) {
+            removedPaths.push(...paths);
+            return { data: paths, error: null };
+          },
+        };
+      },
+    },
+  };
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports/storage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: [{
+          path: 'local-dev-user/imports/chunked.html',
+          name: 'saved_posts.html',
+          type: 'text/html',
+          chunked: true,
+          totalChunks: 2,
+        }],
+      }),
+    });
+    const body = await response.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.itemCount, 1);
+    assert.equal(items[0].id, 'CHUNK111');
+    assert.deepEqual(removedPaths, [
+      'local-dev-user/imports/chunked.html.parts/00000',
+      'local-dev-user/imports/chunked.html.parts/00001',
+    ]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/imports/upload-urls creates short chunk upload paths', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   store.client = {
@@ -333,13 +397,7 @@ test('POST /api/imports/upload-urls creates signed uploads with short storage pa
       },
       from(bucket) {
         assert.equal(bucket, 'import-uploads');
-        return {
-          async createSignedUploadUrl(storagePath) {
-            assert.match(storagePath, /^local-dev-user\/\d+-[a-f0-9-]+\.zip$/);
-            assert.ok(storagePath.length < 100);
-            return { data: { signedUrl: `https://storage.example/object/upload/sign/${storagePath}?token=short-token`, token: 'short-token' }, error: null };
-          },
-        };
+        throw new Error('signed upload URLs should not be created');
       },
     },
   };
@@ -366,9 +424,54 @@ test('POST /api/imports/upload-urls creates signed uploads with short storage pa
     assert.equal(body.uploads.length, 1);
     assert.match(body.uploads[0].path, /^local-dev-user\/\d+-[a-f0-9-]+\.zip$/);
     assert.ok(body.uploads[0].path.length < 100);
-    assert.equal(body.uploads[0].token, 'short-token');
-    assert.match(body.uploads[0].signedUrl, /short-token/);
+    assert.equal(body.uploads[0].token, undefined);
+    assert.equal(body.uploads[0].signedUrl, undefined);
     assert.equal(body.uploads[0].name, 'instagram-maitreya_iguess-2026-05-09-0WPnfek7-with-a-very-long-original-export-name.zip');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/imports/upload-chunk stores chunks through the backend service client', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const uploaded = new Map();
+  store.client = {
+    storage: {
+      async getBucket(bucket) {
+        assert.equal(bucket, 'import-uploads');
+        return { data: { id: bucket }, error: null };
+      },
+      from(bucket) {
+        assert.equal(bucket, 'import-uploads');
+        return {
+          async upload(storagePath, buffer, options) {
+            uploaded.set(storagePath, { buffer: Buffer.from(buffer), options });
+            return { data: { path: storagePath }, error: null };
+          },
+        };
+      },
+    },
+  };
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const form = new FormData();
+    form.append('path', 'local-dev-user/123-import.zip');
+    form.append('index', '0');
+    form.append('totalChunks', '2');
+    form.append('chunk', new Blob(['chunk-data']), 'chunk-0');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports/upload-chunk`, { method: 'POST', body: form });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.partPath, 'local-dev-user/123-import.zip.parts/00000');
+    assert.equal(uploaded.get(body.partPath).buffer.toString(), 'chunk-data');
+    assert.equal(uploaded.get(body.partPath).options.upsert, true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });

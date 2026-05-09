@@ -188,6 +188,19 @@ export function createImportUploadUrls({ files }) {
   });
 }
 
+export function uploadImportChunk({ path, chunk, index, totalChunks }) {
+  const formData = new FormData();
+  formData.append('path', path);
+  formData.append('index', String(index));
+  formData.append('totalChunks', String(totalChunks));
+  formData.append('chunk', chunk, `chunk-${index}`);
+
+  return request('/imports/upload-chunk', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
 export function saveLink(payload) {
   return request('/saves/link', {
     method: 'POST',

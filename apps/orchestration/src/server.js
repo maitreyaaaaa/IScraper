@@ -36,6 +36,7 @@ const EXPORT_UPLOAD_MIME_TYPES = new Set([
   '',
 ]);
 const IMPORT_UPLOAD_BUCKET = 'import-uploads';
+const IMPORT_CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
 const rateBuckets = new Map();
 const aiSearchCache = new Map();
 const aiUsageBuckets = new Map();
@@ -360,6 +361,15 @@ function storagePathForUpload(userId, originalName = 'upload') {
   return `${userId}/${Date.now()}-${crypto.randomUUID()}${safeExtension}`;
 }
 
+function chunkPartPath(storagePath, index) {
+  return `${storagePath}.parts/${String(index).padStart(5, '0')}`;
+}
+
+function parseChunkCount(value) {
+  const count = Number(value);
+  return Number.isInteger(count) && count > 0 && count <= 100 ? count : 0;
+}
+
 function signedUploadFileFromBody(file = {}) {
   return {
     originalname: String(file.name || 'upload'),
@@ -389,9 +399,29 @@ async function loadImportFilesFromStorage({ store, userId, storageFiles, config 
       throw error;
     }
 
-    const { data, error } = await store.client.storage.from(bucket).download(storagePath);
-    if (error) throw error;
-    const buffer = Buffer.from(await data.arrayBuffer());
+    const totalChunks = parseChunkCount(entry.totalChunks);
+    let buffer;
+    if (entry.chunked || totalChunks) {
+      if (!totalChunks) {
+        const error = new Error('Uploaded file chunks are invalid.');
+        error.statusCode = 400;
+        throw error;
+      }
+      const buffers = [];
+      for (let index = 0; index < totalChunks; index += 1) {
+        const partPath = chunkPartPath(storagePath, index);
+        const { data, error } = await store.client.storage.from(bucket).download(partPath);
+        if (error) throw error;
+        buffers.push(Buffer.from(await data.arrayBuffer()));
+        pathsToRemove.push(partPath);
+      }
+      buffer = Buffer.concat(buffers);
+    } else {
+      const { data, error } = await store.client.storage.from(bucket).download(storagePath);
+      if (error) throw error;
+      buffer = Buffer.from(await data.arrayBuffer());
+      pathsToRemove.push(storagePath);
+    }
     const file = {
       originalname,
       mimetype,
@@ -400,7 +430,6 @@ async function loadImportFilesFromStorage({ store, userId, storageFiles, config 
     };
     assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024);
     files.push(file);
-    pathsToRemove.push(storagePath);
   }
 
   return { files, bucket, pathsToRemove };
@@ -486,6 +515,13 @@ function createApp({ store, config = {} }) {
     limits: {
       fileSize: config.maxUploadFileSizeBytes || 25 * 1024 * 1024,
       files: 20,
+    },
+  });
+  const chunkUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: config.importChunkSizeBytes || IMPORT_CHUNK_SIZE_BYTES,
+      files: 1,
     },
   });
   const rateWindowMs = config.rateLimitWindowMs || 15 * 60 * 1000;
@@ -963,12 +999,8 @@ function createApp({ store, config = {} }) {
       const file = signedUploadFileFromBody(requestedFile);
       assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024);
       const storagePath = storagePathForUpload(req.user.id, file.originalname);
-      const { data, error } = await store.client.storage.from(bucket).createSignedUploadUrl(storagePath);
-      if (error) throw error;
       uploads.push({
         path: storagePath,
-        token: data.token,
-        signedUrl: data.signedUrl,
         name: file.originalname,
         type: file.mimetype,
         size: file.size,
@@ -976,6 +1008,32 @@ function createApp({ store, config = {} }) {
     }
 
     res.json({ bucket, uploads });
+  }));
+
+  app.post('/api/imports/upload-chunk', chunkUpload.single('chunk'), asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (!store.client?.storage) return res.status(503).json({ error: 'Large file upload storage is not configured.' });
+    if (!req.file?.buffer?.length) return res.status(400).json({ error: 'Upload chunk is missing.' });
+
+    const storagePath = String(req.body?.path || '').replace(/^\/+/, '');
+    if (!storagePath || !storagePathBelongsToUser(req.user.id, storagePath)) {
+      return res.status(400).json({ error: 'Uploaded file path is invalid.' });
+    }
+
+    const index = Number(req.body?.index);
+    const totalChunks = parseChunkCount(req.body?.totalChunks);
+    if (!Number.isInteger(index) || index < 0 || !totalChunks || index >= totalChunks) {
+      return res.status(400).json({ error: 'Upload chunk index is invalid.' });
+    }
+
+    const bucket = await ensureImportUploadBucket(store, config);
+    const partPath = chunkPartPath(storagePath, index);
+    const { error } = await store.client.storage.from(bucket).upload(partPath, req.file.buffer, {
+      contentType: 'application/octet-stream',
+      upsert: true,
+    });
+    if (error) throw error;
+    res.json({ path: storagePath, partPath, index, totalChunks });
   }));
 
   app.post('/api/imports/storage', importRateLimit, asyncRoute(async (req, res) => {

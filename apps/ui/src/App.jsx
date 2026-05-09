@@ -64,6 +64,7 @@ import {
   submitPublicFeedback,
   testProviderCredential,
   updateReviewItem,
+  uploadImportChunk,
 } from './api';
 import { identifyPostHogUser, resetPostHogUser } from './posthog';
 import { supabase } from './supabaseClient';
@@ -86,7 +87,7 @@ const STATUS_META = {
 const STATUSES = ['all', 'needs_review', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 const DIRECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
-const IMPORT_UPLOAD_BUCKET = 'import-uploads';
+const IMPORT_UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
 const HERO_PLATFORMS = [
   { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
   { name: 'X', src: '/platforms/x.svg', bg: '#fff' },
@@ -483,32 +484,34 @@ function rememberPendingSave() {
 }
 
 async function uploadImportFilesToStorage(files) {
-  if (!supabase) {
-    throw new Error('Large uploads need Supabase Storage. Sign in again and try once more.');
-  }
-
-  const { bucket, uploads } = await createImportUploadUrls({ files });
+  const { uploads } = await createImportUploadUrls({ files });
   const uploaded = [];
-  try {
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
-      const upload = uploads[index];
-      const { error } = await supabase.storage.from(bucket || IMPORT_UPLOAD_BUCKET).uploadToSignedUrl(upload.path, upload.token, file);
-      if (error) throw error;
-      uploaded.push({
+
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+    const file = files[fileIndex];
+    const upload = uploads[fileIndex];
+    const totalChunks = Math.max(1, Math.ceil(file.size / IMPORT_UPLOAD_CHUNK_BYTES));
+    for (let index = 0; index < totalChunks; index += 1) {
+      const start = index * IMPORT_UPLOAD_CHUNK_BYTES;
+      const chunk = file.slice(start, Math.min(start + IMPORT_UPLOAD_CHUNK_BYTES, file.size));
+      await uploadImportChunk({
         path: upload.path,
-        name: file.name,
-        type: file.type || 'application/octet-stream',
-        size: file.size,
+        chunk,
+        index,
+        totalChunks,
       });
     }
-    return uploaded;
-  } catch (error) {
-    if (uploaded.length) {
-      await supabase.storage.from(bucket || IMPORT_UPLOAD_BUCKET).remove(uploaded.map((file) => file.path));
-    }
-    throw error;
+    uploaded.push({
+      path: upload.path,
+      name: file.name,
+      type: file.type || 'application/octet-stream',
+      size: file.size,
+      chunked: true,
+      totalChunks,
+    });
   }
+
+  return uploaded;
 }
 
 export default function App() {
