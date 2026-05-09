@@ -8,6 +8,28 @@ const JSZip = require('jszip');
 const { createApp } = require('../src/server');
 const { createLocalStore } = require('../src/stores/localStore');
 
+test('API responses include a restrictive content security policy', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/credit-packages`);
+    const csp = response.headers.get('content-security-policy') || '';
+
+    assert.equal(response.status, 200);
+    assert.match(csp, /default-src 'self'/);
+    assert.match(csp, /object-src 'none'/);
+    assert.match(csp, /frame-ancestors 'none'/);
+    assert.match(csp, /connect-src 'self' https:\/\/\*\.supabase\.co wss:\/\/\*\.supabase\.co/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/imports imports all uploaded export files and creates processing jobs', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
