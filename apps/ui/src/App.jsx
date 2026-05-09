@@ -334,6 +334,15 @@ function getRouteFromLocation() {
   return Object.keys(ROUTE_PATHS).find((route) => route !== 'landing' && route === path) || 'landing';
 }
 
+function canonicalizeUnknownPath() {
+  const path = window.location.pathname.replace(/^\/+|\/+$/g, '');
+  if (!path || path === 'auth/callback') return;
+  const isKnownPath = Object.keys(ROUTE_PATHS).some((route) => route !== 'landing' && route === path);
+  if (!isKnownPath) {
+    window.history.replaceState({}, ROUTE_TITLES.landing, '/');
+  }
+}
+
 function appParamsFromLocation() {
   if (window.location.pathname.replace(/\/+$/g, '') === '/app') return new URLSearchParams(window.location.search);
   const hash = window.location.hash || '';
@@ -493,8 +502,10 @@ export default function App() {
       const nextRoute = getRouteFromLocation();
       setRoute(nextRoute);
       canonicalizeLegacyHashRoute();
+      canonicalizeUnknownPath();
     };
     canonicalizeLegacyHashRoute();
+    canonicalizeUnknownPath();
     window.addEventListener('popstate', onRouteChange);
     window.addEventListener('hashchange', onRouteChange);
     return () => {
