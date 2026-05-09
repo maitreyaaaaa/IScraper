@@ -2,6 +2,9 @@ const crypto = require('crypto');
 const path = require('path');
 const JSZip = require('jszip');
 
+const PINTEREST_ZIP_FOLDERS = new Set(['pins', 'boards', 'boards_followed']);
+const PINTEREST_TEXT_EXTENSIONS = new Set(['.json', '.csv', '.html', '.htm', '.txt']);
+
 function normalizeText(value = '') {
   return String(value)
     .replace(/\u00a0/g, ' ')
@@ -113,17 +116,25 @@ function mergeItems(items) {
 async function textEntriesFromZip(file) {
   const zip = await JSZip.loadAsync(file.buffer);
   const entries = [];
-  const allowedExtensions = new Set(['.json', '.csv', '.html', '.htm', '.txt']);
 
   for (const entry of Object.values(zip.files)) {
     if (entry.dir) continue;
     const extension = path.extname(entry.name || '').toLowerCase();
-    if (!allowedExtensions.has(extension)) continue;
+    if (!PINTEREST_TEXT_EXTENSIONS.has(extension)) continue;
+    if (!isPinterestExportEntry(entry.name)) continue;
     const text = await entry.async('string');
     entries.push({ sourceName: entry.name, text });
   }
 
   return entries;
+}
+
+function isPinterestExportEntry(sourceName = '') {
+  const normalized = String(sourceName || '').replace(/\\/g, '/').toLowerCase();
+  const parts = normalized.split('/').filter(Boolean);
+  const fileName = path.basename(normalized, path.extname(normalized));
+  if (PINTEREST_ZIP_FOLDERS.has(fileName)) return true;
+  return parts.some((part) => PINTEREST_ZIP_FOLDERS.has(part));
 }
 
 async function parsePinterestExport(files = []) {
@@ -173,4 +184,5 @@ async function parsePinterestExport(files = []) {
 module.exports = {
   parsePinterestExport,
   normalizePinterestUrl,
+  isPinterestExportEntry,
 };

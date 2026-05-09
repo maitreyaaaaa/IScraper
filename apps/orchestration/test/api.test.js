@@ -267,6 +267,44 @@ test('POST /api/imports accepts Pinterest export zip files', async () => {
   }
 });
 
+test('POST /api/imports reads Pinterest pins, boards, and boards_followed folders', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const zip = new JSZip();
+    zip.file('pins/pins.json', JSON.stringify([
+      { url: 'https://www.pinterest.com/pin/1111111111/' },
+      { url: 'https://www.pinterest.com/pin/2222222222/' },
+    ]));
+    zip.file('boards/board.csv', 'url\nhttps://www.pinterest.com/pin/2222222222/\nhttps://www.pinterest.com/pin/3333333333/');
+    zip.file('boards_followed/followed.txt', 'https://www.pinterest.com/pin/4444444444/');
+    zip.file('profile/profile.json', JSON.stringify({ url: 'https://www.pinterest.com/pin/9999999999/' }));
+    const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+    const form = new FormData();
+    form.append('exportFiles', new Blob([buffer], { type: 'application/zip' }), 'pinterest.zip');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports`, { method: 'POST', body: form });
+    const body = await response.json();
+    const urls = store.getItems('local-dev-user').map((item) => item.url).sort();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.itemCount, 4);
+    assert.deepEqual(urls, [
+      'https://pinterest.com/pin/1111111111',
+      'https://pinterest.com/pin/2222222222',
+      'https://pinterest.com/pin/3333333333',
+      'https://pinterest.com/pin/4444444444',
+    ]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/imports/storage imports files uploaded through storage', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
