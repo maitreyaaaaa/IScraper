@@ -650,6 +650,99 @@ test('POST /api/indexing/start approves waiting saves in one request', async () 
   }
 });
 
+test('POST /api/indexing/start queues VM worker indexing without inline processing when disabled', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({
+    store,
+    config: {
+      inlineIndexingEnabled: false,
+      credentialEncryptionKey: 'dev-encryption-key',
+      videoDir: path.join(dir, 'videos'),
+    },
+  });
+  const server = app.listen(0);
+
+  try {
+    const importEntry = await store.createImport({
+      userId: 'local-dev-user',
+      source: 'user-export',
+      fileNames: ['saved_posts.html'],
+    });
+    await store.upsertImportData({
+      userId: 'local-dev-user',
+      importId: importEntry.id,
+      initialStatus: 'needs_review',
+      parsed: {
+        collections: [],
+        items: [
+          { id: 'durable-a', url: 'https://example.com/durable-a', contentType: 'unknown', caption: 'A', hashtags: [], collections: [] },
+        ],
+      },
+    });
+
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/indexing/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ startProcessing: true }),
+    });
+    const body = await response.json();
+    const job = store.getJobs('local-dev-user', importEntry.id)[0];
+
+    assert.equal(response.status, 200);
+    assert.equal(body.message, 'Saves queued for batch indexing.');
+    assert.equal(body.indexing.mode, 'vm-worker');
+    assert.equal(body.indexing.queued, true);
+    assert.equal(job.status, 'queued');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/indexing/summary returns aggregate indexing counts', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const importEntry = await store.createImport({
+      userId: 'local-dev-user',
+      source: 'user-export',
+      fileNames: ['saved_posts.html'],
+    });
+    const items = await store.upsertImportData({
+      userId: 'local-dev-user',
+      importId: importEntry.id,
+      initialStatus: 'queued',
+      parsed: {
+        collections: [],
+        items: [
+          { id: 'summary-a', url: 'https://example.com/summary-a', contentType: 'unknown', caption: 'A', hashtags: [], collections: [] },
+          { id: 'summary-b', url: 'https://example.com/summary-b', contentType: 'unknown', caption: 'B', hashtags: [], collections: [] },
+        ],
+      },
+    });
+    const jobs = await store.createJobs({ userId: 'local-dev-user', importId: importEntry.id, items });
+    await store.updateJob('local-dev-user', jobs[0].id, { status: 'analyzing' });
+    await store.updateJob('local-dev-user', jobs[1].id, { status: 'paused_missing_provider', error: 'Connect a key.' });
+
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/indexing/summary`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.summary.processing, 1);
+    assert.equal(body.summary.paused, 1);
+    assert.equal(body.summary.pausedMissingProvider, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/worker/process requires a worker key and processes queued scopes', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

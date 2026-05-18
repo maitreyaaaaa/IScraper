@@ -4,6 +4,7 @@ const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/
 const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
+const { PAUSED_JOB_STATUSES } = require('../services/queue');
 
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
 const IMPORT_INSERT_BATCH_SIZE = 500;
@@ -201,10 +202,10 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data ? mapFeedback(data) : null;
     },
-    async createImport({ userId, source, mode = 'export', fileNames = [] }) {
+    async createImport({ userId, source, mode = 'export', fileNames = [], status = 'imported', storageFiles = [] }) {
       const { data, error } = await client
         .from('imports')
-        .insert({ user_id: userId, source, mode, file_names: fileNames, status: 'imported' })
+        .insert({ user_id: userId, source, mode, file_names: fileNames, status, storage_files: storageFiles })
         .select('*')
         .single();
       if (error) throw error;
@@ -214,6 +215,37 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         metadata: { importId: data.id, source, fileCount: fileNames.length },
       });
       return mapImport(data);
+    },
+    async getPendingStorageImports({ limit = 1 } = {}) {
+      const { data, error } = await client
+        .from('imports')
+        .select('*')
+        .eq('status', 'queued_storage')
+        .order('created_at')
+        .limit(Math.max(1, Math.min(Number(limit) || 1, 20)));
+      if (error) throw error;
+      return (data || []).map(mapImport);
+    },
+    async claimStorageImport(id) {
+      const { data, error } = await client
+        .from('imports')
+        .update({ status: 'processing_storage', error: null })
+        .eq('id', id)
+        .eq('status', 'queued_storage')
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapImport(data) : null;
+    },
+    async updateImportStatus(id, status, errorMessage = null) {
+      const { data, error } = await client
+        .from('imports')
+        .update({ status, error: errorMessage })
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapImport(data) : null;
     },
     async upsertImportData({ userId, importId, parsed, initialStatus = 'queued' }) {
       if (!parsed.items.length) return [];
@@ -307,28 +339,34 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data.map(mapJob);
     },
-    async getProcessableJobScopes({ limit = 10 } = {}) {
-      const { data, error } = await client
-        .from('processing_jobs')
-        .select('user_id,import_id')
-        .eq('status', 'queued')
-        .order('created_at')
-        .limit(Math.max(1, Math.min(Number(limit) || 10, 100)));
+    async getProcessableJobScopes({ limit = 10, perUserConcurrency = 1 } = {}) {
+      const { data, error } = await client.rpc('list_processable_job_scopes', {
+        p_limit: Math.max(1, Math.min(Number(limit) || 10, 100)),
+        p_per_user_concurrency: Math.max(1, Math.min(Number(perUserConcurrency) || 1, 10)),
+      });
       if (error) throw error;
-      const seen = new Set();
-      const scopes = [];
-      for (const row of data || []) {
-        const key = `${row.user_id}:${row.import_id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        scopes.push({ userId: row.user_id, importId: row.import_id });
-      }
-      return scopes;
+      return (data || []).map((row) => ({
+        userId: row.user_id,
+        importId: row.import_id,
+        waitingCount: Number(row.waiting_count || 0),
+      }));
     },
     async getJob(userId, id) {
       const { data, error } = await client.from('processing_jobs').select('*').eq('user_id', userId).eq('id', id).maybeSingle();
       if (error) throw error;
       return data ? mapJob(data) : null;
+    },
+    async claimNextJobs({ userId, importId = null, limit = 5, leaseOwner = 'worker', leaseMs = 15 * 60 * 1000, perUserConcurrency = 1 } = {}) {
+      const { data, error } = await client.rpc('claim_processing_jobs', {
+        p_user_id: userId,
+        p_import_id: importId,
+        p_limit: Math.max(1, Math.min(Number(limit) || 5, 100)),
+        p_lease_owner: leaseOwner,
+        p_lease_expires_at: new Date(Date.now() + leaseMs).toISOString(),
+        p_per_user_concurrency: Math.max(1, Math.min(Number(perUserConcurrency) || 1, 10)),
+      });
+      if (error) throw error;
+      return (data || []).map(mapJob);
     },
     async updateJob(userId, id, patch) {
       const { data, error } = await client
@@ -357,7 +395,15 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       const restartableStatuses = ['failed', 'downloading', 'analyzing', 'paused_needs_billing', 'paused_api_limit', 'paused_missing_provider'];
       let query = client
         .from('processing_jobs')
-        .update({ status: 'queued', error: null })
+        .update({
+          status: 'queued',
+          error: null,
+          lease_owner: null,
+          lease_expires_at: null,
+          claimed_at: null,
+          completed_at: null,
+          last_error_at: null,
+        })
         .eq('user_id', userId)
         .in('status', restartableStatuses);
       if (importId) query = query.eq('import_id', importId);
@@ -375,6 +421,31 @@ function createSupabaseStore({ url, serviceRoleKey }) {
           .throwOnError();
       }
       return itemIds.length;
+    },
+    async getIndexingSummary(userId) {
+      const statuses = ['queued', 'downloading', 'analyzing', 'done', 'failed', ...PAUSED_JOB_STATUSES];
+      const byStatus = {};
+      for (const status of statuses) {
+        byStatus[status] = await countRows(client, 'processing_jobs', (query) => query.eq('user_id', userId).eq('status', status));
+      }
+      const needsReview = await countRows(client, 'saved_items', (query) => query.eq('user_id', userId).eq('status', 'needs_review'));
+      const paused = PAUSED_JOB_STATUSES.reduce((total, status) => total + (byStatus[status] || 0), 0);
+      return {
+        totalJobs: Object.values(byStatus).reduce((total, count) => total + count, 0),
+        needsReview,
+        waiting: byStatus.queued || 0,
+        queued: byStatus.queued || 0,
+        processing: (byStatus.downloading || 0) + (byStatus.analyzing || 0),
+        downloading: byStatus.downloading || 0,
+        analyzing: byStatus.analyzing || 0,
+        done: byStatus.done || 0,
+        failed: byStatus.failed || 0,
+        paused,
+        pausedMissingProvider: byStatus.paused_missing_provider || 0,
+        pausedNeedsBilling: byStatus.paused_needs_billing || 0,
+        pausedApiLimit: byStatus.paused_api_limit || 0,
+        byStatus,
+      };
     },
     async saveAnalysis(userId, itemId, analysis) {
       await client
@@ -800,7 +871,16 @@ function createSupabaseStore({ url, serviceRoleKey }) {
 }
 
 function mapImport(row) {
-  return { id: row.id, userId: row.user_id, source: row.source, mode: row.mode, status: row.status };
+  return {
+    id: row.id,
+    userId: row.user_id,
+    source: row.source,
+    mode: row.mode,
+    status: row.status,
+    fileNames: row.file_names || [],
+    storageFiles: row.storage_files || [],
+    error: row.error || null,
+  };
 }
 
 function chunkValues(values, size = EXISTING_ITEM_LOOKUP_BATCH_SIZE) {
@@ -974,17 +1054,27 @@ function mapJob(row) {
     status: row.status,
     attempts: row.attempts,
     error: row.error,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at,
+    claimedAt: row.claimed_at,
+    completedAt: row.completed_at,
+    lastErrorAt: row.last_error_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
 function toJobRow(patch) {
-  return {
-    status: patch.status,
-    attempts: patch.attempts,
-    error: patch.error,
-  };
+  const row = {};
+  if (Object.prototype.hasOwnProperty.call(patch, 'status')) row.status = patch.status;
+  if (Object.prototype.hasOwnProperty.call(patch, 'attempts')) row.attempts = patch.attempts;
+  if (Object.prototype.hasOwnProperty.call(patch, 'error')) row.error = patch.error;
+  if (Object.prototype.hasOwnProperty.call(patch, 'leaseOwner')) row.lease_owner = patch.leaseOwner;
+  if (Object.prototype.hasOwnProperty.call(patch, 'leaseExpiresAt')) row.lease_expires_at = patch.leaseExpiresAt;
+  if (Object.prototype.hasOwnProperty.call(patch, 'claimedAt')) row.claimed_at = patch.claimedAt;
+  if (Object.prototype.hasOwnProperty.call(patch, 'completedAt')) row.completed_at = patch.completedAt;
+  if (Object.prototype.hasOwnProperty.call(patch, 'lastErrorAt')) row.last_error_at = patch.lastErrorAt;
+  return row;
 }
 
 function toSavedItemPatch(patch = {}) {

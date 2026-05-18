@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { createJobsForImport, isRestartableJob } = require('../services/queue');
+const { createJobsForImport, hasActiveLease, isReclaimableJob, isRestartableJob, PAUSED_JOB_STATUSES } = require('../services/queue');
 const { searchItems } = require('../services/analyzer');
 const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
 const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/providers');
@@ -327,14 +327,16 @@ function createLocalStore({ dataPath }) {
       return feedback;
     },
 
-    createImport({ userId, source, mode = 'export', fileNames = [] }) {
+    createImport({ userId, source, mode = 'export', fileNames = [], status = 'imported', storageFiles = [] }) {
       const entry = {
         id: `import-${Date.now()}`,
         userId,
         source,
         mode,
         fileNames,
-        status: 'imported',
+        status,
+        storageFiles,
+        error: null,
         createdAt: now(),
         updatedAt: now(),
       };
@@ -344,6 +346,33 @@ function createLocalStore({ dataPath }) {
         eventType: 'import_created',
         metadata: { importId: entry.id, source, fileCount: fileNames.length },
       });
+      save();
+      return entry;
+    },
+
+    getPendingStorageImports({ limit = 1 } = {}) {
+      return state.imports
+        .filter((entry) => entry.status === 'queued_storage')
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+        .slice(0, Math.max(1, Math.min(Number(limit) || 1, 20)));
+    },
+
+    claimStorageImport(id) {
+      const entry = state.imports.find((item) => item.id === id && item.status === 'queued_storage');
+      if (!entry) return null;
+      entry.status = 'processing_storage';
+      entry.error = null;
+      entry.updatedAt = now();
+      save();
+      return entry;
+    },
+
+    updateImportStatus(id, status, error = null) {
+      const entry = state.imports.find((item) => item.id === id);
+      if (!entry) return null;
+      entry.status = status;
+      entry.error = error;
+      entry.updatedAt = now();
       save();
       return entry;
     },
@@ -432,13 +461,16 @@ function createLocalStore({ dataPath }) {
       return state.jobs.filter((job) => job.userId === userId && (!importId || job.importId === importId));
     },
 
-    getProcessableJobScopes({ limit = 10 } = {}) {
+    getProcessableJobScopes({ limit = 10, perUserConcurrency = 1 } = {}) {
       const scopes = [];
       const seen = new Set();
-      const queuedJobs = state.jobs
-        .filter((job) => job.status === 'queued')
+      const currentTime = new Date();
+      const processableJobs = state.jobs
+        .filter((job) => isReclaimableJob(job, currentTime))
         .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-      for (const job of queuedJobs) {
+      for (const job of processableJobs) {
+        const activeForUser = state.jobs.filter((entry) => entry.userId === job.userId && hasActiveLease(entry, currentTime)).length;
+        if (activeForUser >= perUserConcurrency) continue;
         const key = `${job.userId}:${job.importId}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -450,6 +482,36 @@ function createLocalStore({ dataPath }) {
 
     getJob(userId, id) {
       return state.jobs.find((job) => job.userId === userId && job.id === id) || null;
+    },
+
+    claimNextJobs({ userId, importId = null, limit = 5, leaseOwner = 'local-worker', leaseMs = 15 * 60 * 1000, perUserConcurrency = 1 } = {}) {
+      const currentTime = new Date();
+      const activeForUser = state.jobs.filter((job) => job.userId === userId && hasActiveLease(job, currentTime)).length;
+      const availableSlots = activeForUser >= (Number(perUserConcurrency) || 1)
+        ? 0
+        : Math.max(1, Math.min(Number(limit) || 1, 100));
+      if (!availableSlots) return [];
+
+      const leaseExpiresAt = new Date(currentTime.getTime() + leaseMs).toISOString();
+      const claimed = state.jobs
+        .filter((job) => job.userId === userId && (!importId || job.importId === importId) && isReclaimableJob(job, currentTime))
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+        .slice(0, availableSlots);
+
+      for (const job of claimed) {
+        Object.assign(job, {
+          status: 'downloading',
+          attempts: (job.attempts || 0) + 1,
+          error: null,
+          leaseOwner,
+          leaseExpiresAt,
+          claimedAt: currentTime.toISOString(),
+          lastErrorAt: null,
+          updatedAt: now(),
+        });
+      }
+      save();
+      return claimed;
     },
 
     updateJob(userId, id, patch) {
@@ -474,6 +536,11 @@ function createLocalStore({ dataPath }) {
         Object.assign(job, {
           status: 'queued',
           error: null,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          claimedAt: null,
+          completedAt: null,
+          lastErrorAt: null,
           updatedAt: now(),
         });
         const item = state.items.find((entry) => entry.userId === userId && entry.id === job.itemId);
@@ -485,6 +552,33 @@ function createLocalStore({ dataPath }) {
       }
       save();
       return jobs.length;
+    },
+
+    getIndexingSummary(userId) {
+      const jobs = state.jobs.filter((job) => job.userId === userId);
+      const items = state.items.filter((item) => item.userId === userId);
+      const byStatus = jobs.reduce((stats, job) => {
+        stats[job.status || 'unknown'] = (stats[job.status || 'unknown'] || 0) + 1;
+        return stats;
+      }, {});
+      const needsReview = items.filter((item) => item.status === 'needs_review').length;
+      const paused = PAUSED_JOB_STATUSES.reduce((total, status) => total + (byStatus[status] || 0), 0);
+      return {
+        totalJobs: jobs.length,
+        needsReview,
+        waiting: byStatus.queued || 0,
+        queued: byStatus.queued || 0,
+        processing: (byStatus.downloading || 0) + (byStatus.analyzing || 0),
+        downloading: byStatus.downloading || 0,
+        analyzing: byStatus.analyzing || 0,
+        done: byStatus.done || 0,
+        failed: byStatus.failed || 0,
+        paused,
+        pausedMissingProvider: byStatus.paused_missing_provider || 0,
+        pausedNeedsBilling: byStatus.paused_needs_billing || 0,
+        pausedApiLimit: byStatus.paused_api_limit || 0,
+        byStatus,
+      };
     },
 
     saveAnalysis(userId, itemId, analysis) {

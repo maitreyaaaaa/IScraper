@@ -597,6 +597,14 @@ function createApp({ store, config = {} }) {
   const adminRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.adminRateLimitMax || 30, name: 'admin', namespace: rateLimitNamespace });
   const workerRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.workerRateLimitMax || 30, name: 'worker', namespace: rateLimitNamespace });
   const allowedOrigins = new Set((config.corsOrigins || []).map((origin) => String(origin).replace(/\/$/, '')));
+  async function queueIndexingWork({ reason, userId, importId = null, shouldDownload = false, forceInline = false }) {
+    if (forceInline || config.inlineIndexingEnabled === true) {
+      startProcessing({ store, userId, importId, config, shouldDownload });
+      return { mode: 'inline', triggered: false };
+    }
+    return { mode: 'vm-worker', queued: true, reason, userId, importId };
+  }
+
   const workerProcessHandler = asyncRoute(async (req, res) => {
     assertWorker(req, config);
     if (typeof store.getProcessableJobScopes !== 'function') return res.status(501).json({ error: 'Worker job discovery is not available.' });
@@ -605,7 +613,10 @@ function createApp({ store, config = {} }) {
     const requestedMaxJobs = Number(req.body?.maxJobs || req.query?.maxJobs) || workerBatchCap;
     const maxJobs = Math.max(1, Math.min(requestedMaxJobs, workerBatchCap));
     const downloadValue = req.body?.download ?? req.query?.download;
-    const scopes = await store.getProcessableJobScopes({ limit: maxJobs });
+    const scopes = await store.getProcessableJobScopes({
+      limit: maxJobs,
+      perUserConcurrency: config.workerPerUserConcurrency || 1,
+    });
     const processed = [];
 
     for (const scope of scopes) {
@@ -915,11 +926,17 @@ function createApp({ store, config = {} }) {
     }
 
     const jobs = item.status === 'done' ? [] : await store.createJobs({ userId: req.user.id, importId, items: [item] });
+    let indexing = null;
     if (req.body?.startProcessing !== false && jobs.length) {
-      startProcessing({ store, userId: req.user.id, importId, config, shouldDownload: req.body?.download !== false });
+      indexing = await queueIndexingWork({
+        reason: 'review-approve',
+        userId: req.user.id,
+        importId,
+        shouldDownload: req.body?.download !== false,
+      });
     }
 
-    return res.json({ item, queuedJobCount: jobs.length, jobs });
+    return res.json({ item, queuedJobCount: jobs.length, jobs, indexing });
   }));
 
   app.post('/api/indexing/start', asyncRoute(async (req, res) => {
@@ -938,18 +955,34 @@ function createApp({ store, config = {} }) {
       items: selectedItems,
     });
 
-    if (jobs.length && req.body?.startProcessing !== false && config.inlineIndexingEnabled === true) {
-      startProcessing({ store, userId: req.user.id, importId: null, config, shouldDownload: req.body?.download !== false });
+    let indexing = null;
+    if (jobs.length && req.body?.startProcessing !== false) {
+      indexing = await queueIndexingWork({
+        reason: 'indexing-start',
+        userId: req.user.id,
+        importId: null,
+        shouldDownload: req.body?.download !== false,
+      });
     }
 
     return res.json({
-      message: jobs.length ? 'Indexing started' : 'No saves are waiting for indexing.',
+      message: jobs.length ? 'Saves queued for batch indexing.' : 'No saves are waiting for indexing.',
       approvedCount: items.length,
       queuedJobCount: jobs.length,
       remainingPendingCount: Math.max(pendingReviewItems.length - selectedItems.length, 0),
       items,
       jobs,
+      indexing,
     });
+  }));
+
+  app.get('/api/indexing/summary', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.getIndexingSummary !== 'function') {
+      return res.status(501).json({ error: 'Indexing summary is not available.' });
+    }
+    const summary = await store.getIndexingSummary(req.user.id);
+    return res.json({ summary });
   }));
 
   app.get('/api/credits', asyncRoute(async (req, res) => {
@@ -1111,8 +1144,13 @@ function createApp({ store, config = {} }) {
 
     files.forEach((file) => assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024));
     const result = await createImportFromFiles({ store, userId: req.user.id, files, config });
-    if (result.queuedJobCount && config.inlineIndexingEnabled === true) {
-      startProcessing({ store, userId: req.user.id, importId: result.import.id, config, shouldDownload: false });
+    if (result.queuedJobCount) {
+      result.indexing = await queueIndexingWork({
+        reason: 'import-upload',
+        userId: req.user.id,
+        importId: result.import.id,
+        shouldDownload: false,
+      });
     }
     res.json(result);
   }));
@@ -1189,8 +1227,13 @@ function createApp({ store, config = {} }) {
         });
       }
     }
-    if (result.queuedJobCount && config.inlineIndexingEnabled === true) {
-      startProcessing({ store, userId: req.user.id, importId: result.import.id, config, shouldDownload: false });
+    if (result.queuedJobCount) {
+      result.indexing = await queueIndexingWork({
+        reason: 'storage-import',
+        userId: req.user.id,
+        importId: result.import.id,
+        shouldDownload: false,
+      });
     }
     res.json(result);
   }));
@@ -1208,8 +1251,14 @@ function createApp({ store, config = {} }) {
     const items = await store.upsertImportData({ userId: req.user.id, importId: importEntry.id, parsed, initialStatus });
     const jobs = initialStatus === 'queued' ? await store.createJobs({ userId: req.user.id, importId: importEntry.id, items }) : [];
 
-    if (jobs.length && config.inlineIndexingEnabled === true) {
-      startProcessing({ store, userId: req.user.id, importId: importEntry.id, config, shouldDownload: false });
+    let indexing = null;
+    if (jobs.length) {
+      indexing = await queueIndexingWork({
+        reason: 'manual-link',
+        userId: req.user.id,
+        importId: importEntry.id,
+        shouldDownload: false,
+      });
     }
 
     res.status(201).json({
@@ -1218,28 +1267,41 @@ function createApp({ store, config = {} }) {
       newItemCount: items.length,
       skippedDuplicateCount: items.length ? 0 : 1,
       queuedJobCount: jobs.length,
+      indexing,
     });
   }));
 
   app.post('/api/imports/:id/process', asyncRoute(async (req, res) => {
     const jobs = await store.getJobs(req.user.id, req.params.id);
-    startProcessing({ store, userId: req.user.id, importId: req.params.id, config, shouldDownload: req.body?.download !== false });
+    const indexing = await queueIndexingWork({
+      reason: 'import-process',
+      userId: req.user.id,
+      importId: req.params.id,
+      shouldDownload: req.body?.download !== false,
+    });
 
-    res.json({ message: 'Processing started', jobCount: jobs.length });
+    res.json({ message: 'Batch indexing queued', jobCount: jobs.length, indexing });
   }));
 
   app.post('/api/jobs/restart', asyncRoute(async (req, res) => {
     const importId = req.body?.importId || null;
     const resetCount = typeof store.restartJobs === 'function' ? await store.restartJobs(req.user.id, importId) : 0;
     const jobs = await store.getJobs(req.user.id, importId);
+    let indexing = null;
     if (req.body?.start !== false) {
-      startProcessing({ store, userId: req.user.id, importId, config, shouldDownload: req.body?.download !== false });
+      indexing = await queueIndexingWork({
+        reason: 'jobs-restart',
+        userId: req.user.id,
+        importId,
+        shouldDownload: req.body?.download !== false,
+      });
     }
 
     res.json({
       message: 'Queue restart requested',
       resetCount,
       jobCount: jobs.length,
+      indexing,
     });
   }));
 
@@ -1296,6 +1358,9 @@ function runProcessImportJobs({ store, userId, importId, config, shouldDownload 
     indexingConcurrency: config.indexingConcurrency,
     credentialEncryptionKey: config.credentialEncryptionKey,
     maxJobs: maxJobs || config.workerBatchSize || 2,
+    leaseOwner: config.workerLeaseOwner,
+    leaseMs: config.workerLeaseMs,
+    perUserConcurrency: config.workerPerUserConcurrency || 1,
   });
 }
 

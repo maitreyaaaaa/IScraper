@@ -29,9 +29,18 @@ function getConfig() {
     adminApiKey: process.env.ADMIN_API_KEY,
     adminPassword: process.env.ADMIN_PASSWORD,
     workerApiKey: process.env.WORKER_API_KEY || process.env.CRON_SECRET,
-    workerBatchSize: Number(process.env.WORKER_BATCH_SIZE || 2),
+    workerBatchSize: Number(process.env.WORKER_BATCH_SIZE || 5),
+    workerScanLimit: Number(process.env.WORKER_SCAN_LIMIT || 20),
+    workerLeaseMs: Number(process.env.WORKER_LEASE_MS || 15 * 60 * 1000),
+    workerLeaseOwner: process.env.WORKER_LEASE_OWNER || `worker-${process.env.VERCEL_DEPLOYMENT_ID || process.env.HOSTNAME || 'local'}`,
+    workerPerUserConcurrency: Number(process.env.WORKER_PER_USER_CONCURRENCY || 1),
+    workerIdleMs: Number(process.env.WORKER_IDLE_MS || 5000),
+    workerCanaryLimit: Number(process.env.WORKER_CANARY_LIMIT || 0),
+    workerRunOnce: process.env.WORKER_RUN_ONCE === 'true',
+    storageImportBatchSize: Number(process.env.STORAGE_IMPORT_BATCH_SIZE || 1),
+    deferStorageImportProcessing: process.env.DEFER_STORAGE_IMPORT_PROCESSING === 'true',
     workerRateLimitMax: Number(process.env.WORKER_RATE_LIMIT_MAX || 30),
-    inlineIndexingEnabled: process.env.INLINE_INDEXING_ENABLED !== 'false',
+    inlineIndexingEnabled: process.env.INLINE_INDEXING_ENABLED === 'true',
     adminEmails: (process.env.ADMIN_EMAILS || '')
       .split(',')
       .map((email) => email.trim().toLowerCase())

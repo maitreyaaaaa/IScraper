@@ -6,6 +6,7 @@ data/
 output/
 Screenshots/
 Logo/
+mobile-home*.png
 server.*.log
 *.log
 

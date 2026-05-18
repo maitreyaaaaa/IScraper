@@ -58,6 +58,9 @@ async function processImportJobs({
   credentialEncryptionKey = null,
   indexingConcurrency = 3,
   maxJobs = Infinity,
+  leaseOwner = 'worker',
+  leaseMs = 15 * 60 * 1000,
+  perUserConcurrency = 1,
 }) {
   fs.mkdirSync(videoDir, { recursive: true });
   const processed = [];
@@ -66,14 +69,24 @@ async function processImportJobs({
   const jobLimit = Number.isFinite(Number(maxJobs)) ? Math.max(1, Number(maxJobs)) : Infinity;
 
   while (attempted < jobLimit) {
-    const jobs = await store.getJobs(userId, importId);
-    const batch = pickNextProcessableJobs(jobs, Math.min(concurrency, jobLimit - attempted));
+    const batchLimit = Math.min(concurrency, jobLimit - attempted);
+    const batch = typeof store.claimNextJobs === 'function'
+      ? await store.claimNextJobs({
+          userId,
+          importId,
+          limit: batchLimit,
+          leaseOwner,
+          leaseMs,
+          perUserConcurrency,
+        })
+      : pickNextProcessableJobs(await store.getJobs(userId, importId), batchLimit);
     if (!batch.length) break;
 
     const batchResults = await Promise.all(batch.map((job) => processOneJob({
       store,
       userId,
       job,
+      alreadyClaimed: typeof store.claimNextJobs === 'function',
       videoDir,
       shouldDownload,
       openRouterApiKey,
@@ -94,6 +107,7 @@ async function processOneJob({
   store,
   userId,
   job,
+  alreadyClaimed = false,
   videoDir,
   shouldDownload,
   openRouterApiKey,
@@ -115,18 +129,20 @@ async function processOneJob({
   }
 
   try {
-    const nextAttempts = (currentJob.attempts || 0) + 1;
-    currentJob = typeof store.claimJob === 'function'
-      ? await store.claimJob(userId, currentJob.id, {
-          status: 'downloading',
-          attempts: nextAttempts,
-          error: null,
-        })
-      : await store.updateJob(userId, currentJob.id, {
-          status: 'downloading',
-          attempts: nextAttempts,
-          error: null,
-        });
+    if (!alreadyClaimed) {
+      const nextAttempts = (currentJob.attempts || 0) + 1;
+      currentJob = typeof store.claimJob === 'function'
+        ? await store.claimJob(userId, currentJob.id, {
+            status: 'downloading',
+            attempts: nextAttempts,
+            error: null,
+          })
+        : await store.updateJob(userId, currentJob.id, {
+            status: 'downloading',
+            attempts: nextAttempts,
+            error: null,
+          });
+    }
 
     if (!currentJob) return null;
 
@@ -203,7 +219,13 @@ async function processOneJob({
         console.warn(`OpenRouter embedding failed for ${item.id}: ${error.message}`);
       }
     }
-    return store.updateJob(userId, currentJob.id, { status: 'done', error: null });
+    return store.updateJob(userId, currentJob.id, {
+      status: 'done',
+      error: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      completedAt: new Date().toISOString(),
+    });
   } catch (error) {
     if (error.pauseStatus) {
       await pauseJob({ store, userId, item, job: currentJob, status: error.pauseStatus, message: error.message });
@@ -225,6 +247,9 @@ async function processOneJob({
       status: 'failed',
       attempts: currentJob.attempts || (job.attempts || 0) + 1,
       error: error.message,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      lastErrorAt: new Date().toISOString(),
     });
     return null;
   }
@@ -343,6 +368,9 @@ async function pauseJob({ store, userId, item, job, status, message }) {
     status,
     attempts: job.attempts || 0,
     error: message,
+    leaseOwner: null,
+    leaseExpiresAt: null,
+    lastErrorAt: new Date().toISOString(),
   });
 }
 

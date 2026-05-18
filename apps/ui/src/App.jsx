@@ -48,6 +48,7 @@ import {
   downloadObsidianGraph,
   getItem,
   getItems,
+  getIndexingSummary,
   getKnowledgeGraph,
   getProfile,
   getPublicFeedback,
@@ -185,6 +186,22 @@ const PROVIDER_DISPLAY_LABELS = {
 
 function normalizeStatus(status = 'queued') {
   return String(status).startsWith('paused') ? 'paused' : status;
+}
+
+function displayStatus(status = 'queued') {
+  const labels = {
+    needs_review: 'Needs review',
+    queued: 'Waiting',
+    downloading: 'Processing',
+    analyzing: 'Analyzing',
+    done: 'Done',
+    failed: 'Failed',
+    paused_needs_billing: 'Needs credits',
+    paused_api_limit: 'Provider limit',
+    paused_missing_provider: 'Needs AI key',
+    paused: 'Paused',
+  };
+  return labels[status] || String(status).replace(/_/g, ' ');
 }
 
 function mapItem(item) {
@@ -1197,7 +1214,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
 
   return (
     <div ref={root} className="relative bg-black text-foreground overflow-x-hidden">
-      <div ref={introRef} className="fixed inset-0 z-[200] grid place-items-center bg-black">
+      <div ref={introRef} className="fixed inset-0 z-[200] hidden place-items-center bg-black md:grid">
         <BrandLogo align="center" className="intro-logo h-24 w-80 opacity-0 md:h-32 md:w-[28rem]" />
       </div>
 
@@ -1289,7 +1306,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         />
       )}
 
-      <section className={`landing-hero relative flex min-h-screen items-center overflow-hidden bg-black ${launchOfferDismissed ? 'pt-36' : 'pt-48'}`}>
+      <section className={`landing-hero relative flex min-h-screen items-center overflow-hidden bg-black ${launchOfferDismissed ? 'pt-28 md:pt-36' : 'pt-40 md:pt-48'}`}>
         <div className="parallax-grid radial-fade grid-bg absolute inset-0 opacity-60" />
         <div
           className="parallax-glow-primary absolute -left-20 -top-32 h-[480px] w-[480px] rounded-full opacity-40 blur-[120px]"
@@ -1306,7 +1323,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
             className="overflow-visible text-balance font-display text-[clamp(3rem,10.5vw,11rem)] font-bold leading-[0.95] tracking-tighter"
           >
             {heroWords.map((word, index) => (
-              <span key={word} className="mr-[0.18em] inline-block overflow-visible">
+              <span key={word} className="mr-[0.18em] inline-block overflow-visible last:mr-0">
                 <span className={`word inline-block ${word === 'Lose' ? 'relative isolate' : ''} ${word === 'Post' ? 'rounded-[5px] bg-orange-500 px-[0.08em] italic text-black' : ''}`}>
                   {word === 'Lose' && (
                     <img
@@ -2507,6 +2524,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [indexingReminder, setIndexingReminder] = useState({ open: false, count: 0 });
+  const [indexingSummary, setIndexingSummary] = useState(null);
   const sidebarRef = useRef(null);
   const pendingSaveHandledRef = useRef(false);
   const pendingItemHandledRef = useRef(false);
@@ -2533,6 +2551,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const loadItems = useCallback(async () => {
     const body = await getItems();
     setItems((body.items || []).map(mapItem));
+  }, []);
+
+  const loadIndexingSummary = useCallback(async () => {
+    const body = await getIndexingSummary();
+    setIndexingSummary(body.summary || null);
   }, []);
 
   const loadControls = useCallback(async () => {
@@ -2562,7 +2585,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           identifyPostHogUser(currentSession, profileBody.profile);
           if (profileBody.required) return;
         }
-        await Promise.all([loadItems(), loadControls()]);
+        await Promise.all([loadItems(), loadControls(), loadIndexingSummary()]);
       } catch (err) {
         if (!cancelled) setError(err.message);
       } finally {
@@ -2585,6 +2608,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       } else {
         setItems([]);
         setCredentials([]);
+        setIndexingSummary(null);
         setLoading(false);
         resetPostHogUser();
       }
@@ -2598,6 +2622,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       } else {
         setItems([]);
         setCredentials([]);
+        setIndexingSummary(null);
         setProfile(null);
         setProfileRequired(false);
         setLoading(false);
@@ -2609,7 +2634,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       cancelled = true;
       listener.subscription.unsubscribe();
     };
-  }, [authEnabled, loadControls, loadItems]);
+  }, [authEnabled, loadControls, loadIndexingSummary, loadItems]);
 
   useEffect(() => {
     gsap.set([sidebarRef.current, '.dash-panel', '.dash-panel-inner'], { clearProps: 'opacity,transform' });
@@ -2643,15 +2668,15 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     needsReview: items.filter((item) => item.sourceStatus === 'needs_review').length,
     paused: items.filter((item) => item.status === 'paused' || item.status === 'failed').length,
   }), [items]);
-  const indexingActivity = useMemo(() => summarizeIndexing(items), [items]);
+  const indexingActivity = useMemo(() => summarizeIndexing(items, indexingSummary), [indexingSummary, items]);
 
   useEffect(() => {
     if (!canUsePrivateActions || indexingActivity.activeTotal <= 0) return undefined;
     const timer = window.setInterval(() => {
-      loadItems().catch((err) => setError(err.message));
-    }, 3500);
+      loadIndexingSummary().catch((err) => setError(err.message));
+    }, 8000);
     return () => window.clearInterval(timer);
-  }, [canUsePrivateActions, indexingActivity.activeTotal, loadItems]);
+  }, [canUsePrivateActions, indexingActivity.activeTotal, loadIndexingSummary]);
 
   const handleAvatarFile = (event) => {
     const file = event.target.files?.[0];
@@ -2811,8 +2836,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setCollectionFilter('all');
       setPlatformFilter('all');
       setTab('upload');
-      setNotice(`Added ${newCount} new saves. ${skippedCount} already existed. New saves are queued for indexing automatically.`);
+      setNotice(`Added ${newCount} new saves. ${skippedCount} already existed. New saves are queued for batch indexing.`);
       await loadItems();
+      await loadIndexingSummary();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2832,12 +2858,15 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         const body = await startIndexing();
         const approved = (body.items || []).map(mapItem);
         setItems((current) => current.map((entry) => approved.find((item) => item.id === entry.id) || entry));
-        setNotice(`Started indexing ${body.approvedCount || approved.length} waiting saves. Refreshing results shortly.`);
+        setNotice(`Queued ${body.approvedCount || approved.length} waiting saves for batch indexing.`);
       } else {
         await restartQueue();
-        setNotice('Queue restarted. Refreshing results shortly.');
+        setNotice('Paused and failed saves were returned to the batch queue.');
       }
-      window.setTimeout(() => loadItems().catch((err) => setError(err.message)), 1500);
+      await loadIndexingSummary();
+      window.setTimeout(() => {
+        Promise.all([loadItems(), loadIndexingSummary()]).catch((err) => setError(err.message));
+      }, 1500);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2875,8 +2904,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const nextItem = mapItem(body.item);
       setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
       setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
-      setNotice((body.queuedJobCount || 0) > 0 ? 'Approved. Indexing has started.' : 'Approved. This save was already indexed.');
-      window.setTimeout(() => loadItems().catch((err) => setError(err.message)), 1500);
+      setNotice((body.queuedJobCount || 0) > 0 ? 'Approved. This save is queued for batch indexing.' : 'Approved. This save was already indexed.');
+      await loadIndexingSummary();
+      window.setTimeout(() => {
+        Promise.all([loadItems(), loadIndexingSummary()]).catch((err) => setError(err.message));
+      }, 1500);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -3680,52 +3712,59 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
   );
 }
 
-function summarizeIndexing(items) {
-  const queued = items.filter((item) => item.status === 'queued').length;
-  const downloading = items.filter((item) => item.status === 'downloading').length;
-  const analyzing = items.filter((item) => item.status === 'analyzing').length;
-  const done = items.filter((item) => item.status === 'done').length;
-  const active = downloading + analyzing;
-  const activeTotal = queued + active;
-  const total = items.filter((item) => item.sourceStatus !== 'needs_review').length;
-  const parallelAgents = 3;
-  const etaSeconds = activeTotal > 0 ? Math.max(60, Math.ceil(((queued * 35) + (active * 20)) / parallelAgents)) : 0;
+function summarizeIndexing(items, summary = null) {
+  const fallback = {
+    totalJobs: items.filter((item) => item.sourceStatus !== 'needs_review').length,
+    waiting: items.filter((item) => item.status === 'queued').length,
+    downloading: items.filter((item) => item.status === 'downloading').length,
+    analyzing: items.filter((item) => item.status === 'analyzing').length,
+    done: items.filter((item) => item.status === 'done').length,
+    failed: items.filter((item) => item.status === 'failed').length,
+    paused: items.filter((item) => item.status === 'paused').length,
+    pausedMissingProvider: items.filter((item) => item.sourceStatus === 'paused_missing_provider').length,
+    pausedNeedsBilling: items.filter((item) => item.sourceStatus === 'paused_needs_billing').length,
+    pausedApiLimit: items.filter((item) => item.sourceStatus === 'paused_api_limit').length,
+  };
+  const source = summary || fallback;
+  const waiting = Number(source.waiting ?? source.queued ?? 0);
+  const downloading = Number(source.downloading || 0);
+  const analyzing = Number(source.analyzing || 0);
+  const processing = Number(source.processing ?? (downloading + analyzing));
+  const done = Number(source.done || 0);
+  const failed = Number(source.failed || 0);
+  const paused = Number(source.paused || 0);
+  const total = Math.max(Number(source.totalJobs || 0), waiting + processing + done + failed + paused);
+  const activeTotal = waiting + processing + failed + paused;
   const progress = total > 0 ? Math.round((done / total) * 100) : 0;
 
   return {
-    queued,
+    waiting,
+    queued: waiting,
     downloading,
     analyzing,
-    active,
+    processing,
+    active: processing,
     activeTotal,
     done,
-    etaSeconds,
-    parallelAgents,
+    failed,
+    paused,
+    pausedMissingProvider: Number(source.pausedMissingProvider || 0),
+    pausedNeedsBilling: Number(source.pausedNeedsBilling || 0),
+    pausedApiLimit: Number(source.pausedApiLimit || 0),
+    total,
     progress,
   };
 }
 
-function formatDuration(totalSeconds) {
-  const seconds = Math.max(0, Number(totalSeconds) || 0);
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  if (minutes <= 0) return `${remainder}s`;
-  return `${minutes}m ${String(remainder).padStart(2, '0')}s`;
-}
-
 function IndexingProgressCard({ activity }) {
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    if (!activity.activeTotal) return undefined;
-    const timer = window.setInterval(() => setTick((current) => current + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [activity.activeTotal, activity.etaSeconds]);
-
   if (!activity.activeTotal) return null;
 
-  const remainingSeconds = Math.max(0, activity.etaSeconds - (tick % Math.max(1, activity.etaSeconds + 1)));
   const progress = Math.min(99, Math.max(2, activity.progress));
+  const pausedReasons = [
+    activity.pausedMissingProvider ? `${activity.pausedMissingProvider} need an AI key` : null,
+    activity.pausedNeedsBilling ? `${activity.pausedNeedsBilling} need credits` : null,
+    activity.pausedApiLimit ? `${activity.pausedApiLimit} hit provider limits` : null,
+  ].filter(Boolean);
 
   return (
     <div className="mt-5 overflow-hidden rounded-xl border border-primary/25 bg-primary/5 p-4">
@@ -3733,29 +3772,35 @@ function IndexingProgressCard({ activity }) {
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Indexing in progress</div>
           <h2 className="mt-1 font-display text-xl font-bold tracking-tight">
-            {activity.activeTotal} saves left · about {formatDuration(remainingSeconds)}
+            {activity.activeTotal} saves still need attention
           </h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            The library is usable while indexing continues.
+            Saves are enriched in small batches. Completed saves stay usable while the queue continues.
           </p>
         </div>
         <div className="grid min-w-28 gap-1 rounded-lg border border-white/10 bg-black px-3 py-2 text-center">
-          <span className="font-display text-2xl font-bold text-primary">{activity.active}</span>
-          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">active now</span>
+          <span className="font-display text-2xl font-bold text-primary">{activity.processing}</span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">processing</span>
         </div>
       </div>
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
         <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${progress}%` }} />
       </div>
       <div className="mt-3 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-        <span>{activity.queued} queued</span>
+        <span>{activity.waiting} waiting</span>
         <span>{activity.downloading} downloading</span>
         <span>{activity.analyzing} analyzing</span>
+        <span>{activity.paused} paused</span>
+        <span>{activity.failed} failed</span>
       </div>
+      {pausedReasons.length ? (
+        <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+          {pausedReasons.map((reason) => <span key={reason}>{reason}</span>)}
+        </div>
+      ) : null}
     </div>
   );
 }
-
 function LibraryTab({
   items,
   totalCount,
@@ -4038,7 +4083,7 @@ function PinCard({ item, index, onClick }) {
           <span className="truncate font-mono text-xs text-primary">{item.sourceAuthor || item.user}</span>
           <span className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider ${meta.color}`}>
             <Icon className={`h-3 w-3 ${['downloading', 'analyzing'].includes(item.status) ? 'animate-spin' : ''}`} />
-            {item.sourceStatus}
+            {displayStatus(item.sourceStatus)}
           </span>
         </div>
         <p className="line-clamp-3 text-sm leading-6 text-muted-foreground">{preview}</p>
@@ -4081,7 +4126,7 @@ function UploadTab({
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <h1 className="font-display text-4xl font-bold tracking-tight">Add your saved posts</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Upload an Instagram or Pinterest export. New saves are queued for indexing automatically.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Upload an Instagram or Pinterest export. New saves are queued for batch indexing.</p>
         </div>
         <button
           type="button"
@@ -4099,7 +4144,7 @@ function UploadTab({
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save from any platform</div>
           <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Add a Pinterest pin, tweet, video, post, or article</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            New web links go into your library first. Nothing is indexed until you click Start indexing or index an individual save.
+            New web links go into your library first. Nothing is processed until it is queued for batch indexing.
           </p>
         </div>
         <input
@@ -4126,7 +4171,7 @@ function UploadTab({
         />
         <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-          Save and index
+          Save and queue
         </button>
       </form>
 
@@ -4182,11 +4227,11 @@ function UploadTab({
       <div className="grid gap-3 md:grid-cols-2">
         <button onClick={onImport} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-          Import and index
+          Import and queue
         </button>
         <button onClick={onRestart} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-5 py-3 font-semibold text-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
-          Retry indexing queue
+          Retry paused or failed saves
         </button>
       </div>
     </div>
@@ -4886,7 +4931,7 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
                 className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                Approve and index
+                Approve and queue
               </button>
             )}
           </div>

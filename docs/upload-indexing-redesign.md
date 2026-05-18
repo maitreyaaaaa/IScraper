@@ -7,7 +7,7 @@
 - The browser should upload export files directly to Supabase Storage.
 - The backend should create safe upload paths, verify ownership, parse uploaded files, and create database records.
 - Indexing should be triggered once per batch, not once per save.
-- A future worker should process durable indexing jobs outside normal user requests.
+- Trigger.dev should process durable indexing jobs outside normal user requests.
 
 ## Assumptions
 
@@ -22,7 +22,7 @@
 - Direct browser-to-Supabase upload was chosen over Vercel chunk proxying because it avoids Vercel request body limits and reduces duplicated file transfer.
 - The backend still creates upload paths because it can enforce user ownership and file rules before Storage writes happen.
 - A single batch indexing endpoint was chosen over frontend loops because it avoids spawning many overlapping Vercel workers.
-- A separate durable worker remains the preferred next structural step, but this pass keeps implementation effort controlled.
+- Trigger.dev is the primary production drain path. The protected Vercel worker endpoint remains only a fallback/admin diagnostic path.
 
 ## Final Design
 
@@ -34,10 +34,11 @@
 6. User clicks Start indexing.
 7. Frontend calls `/api/indexing/start` once.
 8. Backend approves waiting saves and creates `processing_jobs`.
-9. For current production compatibility, inline processing can still start once per batch.
-10. For the cleaner worker path, set `INLINE_INDEXING_ENABLED=false` and call `/api/worker/process` from Vercel Cron or another scheduler using `CRON_SECRET`/`WORKER_API_KEY`.
-11. Worker processing claims queued jobs before running them, so overlapping worker invocations skip jobs already taken.
+9. Backend triggers the `indexing-scan` Trigger.dev task when durable indexing is configured.
+10. Trigger.dev runs `indexing-scan` on a schedule and calls `indexing-process-scope` for bounded batches.
+11. Worker processing leases queued or expired active jobs before running them, so overlapping workers skip jobs already leased.
+12. `INLINE_INDEXING_ENABLED=false` is the production default. Inline processing is only a local/fallback escape hatch.
 
 ## Next Structural Step
 
-Move the worker to a separate always-on service if indexing grows beyond what Vercel function duration can reliably handle. Vercel can remain the web API, but long AI work should not depend on the user request lifecycle.
+Keep tuning Trigger.dev concurrency, per-user limits, and batch sizes while measuring actual provider cost and failure rates. Vercel remains the web API; long AI work should not depend on the user request lifecycle.
