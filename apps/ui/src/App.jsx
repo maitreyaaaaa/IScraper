@@ -3051,18 +3051,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 {notice && <Banner>{notice}</Banner>}
               </div>
             )}
-            {canUsePrivateActions && !profileRequired && (
-              <div className="mx-auto max-w-6xl px-6 pt-6 md:px-12">
-                <DemoReadinessPanel
-                  stats={stats}
-                  indexingActivity={indexingActivity}
-                  credentials={credentials}
-                  onRestart={handleStartIndexing}
-                  onOpenUpload={() => setTab('upload')}
-                  onOpenSettings={() => setTab('settings')}
-                />
-              </div>
-            )}
             {loading ? (
               <div className="grid min-h-screen place-items-center text-muted-foreground">Loading your saved index...</div>
             ) : (
@@ -3249,87 +3237,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         />
       )}
     </div>
-  );
-}
-
-function DemoReadinessPanel({ stats, indexingActivity, credentials, onRestart, onOpenUpload, onOpenSettings }) {
-  const hasProvider = credentials.length > 0;
-  const activeJobs = indexingActivity.activeTotal || indexingActivity.totalJobs || 0;
-  const progress = indexingActivity.progress || 0;
-  const demoChecklist = [
-    { label: 'Saved library dashboard', done: stats.total > 0 || stats.needsReview > 0, value: `${stats.total} saves` },
-    { label: 'AI tags and searchable summaries', done: stats.done > 0, value: `${stats.done} indexed` },
-    { label: 'Retry queue and upload progress', done: activeJobs > 0 || stats.paused > 0, value: `${activeJobs} active` },
-    { label: 'Provider keys and privacy controls', done: hasProvider, value: hasProvider ? 'configured' : 'not connected' },
-  ];
-
-  return (
-    <section className="rounded-3xl border border-white/10 bg-white/[0.04] p-5 shadow-2xl shadow-black/20">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.22em] text-primary">
-            <Sparkles className="h-3.5 w-3.5" />
-            Demo command center
-          </div>
-          <h2 className="mt-3 font-display text-2xl font-bold tracking-tight">Library readiness snapshot</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            Track upload progress, searchable saves, AI enrichment, failed-processing retries, and credit/key setup from one place.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={onOpenUpload} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
-            <Upload className="h-4 w-4" />
-            Add saves
-          </button>
-          <button type="button" onClick={onOpenSettings} className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-foreground">
-            <KeyRound className="h-4 w-4" />
-            Keys
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-5 grid gap-3 md:grid-cols-4">
-        {demoChecklist.map((item) => (
-          <div key={item.label} className="rounded-2xl border border-white/10 bg-black/20 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <p className="text-sm font-semibold text-foreground">{item.label}</p>
-              {item.done ? <CheckCircle2 className="h-4 w-4 text-primary" /> : <AlertCircle className="h-4 w-4 text-muted-foreground" />}
-            </div>
-            <p className="mt-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">{item.value}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-5 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-        <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold text-foreground">Indexing progress</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {stats.queued} queued, {stats.paused} paused or failed, {stats.needsReview} waiting for review.
-              </p>
-            </div>
-            <span className="font-mono text-sm text-primary">{progress}%</span>
-          </div>
-          <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
-            <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${Math.max(4, Math.min(100, progress))}%` }} />
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onRestart}
-          className="rounded-2xl border border-primary/25 bg-primary/10 p-4 text-left transition hover:bg-primary/15"
-        >
-          <div className="flex items-center gap-2 text-sm font-semibold text-primary">
-            <RotateCcw className="h-4 w-4" />
-            Retry failed or paused work
-          </div>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Push stuck saves back into the processing queue after fixing credits or provider keys.
-          </p>
-        </button>
-      </div>
-    </section>
   );
 }
 
