@@ -2558,6 +2558,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [collectionFilter, setCollectionFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
   const [items, setItems] = useState([]);
+  const [searchResults, setSearchResults] = useState(null);
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
   const [importSourceType, setImportSourceType] = useState('auto');
@@ -2615,6 +2616,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const mergeUpdatedItem = useCallback((updated) => {
     const nextItem = mapItem(updated);
     setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
+    setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
     setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
     return nextItem;
   }, []);
@@ -2673,6 +2675,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         initialize(data.session).finally(() => cleanAuthCallbackUrl());
       } else {
         setItems([]);
+        setSearchResults(null);
         setCredentials([]);
         setLoading(false);
         resetPostHogUser();
@@ -2686,6 +2689,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         initialize(nextSession).finally(() => cleanAuthCallbackUrl());
       } else {
         setItems([]);
+        setSearchResults(null);
         setCredentials([]);
         setProfile(null);
         setProfileRequired(false);
@@ -2712,18 +2716,20 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     );
   }, [tab]);
 
-  const collections = useMemo(() => ['all', ...unique(items.map((item) => item.collection))], [items]);
-  const platforms = useMemo(() => ['all', ...unique(items.map((item) => item.platform))], [items]);
+  const boardItems = searchResults || items;
+  const searchActive = searchResults !== null;
+  const collections = useMemo(() => ['all', ...unique(boardItems.map((item) => item.collection))], [boardItems]);
+  const platforms = useMemo(() => ['all', ...unique(boardItems.map((item) => item.platform))], [boardItems]);
   const pendingReviews = useMemo(() => items.filter((item) => item.sourceStatus === 'needs_review'), [items]);
 
   const filtered = useMemo(() => {
-    return items.filter((item) => {
+    return boardItems.filter((item) => {
       if (statusFilter !== 'all' && item.status !== statusFilter) return false;
       if (collectionFilter !== 'all' && item.collection !== collectionFilter) return false;
       if (platformFilter !== 'all' && item.platform !== platformFilter) return false;
       return true;
     });
-  }, [collectionFilter, items, platformFilter, statusFilter]);
+  }, [boardItems, collectionFilter, platformFilter, statusFilter]);
 
   const stats = useMemo(() => ({
     total: items.length,
@@ -2787,11 +2793,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setError('');
     try {
       if (!query.trim()) {
+        setSearchResults(null);
         await loadItems();
       } else {
         const body = await searchItems(query);
         const mappedResults = (body.results || []).map(mapItem);
-        setItems(mappedResults);
+        setSearchResults(mappedResults);
         const suggestedIds = (body.suggestedEnrichmentIds || mappedResults.filter(shouldEnrichItem).slice(0, 3).map((item) => item.id)).slice(0, 3);
         if (suggestedIds.length) {
           enrichIntentBatch(suggestedIds)
@@ -2926,6 +2933,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const body = await updateReviewItem(item.id, updates);
       const nextItem = mapItem(body.item);
       setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
+      setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
       setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
       setNotice('Review details saved.');
     } catch (err) {
@@ -2945,6 +2953,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const body = await approveReviewItem(item.id, { ...updates, startProcessing: true });
       const nextItem = mapItem(body.item);
       setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
+      setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
       setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
       setNotice('Approved. Searchable from metadata. Open it to enrich.');
     } catch (err) {
@@ -2965,6 +2974,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setItems((current) => current.map((entry) => (
           entry.id === nextItem.id ? { ...nextItem, indexingStage: 'visual_indexing', indexingLabel: INDEXING_META.visual_indexing.label } : entry
         )));
+        setSearchResults((current) => (current ? current.map((entry) => (
+          entry.id === nextItem.id ? { ...nextItem, indexingStage: 'visual_indexing', indexingLabel: INDEXING_META.visual_indexing.label } : entry
+        )) : current));
         setSelected((current) => (current?.id === nextItem.id
           ? { ...nextItem, indexingStage: 'visual_indexing', indexingLabel: INDEXING_META.visual_indexing.label }
           : current));
@@ -3124,8 +3136,15 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                   <LibraryTab
                     items={filtered}
                     totalCount={items.length}
+                    searchActive={searchActive}
+                    searchResultCount={boardItems.length}
                     query={query}
                     setQuery={setQuery}
+                    onClearSearch={() => {
+                      activeSearchRef.current += 1;
+                      setSearchResults(null);
+                      setQuery('');
+                    }}
                     onSearch={handleSearch}
                     busy={busy}
                     statusFilter={statusFilter}
@@ -3763,8 +3782,11 @@ function IndexingProgressCard({ activity }) {
 function LibraryTab({
   items,
   totalCount,
+  searchActive,
+  searchResultCount,
   query,
   setQuery,
+  onClearSearch,
   onSearch,
   busy,
   statusFilter,
@@ -3796,7 +3818,7 @@ function LibraryTab({
     if (!cards?.length) return undefined;
 
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduceMotion) {
+    if (reduceMotion || cards.length > 48) {
       gsap.set(cards, { autoAlpha: 1, y: 0, scale: 1, clearProps: 'transform,opacity,visibility' });
       return undefined;
     }
@@ -3831,7 +3853,14 @@ function LibraryTab({
           <input
             autoFocus
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              const nextQuery = event.target.value;
+              setQuery(nextQuery);
+              if (!nextQuery.trim() && searchActive) {
+                setVisibleCount(80);
+                onClearSearch();
+              }
+            }}
             placeholder="Search recipes, outfits, trips, products..."
             className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground md:text-lg"
           />
@@ -3840,7 +3869,7 @@ function LibraryTab({
               type="button"
               onClick={() => {
                 setVisibleCount(80);
-                setQuery('');
+                onClearSearch();
               }}
               className="rounded-full p-1 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
             >
@@ -3866,7 +3895,10 @@ function LibraryTab({
 
       <div className="sticky top-0 z-20 -mx-4 mt-5 border-y border-white/5 bg-black/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:-mx-10 md:px-10">
         <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
-          <span>{visibleItems.length} showing from {items.length} matching saves</span>
+          <span>
+            {visibleItems.length} showing from {items.length} matching saves
+            {searchActive ? ` · ${searchResultCount} search results from ${totalCount} total saves` : ''}
+          </span>
           <div className="flex flex-wrap gap-2">
             <DashboardFilterSelect
               label="Status"
