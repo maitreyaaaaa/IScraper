@@ -461,6 +461,64 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         byStatus,
       };
     },
+    async listIndexingIssues(userId, { limit = 50 } = {}) {
+      const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 100));
+      const restartableStatuses = ['failed', 'downloading', 'analyzing', ...PAUSED_JOB_STATUSES];
+      const { data: jobRows, error } = await client
+        .from('processing_jobs')
+        .select('*')
+        .eq('user_id', userId)
+        .in('status', restartableStatuses)
+        .order('updated_at', { ascending: false })
+        .limit(safeLimit);
+      if (error) throw error;
+
+      const itemIds = [...new Set((jobRows || []).map((row) => row.item_id).filter(Boolean))];
+      const itemRowsById = new Map();
+      if (itemIds.length) {
+        const { data: itemRows, error: itemError } = await client
+          .from('saved_items')
+          .select('*')
+          .eq('user_id', userId)
+          .in('id', itemIds);
+        if (itemError) throw itemError;
+        for (const row of itemRows || []) itemRowsById.set(row.id, mapItem(row));
+      }
+
+      const issues = (jobRows || []).map((row) => {
+        const job = mapJob(row);
+        const item = itemRowsById.get(job.itemId);
+        return {
+          id: job.id,
+          jobId: job.id,
+          importId: job.importId,
+          itemId: job.itemId,
+          status: job.status,
+          error: job.error || item?.error || null,
+          attempts: job.attempts || 0,
+          lastErrorAt: job.lastErrorAt || null,
+          updatedAt: job.updatedAt || null,
+          createdAt: job.createdAt || null,
+          item: item ? {
+            id: item.id,
+            url: item.url,
+            platform: item.platform || 'Instagram',
+            platformKey: item.platformKey || 'instagram',
+            sourceTitle: item.sourceTitle || '',
+            sourceAuthor: item.sourceAuthor || item.ownerUsername || item.ownerName || '',
+            caption: item.caption || '',
+            status: item.status,
+            error: item.error || null,
+          } : null,
+        };
+      });
+      const summary = issues.reduce((stats, issue) => {
+        stats.total += 1;
+        stats.byStatus[issue.status] = (stats.byStatus[issue.status] || 0) + 1;
+        return stats;
+      }, { total: 0, byStatus: {} });
+      return { issues, summary, limit: safeLimit };
+    },
     async saveAnalysis(userId, itemId, analysis) {
       await client
         .from('item_analysis')

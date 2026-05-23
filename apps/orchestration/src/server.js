@@ -993,6 +993,15 @@ function createApp({ store, config = {} }) {
     return res.json({ summary });
   }));
 
+  app.get('/api/indexing/issues', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.listIndexingIssues !== 'function') {
+      return res.status(501).json({ error: 'Indexing issues are not available.' });
+    }
+    const limit = Math.max(1, Math.min(Number(req.query.limit) || 50, 100));
+    return res.json(await store.listIndexingIssues(req.user.id, { limit }));
+  }));
+
   app.get('/api/credits', asyncRoute(async (req, res) => {
     res.json({ credits: await store.getCredits(req.user.id) });
   }));

@@ -813,6 +813,69 @@ test('GET /api/indexing/summary returns aggregate indexing counts', async () => 
   }
 });
 
+test('GET /api/indexing/issues returns user-scoped retryable jobs', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const importEntry = await store.createImport({
+      userId: 'user-a',
+      source: 'user-export',
+      fileNames: ['saved_posts.html'],
+    });
+    const items = await store.upsertImportData({
+      userId: 'user-a',
+      importId: importEntry.id,
+      initialStatus: 'queued',
+      parsed: {
+        collections: [],
+        items: [
+          { id: 'issue-a', url: 'https://example.com/issue-a', contentType: 'unknown', caption: 'Needs key', hashtags: [], collections: [] },
+          { id: 'issue-b', url: 'https://example.com/issue-b', contentType: 'unknown', caption: 'Done', hashtags: [], collections: [] },
+        ],
+      },
+    });
+    const jobs = await store.createJobs({ userId: 'user-a', importId: importEntry.id, items });
+    await store.updateJob('user-a', jobs[0].id, { status: 'paused_missing_provider', error: 'Connect a key.' });
+    await store.updateJob('user-a', jobs[1].id, { status: 'done' });
+
+    const otherImport = await store.createImport({
+      userId: 'user-b',
+      source: 'user-export',
+      fileNames: ['saved_posts.html'],
+    });
+    const otherItems = await store.upsertImportData({
+      userId: 'user-b',
+      importId: otherImport.id,
+      initialStatus: 'queued',
+      parsed: {
+        collections: [],
+        items: [{ id: 'other-issue', url: 'https://example.com/other', contentType: 'unknown', caption: 'Other', hashtags: [], collections: [] }],
+      },
+    });
+    const otherJobs = await store.createJobs({ userId: 'user-b', importId: otherImport.id, items: otherItems });
+    await store.updateJob('user-b', otherJobs[0].id, { status: 'failed', error: 'Other user.' });
+
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/indexing/issues`, {
+      headers: { 'x-user-id': 'user-a', 'x-user-email': 'user-a@example.com' },
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.issues.length, 1);
+    assert.equal(body.issues[0].itemId, 'issue-a');
+    assert.equal(body.issues[0].error, 'Connect a key.');
+    assert.equal(body.summary.byStatus.paused_missing_provider, 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(body.issues[0], 'userId'), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/worker/process requires a worker key and processes queued scopes', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

@@ -31,6 +31,10 @@ export function getIndexingSummary() {
   return request('/indexing/summary');
 }
 
+export function getIndexingIssues(limit = 50) {
+  return request(`/indexing/issues?limit=${encodeURIComponent(limit)}`);
+}
+
 export function getPublicFeedback() {
   return request('/feedback');
 }

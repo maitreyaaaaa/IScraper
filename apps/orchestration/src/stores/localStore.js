@@ -613,6 +613,46 @@ function createLocalStore({ dataPath }) {
       };
     },
 
+    listIndexingIssues(userId, { limit = 50 } = {}) {
+      const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 100));
+      const issues = state.jobs
+        .filter((job) => job.userId === userId && isRestartableJob(job))
+        .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))
+        .slice(0, safeLimit)
+        .map((job) => {
+          const item = state.items.find((entry) => entry.userId === userId && entry.id === job.itemId);
+          return {
+            id: job.id,
+            jobId: job.id,
+            importId: job.importId,
+            itemId: job.itemId,
+            status: job.status,
+            error: job.error || item?.error || null,
+            attempts: job.attempts || 0,
+            lastErrorAt: job.lastErrorAt || null,
+            updatedAt: job.updatedAt || null,
+            createdAt: job.createdAt || null,
+            item: item ? {
+              id: item.id,
+              url: item.url,
+              platform: item.platform || 'Instagram',
+              platformKey: item.platformKey || 'instagram',
+              sourceTitle: item.sourceTitle || '',
+              sourceAuthor: item.sourceAuthor || item.ownerUsername || item.ownerName || '',
+              caption: item.caption || '',
+              status: item.status,
+              error: item.error || null,
+            } : null,
+          };
+        });
+      const summary = issues.reduce((stats, issue) => {
+        stats.total += 1;
+        stats.byStatus[issue.status] = (stats.byStatus[issue.status] || 0) + 1;
+        return stats;
+      }, { total: 0, byStatus: {} });
+      return { issues, summary, limit: safeLimit };
+    },
+
     saveAnalysis(userId, itemId, analysis) {
       const item = this.getItem(userId, itemId);
       if (!item) return null;

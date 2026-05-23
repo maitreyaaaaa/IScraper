@@ -49,6 +49,7 @@ import {
   getItem,
   getImports,
   getItems,
+  getIndexingIssues,
   getIndexingSummary,
   getKnowledgeGraph,
   getProfile,
@@ -3477,6 +3478,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
   const [credentials, setCredentials] = useState([]);
   const [credits, setCredits] = useState(null);
   const [indexingSummary, setIndexingSummary] = useState(null);
+  const [indexingIssues, setIndexingIssues] = useState({ issues: [], summary: { total: 0, byStatus: {} } });
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [imports, setImports] = useState([]);
   const [importsLoading, setImportsLoading] = useState(false);
@@ -3494,15 +3496,20 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
   const loadEnrichmentControls = useCallback(async ({ isCurrent = () => true } = {}) => {
     setEnrichmentLoading(true);
     try {
-      const [credentialBody, creditBody, indexingBody] = await Promise.all([
+      const [credentialBody, creditBody, indexingBody, issuesBody] = await Promise.all([
         getProviderCredentials(),
         getCredits(),
         getIndexingSummary(),
+        getIndexingIssues(50),
       ]);
       if (!isCurrent()) return;
       setCredentials(credentialBody.credentials || []);
       setCredits(creditBody.credits || null);
       setIndexingSummary(indexingBody.summary || null);
+      setIndexingIssues({
+        issues: issuesBody.issues || [],
+        summary: issuesBody.summary || { total: 0, byStatus: {} },
+      });
     } finally {
       if (isCurrent()) setEnrichmentLoading(false);
     }
@@ -3742,6 +3749,8 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
   const enrichmentActivity = summarizeIndexing([], indexingSummary);
   const needsReviewCount = Number(indexingSummary?.needsReview || 0);
   const retryableCount = enrichmentActivity.failed + enrichmentActivity.paused;
+  const issueRows = indexingIssues.issues || [];
+  const issueStats = indexingIssues.summary?.byStatus || {};
   const capabilityCards = [
     {
       key: 'text',
@@ -3798,6 +3807,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
               ['account', User, 'Account'],
               ['imports', Upload, 'Import History'],
               ['enrichment', Sparkles, 'Enrichment'],
+              ['indexing-issues', AlertCircle, 'Indexing Issues'],
               ['privacy-export', Download, 'Privacy Export'],
               ['search-preferences', Search, 'Search'],
               ['profile', Settings, 'Profile'],
@@ -4008,6 +4018,87 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
                   <div className="inline-flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin text-primary" />
                     Refreshing enrichment state...
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'indexing-issues' && (
+              <div className="space-y-5">
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Indexing Issues</div>
+                    <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Saves needing attention</h3>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      Failed, paused, or stuck jobs can be retried without changing your saved items.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRetryIndexingFromSettings}
+                    disabled={busy || enrichmentLoading || issueRows.length === 0}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+                  >
+                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                    Retry all
+                  </button>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {[
+                    ['Failed', issueStats.failed || 0],
+                    ['Paused', (issueStats.paused_needs_billing || 0) + (issueStats.paused_api_limit || 0) + (issueStats.paused_missing_provider || 0)],
+                    ['Stuck', (issueStats.downloading || 0) + (issueStats.analyzing || 0)],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">{label}</div>
+                      <div className="mt-2 font-display text-3xl font-bold text-primary">{value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {issueRows.length === 0 ? (
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-sm text-muted-foreground">
+                    No indexing issues right now.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {issueRows.map((issue) => {
+                      const itemTitle = issue.item?.sourceTitle || firstLine(issue.item?.caption || '') || issue.itemId;
+                      const statusCopy = String(issue.status || 'issue').replace(/_/g, ' ');
+                      return (
+                        <article key={issue.jobId} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-full border border-primary/40 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-primary">
+                                  {issue.item?.platform || 'Save'}
+                                </span>
+                                <span className="rounded-full border border-orange-500/40 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-orange-200">
+                                  {statusCopy}
+                                </span>
+                              </div>
+                              <h4 className="mt-3 truncate font-display text-xl font-bold tracking-tight">{itemTitle}</h4>
+                              <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+                                {issue.error || 'No error message was recorded.'}
+                              </p>
+                            </div>
+                            <div className="shrink-0 rounded-xl border border-white/10 bg-black px-4 py-3 text-right">
+                              <div className="font-display text-2xl font-bold">{issue.attempts || 0}</div>
+                              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">attempts</div>
+                            </div>
+                          </div>
+                          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                            <span>Updated {formatImportDate(issue.updatedAt || issue.createdAt)}</span>
+                            {issue.item?.url && (
+                              <a href={issue.item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary">
+                                Open save <ExternalLink className="h-3 w-3" />
+                              </a>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
                   </div>
                 )}
               </div>
