@@ -53,6 +53,7 @@ import {
   getKnowledgeGraph,
   getProfile,
   getPublicFeedback,
+  getCredits,
   getProviderCredentials,
   importInstagramExport,
   importStoredExport,
@@ -3324,6 +3325,9 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     avatarUrl: profile?.avatarUrl || avatarUrlForSession(session, profile) || '',
   });
   const [credentials, setCredentials] = useState([]);
+  const [credits, setCredits] = useState(null);
+  const [indexingSummary, setIndexingSummary] = useState(null);
+  const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [imports, setImports] = useState([]);
   const [importsLoading, setImportsLoading] = useState(false);
   const [healthByGroup, setHealthByGroup] = useState({});
@@ -3336,6 +3340,22 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
   const initial = initialForSession(session, profile);
   const groupedCredentials = Object.values(groupProviderCredentials(credentials));
   const email = session?.user?.email || 'Not available';
+  const loadEnrichmentControls = useCallback(async ({ isCurrent = () => true } = {}) => {
+    setEnrichmentLoading(true);
+    try {
+      const [credentialBody, creditBody, indexingBody] = await Promise.all([
+        getProviderCredentials(),
+        getCredits(),
+        getIndexingSummary(),
+      ]);
+      if (!isCurrent()) return;
+      setCredentials(credentialBody.credentials || []);
+      setCredits(creditBody.credits || null);
+      setIndexingSummary(indexingBody.summary || null);
+    } finally {
+      if (isCurrent()) setEnrichmentLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -3354,17 +3374,15 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    getProviderCredentials()
-      .then((body) => {
-        if (!cancelled) setCredentials(body.credentials || []);
-      })
+    Promise.resolve()
+      .then(() => loadEnrichmentControls({ isCurrent: () => !cancelled }))
       .catch((err) => {
         if (!cancelled) setError(err.message);
       });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [loadEnrichmentControls, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -3482,11 +3500,77 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     }
   };
 
+  const handleStartIndexingFromSettings = async () => {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const body = await startIndexing({ limit: 1000, download: false });
+      setMessage(body.message || 'Indexing queued.');
+      await loadEnrichmentControls();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRetryIndexingFromSettings = async () => {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const body = await restartQueue();
+      setMessage(`${body.resetCount || 0} saves returned to the queue.`);
+      await loadEnrichmentControls();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const healthCopy = {
     checking: ['Checking', 'text-primary', Loader2],
     working: ['Working', 'text-primary', CheckCircle2],
     failed: ['Needs attention', 'text-destructive', AlertCircle],
   };
+  const activeCredentials = credentials.filter((credential) => credential.status !== 'disabled');
+  const hasTextKey = activeCredentials.some((credential) => credential.purpose === 'text');
+  const hasMediaKey = activeCredentials.some((credential) => credential.purpose === 'media');
+  const hasEmbeddingKey = activeCredentials.some((credential) => credential.purpose === 'embedding');
+  const includedRemaining = Number(credits?.freeItemsRemaining || 0);
+  const paidCredits = Number(credits?.paidCredits || 0);
+  const includedOrPaidReady = includedRemaining > 0 || paidCredits > 0;
+  const enrichmentActivity = summarizeIndexing([], indexingSummary);
+  const needsReviewCount = Number(indexingSummary?.needsReview || 0);
+  const retryableCount = enrichmentActivity.failed + enrichmentActivity.paused;
+  const capabilityCards = [
+    {
+      key: 'text',
+      label: 'Text understanding',
+      Icon: Brain,
+      ready: hasTextKey || includedOrPaidReady,
+      status: hasTextKey ? 'BYOK ready' : includedOrPaidReady ? 'Included' : 'Blocked',
+      copy: hasTextKey ? 'Your text key can summarize and tag saves.' : includedOrPaidReady ? 'Included credits can run text enrichment.' : 'Add a text key or credits.',
+    },
+    {
+      key: 'media',
+      label: 'Visual understanding',
+      Icon: Eye,
+      ready: hasMediaKey || includedOrPaidReady,
+      status: hasMediaKey ? 'BYOK ready' : includedOrPaidReady ? 'Best effort' : 'Blocked',
+      copy: hasMediaKey ? 'Your media key can inspect images and reels.' : includedOrPaidReady ? 'Included enrichment will try visual analysis when media is reachable.' : 'Add a media-capable key.',
+    },
+    {
+      key: 'semantic',
+      label: 'Smart search',
+      Icon: Search,
+      ready: hasEmbeddingKey,
+      status: hasEmbeddingKey ? 'Enabled' : 'Keyword only',
+      copy: hasEmbeddingKey ? 'Search can use embeddings when available.' : 'Add an embedding key for semantic matching.',
+    },
+  ];
 
   return (
     <div
@@ -3516,6 +3600,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
             {[
               ['account', User, 'Account'],
               ['imports', Upload, 'Import History'],
+              ['enrichment', Sparkles, 'Enrichment'],
               ['profile', Settings, 'Profile'],
               ['api', KeyRound, 'API Health'],
             ].map(([key, Icon, label]) => (
@@ -3633,6 +3718,97 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                         </article>
                       );
                     })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'enrichment' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Enrichment Controls</div>
+                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">What IScraper can process</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    Check enrichment readiness and restart work that needs attention.
+                  </p>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  {capabilityCards.map(({ key, label, Icon, ready, status, copy }) => (
+                    <article key={key} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="grid h-10 w-10 place-items-center rounded-xl border border-white/10 bg-black text-primary">
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <span className={`rounded-full border px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] ${ready ? 'border-primary/40 text-primary' : 'border-orange-500/40 text-orange-200'}`}>
+                          {status}
+                        </span>
+                      </div>
+                      <h4 className="mt-4 font-display text-xl font-bold tracking-tight">{label}</h4>
+                      <p className="mt-2 text-sm leading-6 text-muted-foreground">{copy}</p>
+                    </article>
+                  ))}
+                </div>
+
+                <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Allowance</div>
+                      <h4 className="mt-2 font-display text-2xl font-bold tracking-tight">
+                        {includedRemaining + paidCredits} enrichment credit{includedRemaining + paidCredits === 1 ? '' : 's'} available
+                      </h4>
+                      <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                        {includedRemaining} included remaining. {paidCredits} paid credits available. BYOK keys do not use IScraper credits.
+                      </p>
+                    </div>
+                    <div className="grid min-w-36 rounded-xl border border-white/10 bg-black px-4 py-3 text-center">
+                      <span className="font-display text-3xl font-bold text-primary">{activeCredentials.length}</span>
+                      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">active key slots</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Queue</div>
+                      <h4 className="mt-2 font-display text-2xl font-bold tracking-tight">
+                        {needsReviewCount + enrichmentActivity.waiting + enrichmentActivity.processing + retryableCount} saves need work
+                      </h4>
+                      <div className="mt-3 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                        <span>{needsReviewCount} waiting approval</span>
+                        <span>{enrichmentActivity.waiting} queued</span>
+                        <span>{enrichmentActivity.processing} processing</span>
+                        <span>{retryableCount} retryable</span>
+                      </div>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 md:min-w-80">
+                      <button
+                        type="button"
+                        onClick={handleStartIndexingFromSettings}
+                        disabled={busy || enrichmentLoading || needsReviewCount === 0}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+                      >
+                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
+                        Start waiting
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRetryIndexingFromSettings}
+                        disabled={busy || enrichmentLoading || retryableCount === 0}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5 disabled:opacity-50"
+                      >
+                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                        Retry issues
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                {enrichmentLoading && (
+                  <div className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    Refreshing enrichment state...
                   </div>
                 )}
               </div>
