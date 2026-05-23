@@ -3818,6 +3818,14 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
   const issueStats = indexingIssues.summary?.byStatus || {};
   const activeExtensionTokens = extensionTokens.filter((token) => !token.revokedAt);
   const revokedExtensionTokens = extensionTokens.filter((token) => token.revokedAt);
+  const deletionRequestBody = [
+    `Account email: ${email}`,
+    `Username: ${profile?.username || 'Not set'}`,
+    '',
+    'Please review my request to delete my IScraper account data.',
+    'I understand I should export anything I want to keep before deletion is completed.',
+  ].join('\n');
+  const deletionRequestHref = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Delete my IScraper data')}&body=${encodeURIComponent(deletionRequestBody)}`;
   const capabilityCards = [
     {
       key: 'text',
@@ -3877,6 +3885,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
               ['indexing-issues', AlertCircle, 'Indexing Issues'],
               ['extension-access', Bot, 'Extension Access'],
               ['privacy-export', Download, 'Privacy Export'],
+              ['account-requests', LifeBuoy, 'Account Requests'],
               ['search-preferences', Search, 'Search'],
               ['profile', Settings, 'Profile'],
               ['api', KeyRound, 'API Health'],
@@ -4332,6 +4341,59 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
 
                 <div className="rounded-2xl border border-white/10 bg-black p-4 text-sm leading-6 text-muted-foreground">
                   API key secrets, login tokens, and admin-only fields are not included. Revealed keys are never written into this export.
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'account-requests' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Account Requests</div>
+                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Privacy and deletion help</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    Deletion is handled by support for now so the account can be reviewed carefully before anything permanent happens.
+                  </p>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <article className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
+                    <div className="grid h-11 w-11 place-items-center rounded-xl border border-primary/30 bg-black text-primary">
+                      <Download className="h-5 w-5" />
+                    </div>
+                    <h4 className="mt-4 font-display text-2xl font-bold tracking-tight">Export first</h4>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      Use Privacy Export before requesting deletion if you want a copy of your saves, captions, tags, and import history.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('privacy-export')}
+                      className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground"
+                    >
+                      <Download className="h-4 w-4" />
+                      Open export
+                    </button>
+                  </article>
+
+                  <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <div className="grid h-11 w-11 place-items-center rounded-xl border border-white/10 bg-black text-destructive">
+                      <AlertCircle className="h-5 w-5" />
+                    </div>
+                    <h4 className="mt-4 font-display text-2xl font-bold tracking-tight">Deletion request</h4>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      This opens a prefilled email from your account details. It does not delete data automatically.
+                    </p>
+                    <a
+                      href={deletionRequestHref}
+                      className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-destructive/40 px-4 py-3 text-sm font-semibold text-destructive transition hover:bg-destructive/10"
+                    >
+                      <Mail className="h-4 w-4" />
+                      Email deletion request
+                    </a>
+                  </article>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black p-4 text-sm leading-6 text-muted-foreground">
+                  A self-serve destructive delete button is intentionally not included in this no-migration pass. It needs audit logging, retention rules, and a recovery policy before release.
                 </div>
               </div>
             )}
