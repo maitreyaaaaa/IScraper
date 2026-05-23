@@ -196,6 +196,39 @@ test('POST /api/imports accepts Instagram ZIP files with variable export roots',
   }
 });
 
+test('POST /api/imports sanitizes invalid Unicode from parsed export metadata', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const form = new FormData();
+    form.append('sourceType', 'instagram');
+    form.append('exportFiles', new Blob([`
+      <main>
+        <div class="_a6-g"><table>
+          <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/p/BADUNICODE/">x</a></div></td></tr>
+          <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Broken export surrogate \uD83D #bad\uD83Dtag</td></tr>
+          <tr><td class="_a6_q">Username</td><td class="_2piu _a6_r">broken\uDC00user</td></tr>
+        </table></div>
+      </main>`], { type: 'text/html' }), 'saved_posts.html');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports`, { method: 'POST', body: form });
+    const body = await response.json();
+    const item = store.getItems('local-dev-user')[0];
+
+    assert.equal(response.status, 200);
+    assert.equal(body.itemCount, 1);
+    assert.doesNotMatch(item.caption, /[\uD800-\uDFFF]/);
+    assert.doesNotMatch(item.ownerUsername, /[\uD800-\uDFFF]/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/imports/storage requires Supabase Storage for large imports', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

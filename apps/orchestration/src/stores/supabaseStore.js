@@ -230,32 +230,35 @@ function createSupabaseStore({ url, serviceRoleKey }) {
 
       const items = parsed.items
         .filter((item) => !existingKeys.has(`id:${item.id}`) && !existingKeys.has(`url:${item.url}`))
-        .map((item) => ({
-        id: item.id,
-        user_id: userId,
-        import_id: importId,
-        url: item.url,
-        content_type: item.contentType,
-        caption: item.caption,
-        hashtags: item.hashtags,
-        owner_name: item.ownerName,
-        owner_username: item.ownerUsername,
-        saved_at_text: item.savedAt,
-        collections: item.collections,
-        platform: item.platform || 'Instagram',
-        platform_key: item.platformKey || 'instagram',
-        source_id: item.sourceId || item.id,
-        source_title: item.sourceTitle || '',
-        source_author: item.sourceAuthor || item.ownerUsername || item.ownerName || '',
-        source_description: item.sourceDescription || '',
-        thumbnail_url: item.thumbnailUrl || '',
-        status: initialStatus,
-        indexing_stage: normalizeIndexingStage(initialIndexingStage, initialIndexingStage),
-        indexing_error: null,
-        indexed_text_at: initialIndexingStage === 'text_indexed' ? new Date().toISOString() : null,
-        indexed_visual_at: null,
-        last_enrichment_requested_at: null,
-      }));
+        .map((rawItem) => {
+          const item = sanitizeImportItem(rawItem);
+          return {
+            id: item.id,
+            user_id: userId,
+            import_id: importId,
+            url: item.url,
+            content_type: item.contentType,
+            caption: item.caption,
+            hashtags: item.hashtags,
+            owner_name: item.ownerName,
+            owner_username: item.ownerUsername,
+            saved_at_text: item.savedAt,
+            collections: item.collections,
+            platform: item.platform || 'Instagram',
+            platform_key: item.platformKey || 'instagram',
+            source_id: item.sourceId || item.id,
+            source_title: item.sourceTitle || '',
+            source_author: item.sourceAuthor || item.ownerUsername || item.ownerName || '',
+            source_description: item.sourceDescription || '',
+            thumbnail_url: item.thumbnailUrl || '',
+            status: initialStatus,
+            indexing_stage: normalizeIndexingStage(initialIndexingStage, initialIndexingStage),
+            indexing_error: null,
+            indexed_text_at: initialIndexingStage === 'text_indexed' ? new Date().toISOString() : null,
+            indexed_visual_at: null,
+            last_enrichment_requested_at: null,
+          };
+        });
       if (!items.length) return [];
       const { data, error } = await client.from('saved_items').insert(items).select('*');
       if (error) throw error;
@@ -764,6 +767,40 @@ function chunkArray(values, size = 50) {
     chunks.push(values.slice(index, index + size));
   }
   return chunks;
+}
+
+function sanitizeUnicode(value = '') {
+  return String(value || '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
+}
+
+function sanitizeStringArray(value) {
+  return Array.isArray(value)
+    ? value.map((entry) => sanitizeUnicode(entry).trim()).filter(Boolean)
+    : [];
+}
+
+function sanitizeImportItem(item = {}) {
+  return {
+    ...item,
+    id: sanitizeUnicode(item.id),
+    url: sanitizeUnicode(item.url),
+    contentType: sanitizeUnicode(item.contentType || 'unknown'),
+    caption: sanitizeUnicode(item.caption),
+    hashtags: sanitizeStringArray(item.hashtags),
+    ownerName: sanitizeUnicode(item.ownerName),
+    ownerUsername: sanitizeUnicode(item.ownerUsername),
+    savedAt: sanitizeUnicode(item.savedAt),
+    collections: sanitizeStringArray(item.collections),
+    platform: sanitizeUnicode(item.platform || 'Instagram'),
+    platformKey: sanitizeUnicode(item.platformKey || 'instagram'),
+    sourceId: sanitizeUnicode(item.sourceId || item.id),
+    sourceTitle: sanitizeUnicode(item.sourceTitle),
+    sourceAuthor: sanitizeUnicode(item.sourceAuthor || item.ownerUsername || item.ownerName),
+    sourceDescription: sanitizeUnicode(item.sourceDescription),
+    thumbnailUrl: sanitizeUnicode(item.thumbnailUrl),
+  };
 }
 
 async function findExistingSavedItems({ client, userId, ids = [], urls = [] }) {
