@@ -554,6 +554,110 @@ function groupProviderCredentials(credentials = []) {
   }, {});
 }
 
+function fileDateStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportItemForPrivacy(item) {
+  const mapped = mapItem(item);
+  return {
+    id: item.id,
+    url: item.url,
+    platform: mapped.platform,
+    sourceId: mapped.sourceId,
+    sourceTitle: mapped.sourceTitle,
+    sourceAuthor: mapped.sourceAuthor,
+    sourceDescription: mapped.sourceDescription,
+    caption: mapped.caption,
+    hashtags: item.hashtags || [],
+    collections: item.collections || [],
+    status: item.status,
+    error: item.error || null,
+    savedAt: item.savedAt || null,
+    createdAt: item.createdAt || null,
+    updatedAt: item.updatedAt || null,
+    analysis: {
+      title: mapped.title,
+      summary: mapped.summary,
+      whyUseful: mapped.why,
+      transcript: mapped.transcript,
+      ocrText: mapped.ocr,
+      visualDescription: mapped.visual,
+      tags: mapped.tags,
+      topics: mapped.topics,
+      brands: mapped.brands,
+      tools: mapped.tools,
+      people: mapped.people,
+      linksOrRepos: mapped.repos,
+    },
+  };
+}
+
+function csvCell(value) {
+  const text = Array.isArray(value)
+    ? value.join(' | ')
+    : value && typeof value === 'object'
+      ? JSON.stringify(value)
+      : String(value ?? '');
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function savedItemsCsv(items = []) {
+  const headers = [
+    'id',
+    'url',
+    'platform',
+    'source_title',
+    'source_author',
+    'caption',
+    'summary',
+    'tags',
+    'topics',
+    'brands',
+    'tools',
+    'collections',
+    'status',
+    'error',
+    'saved_at',
+    'created_at',
+    'updated_at',
+  ];
+  const rows = items.map((item) => {
+    const exported = exportItemForPrivacy(item);
+    return [
+      exported.id,
+      exported.url,
+      exported.platform,
+      exported.sourceTitle,
+      exported.sourceAuthor,
+      exported.caption,
+      exported.analysis.summary,
+      exported.analysis.tags,
+      exported.analysis.topics,
+      exported.analysis.brands,
+      exported.analysis.tools,
+      exported.collections,
+      exported.status,
+      exported.error,
+      exported.savedAt,
+      exported.createdAt,
+      exported.updatedAt,
+    ].map(csvCell).join(',');
+  });
+  return [headers.join(','), ...rows].join('\n');
+}
+
 function rememberPendingSave() {
   const pending = pendingSaveFromLocation();
   if (!pending) return;
@@ -3333,6 +3437,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
   const [healthByGroup, setHealthByGroup] = useState({});
   const [revealedByGroup, setRevealedByGroup] = useState({});
   const [confirmRevealGroup, setConfirmRevealGroup] = useState(null);
+  const [exportBusy, setExportBusy] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -3530,6 +3635,47 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     }
   };
 
+  const handlePrivacyExport = async (format) => {
+    setExportBusy(format);
+    setError('');
+    setMessage('');
+    try {
+      const [itemsBody, importsBody] = await Promise.all([getItems(), getImports()]);
+      const savedItems = itemsBody.items || [];
+      const importsData = importsBody.imports || [];
+      const stamp = fileDateStamp();
+
+      if (format === 'csv') {
+        downloadBlob(
+          new Blob([savedItemsCsv(savedItems)], { type: 'text/csv;charset=utf-8' }),
+          `iscraper-saved-items-${stamp}.csv`,
+        );
+        setMessage(`Exported ${savedItems.length} saved items as CSV.`);
+        return;
+      }
+
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        account: {
+          email,
+          username: profile?.username || null,
+        },
+        savedItems: savedItems.map(exportItemForPrivacy),
+        imports: importsData,
+        excluded: ['API key secrets', 'auth tokens', 'admin-only fields'],
+      };
+      downloadBlob(
+        new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' }),
+        `iscraper-privacy-export-${stamp}.json`,
+      );
+      setMessage(`Exported ${savedItems.length} saved items and ${importsData.length} imports.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setExportBusy('');
+    }
+  };
+
   const healthCopy = {
     checking: ['Checking', 'text-primary', Loader2],
     working: ['Working', 'text-primary', CheckCircle2],
@@ -3601,6 +3747,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
               ['account', User, 'Account'],
               ['imports', Upload, 'Import History'],
               ['enrichment', Sparkles, 'Enrichment'],
+              ['privacy-export', Download, 'Privacy Export'],
               ['profile', Settings, 'Profile'],
               ['api', KeyRound, 'API Health'],
             ].map(([key, Icon, label]) => (
@@ -3811,6 +3958,62 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                     Refreshing enrichment state...
                   </div>
                 )}
+              </div>
+            )}
+
+            {activeTab === 'privacy-export' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Privacy Export</div>
+                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Download your data</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    Exports include your saves, import history, captions, tags, and enrichment fields. Secrets are excluded.
+                  </p>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <div className="grid h-11 w-11 place-items-center rounded-xl border border-white/10 bg-black text-primary">
+                      <Database className="h-5 w-5" />
+                    </div>
+                    <h4 className="mt-4 font-display text-2xl font-bold tracking-tight">Full JSON</h4>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      Best for backup, agents, or moving data into another app.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => handlePrivacyExport('json')}
+                      disabled={Boolean(exportBusy)}
+                      className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+                    >
+                      {exportBusy === 'json' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                      Download JSON
+                    </button>
+                  </article>
+
+                  <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <div className="grid h-11 w-11 place-items-center rounded-xl border border-white/10 bg-black text-primary">
+                      <FileText className="h-5 w-5" />
+                    </div>
+                    <h4 className="mt-4 font-display text-2xl font-bold tracking-tight">Saved items CSV</h4>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      Best for spreadsheets, filtering, and quick review.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => handlePrivacyExport('csv')}
+                      disabled={Boolean(exportBusy)}
+                      className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5 disabled:opacity-50"
+                    >
+                      {exportBusy === 'csv' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                      Download CSV
+                    </button>
+                  </article>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black p-4 text-sm leading-6 text-muted-foreground">
+                  API key secrets, login tokens, and admin-only fields are not included. Revealed keys are never written into this export.
+                </div>
               </div>
             )}
 
