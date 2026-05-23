@@ -4649,6 +4649,7 @@ function GraphTab({ onSelectItem }) {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const zoomRef = useRef(1);
   const panRef = useRef({ x: 0, y: 0 });
+  const graphViewportRef = useRef(null);
   const dragRef = useRef(null);
   const touchGestureRef = useRef(null);
   const prompt = [
@@ -4739,13 +4740,12 @@ function GraphTab({ onSelectItem }) {
     });
   };
 
-  const handleGraphWheel = (event) => {
-    event.preventDefault();
-    if (event.deltaY === 0) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const pointerX = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 1000;
-    const pointerY = ((event.clientY - rect.top) / Math.max(rect.height, 1)) * 620;
-    const delta = Math.max(-1, Math.min(1, event.deltaY));
+  const zoomGraphAt = useCallback((clientX, clientY, deltaY, viewport) => {
+    if (!viewport || deltaY === 0) return;
+    const rect = viewport.getBoundingClientRect();
+    const pointerX = ((clientX - rect.left) / Math.max(rect.width, 1)) * 1000;
+    const pointerY = ((clientY - rect.top) / Math.max(rect.height, 1)) * 620;
+    const delta = Math.max(-1, Math.min(1, deltaY));
     const scaleFactor = delta > 0 ? 0.9 : 1.1;
 
     const currentZoom = zoomRef.current;
@@ -4763,7 +4763,19 @@ function GraphTab({ onSelectItem }) {
     panRef.current = nextPan;
     setZoom(nextZoom);
     setPan(nextPan);
-  };
+  }, []);
+
+  useEffect(() => {
+    const viewport = graphViewportRef.current;
+    if (!viewport) return undefined;
+    const handleWheel = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      zoomGraphAt(event.clientX, event.clientY, event.deltaY, viewport);
+    };
+    viewport.addEventListener('wheel', handleWheel, { passive: false });
+    return () => viewport.removeEventListener('wheel', handleWheel);
+  }, [zoomGraphAt]);
 
   const getTouchDistance = (touches) => {
     const first = touches[0];
@@ -4862,7 +4874,7 @@ function GraphTab({ onSelectItem }) {
       </div>
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="relative h-[340px] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025] shadow-2xl shadow-black/25 sm:h-[380px] lg:h-[430px] xl:h-[460px]">
+        <div ref={graphViewportRef} className="relative h-[340px] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025] shadow-2xl shadow-black/25 sm:h-[380px] lg:h-[430px] xl:h-[460px]">
           <div className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-full border border-white/10 bg-black/80 p-1 backdrop-blur">
             <button type="button" onClick={() => changeZoom(0.18)} className="rounded-full p-2 text-muted-foreground transition hover:bg-white/10 hover:text-primary" aria-label="Zoom in">
               <ZoomIn className="h-4 w-4" />
@@ -4893,7 +4905,6 @@ function GraphTab({ onSelectItem }) {
             <svg
               viewBox="0 0 1000 620"
               className="h-full w-full touch-none cursor-grab active:cursor-grabbing"
-              onWheel={handleGraphWheel}
               onTouchStart={handleGraphTouchStart}
               onTouchMove={handleGraphTouchMove}
               onTouchEnd={handleGraphTouchEnd}
