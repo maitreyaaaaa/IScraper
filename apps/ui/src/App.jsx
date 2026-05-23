@@ -4904,7 +4904,8 @@ function GraphTab({ onSelectItem }) {
           ) : (
             <svg
               viewBox="0 0 1000 620"
-              className="h-full w-full touch-none cursor-grab active:cursor-grabbing"
+              className="h-full w-full touch-none select-none cursor-grab active:cursor-grabbing"
+              style={{ userSelect: 'none' }}
               onTouchStart={handleGraphTouchStart}
               onTouchMove={handleGraphTouchMove}
               onTouchEnd={handleGraphTouchEnd}
@@ -4913,21 +4914,37 @@ function GraphTab({ onSelectItem }) {
               }}
               onPointerDown={(event) => {
                 if (event.pointerType === 'touch') return;
-                if (event.target.closest?.('[data-graph-node]')) return;
+                event.preventDefault();
+                const nodeId = event.target.closest?.('[data-graph-node]')?.getAttribute('data-node-id') || '';
                 event.currentTarget.setPointerCapture?.(event.pointerId);
-                dragRef.current = { x: event.clientX, y: event.clientY, pan };
+                dragRef.current = {
+                  x: event.clientX,
+                  y: event.clientY,
+                  pan: panRef.current,
+                  nodeId,
+                  moved: false,
+                };
               }}
               onPointerMove={(event) => {
                 if (event.pointerType === 'touch') return;
                 if (!dragRef.current) return;
                 const dx = event.clientX - dragRef.current.x;
                 const dy = event.clientY - dragRef.current.y;
-                setPan({ x: dragRef.current.pan.x + dx, y: dragRef.current.pan.y + dy });
+                if (Math.hypot(dx, dy) > 3) {
+                  dragRef.current.moved = true;
+                }
+                const nextPan = { x: dragRef.current.pan.x + dx, y: dragRef.current.pan.y + dy };
+                panRef.current = nextPan;
+                setPan(nextPan);
               }}
               onPointerUp={(event) => {
                 if (event.pointerType === 'touch') return;
-                if (dragRef.current) event.currentTarget.releasePointerCapture?.(event.pointerId);
+                const gesture = dragRef.current;
+                if (gesture) event.currentTarget.releasePointerCapture?.(event.pointerId);
                 dragRef.current = null;
+                if (gesture?.nodeId && !gesture.moved) {
+                  setSelectedNodeId((current) => (current === gesture.nodeId ? null : gesture.nodeId));
+                }
               }}
               onPointerLeave={() => {
                 dragRef.current = null;
@@ -4966,12 +4983,10 @@ function GraphTab({ onSelectItem }) {
                   <g
                     key={node.id}
                     data-graph-node
+                    data-node-id={node.id}
                     transform={`translate(${point.x} ${point.y})`}
                     className="cursor-pointer"
                     opacity={dim ? 0.22 : 1}
-                    onClick={() => {
-                      setSelectedNodeId((current) => (current === node.id ? null : node.id));
-                    }}
                   >
                     <circle r={radius + (isSelected ? 9 : 5)} fill={color} opacity="0.16" />
                     <circle r={radius} fill={color} stroke={isSelected ? '#ffffff' : 'rgba(0,0,0,0.55)'} strokeWidth={isSelected ? 2 : 1} />
