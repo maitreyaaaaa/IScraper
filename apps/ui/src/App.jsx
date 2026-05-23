@@ -47,6 +47,7 @@ import {
   deleteProviderCredential,
   downloadObsidianGraph,
   getItem,
+  getImports,
   getItems,
   getIndexingSummary,
   getKnowledgeGraph,
@@ -245,6 +246,44 @@ function unique(values) {
 
 function firstLine(value = '') {
   return String(value).split('\n').find(Boolean)?.slice(0, 90);
+}
+
+function formatCompactNumber(value = 0) {
+  return Number(value || 0).toLocaleString();
+}
+
+function formatImportDate(value) {
+  if (!value) return 'Unknown date';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown date';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function importSourceLabel(source = '') {
+  const normalized = String(source || '').replace(/-/g, ' ');
+  if (/instagram/i.test(normalized)) return 'Instagram export';
+  if (/pinterest/i.test(normalized)) return 'Pinterest export';
+  if (/manual/i.test(normalized)) return 'Manual save';
+  if (/storage/i.test(normalized)) return 'Storage upload';
+  if (/review/i.test(normalized)) return 'Review approval';
+  return normalized ? normalized.replace(/\b\w/g, (letter) => letter.toUpperCase()) : 'Import';
+}
+
+function importStatusLabel(status = '') {
+  const labels = {
+    imported: 'Imported',
+    queued_storage: 'Queued',
+    processing_storage: 'Processing',
+    failed_storage: 'Failed',
+    failed: 'Failed',
+  };
+  return labels[status] || String(status || 'Imported').replace(/_/g, ' ');
+}
+
+function importStatusClass(status = '') {
+  if (/failed/i.test(status)) return 'border-destructive/40 text-destructive';
+  if (/processing|queued/i.test(status)) return 'border-orange-500/40 text-orange-200';
+  return 'border-primary/40 text-primary';
 }
 
 function BrandLogo({ className = 'h-8 w-28', align = 'left' }) {
@@ -3285,6 +3324,8 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     avatarUrl: profile?.avatarUrl || avatarUrlForSession(session, profile) || '',
   });
   const [credentials, setCredentials] = useState([]);
+  const [imports, setImports] = useState([]);
+  const [importsLoading, setImportsLoading] = useState(false);
   const [healthByGroup, setHealthByGroup] = useState({});
   const [revealedByGroup, setRevealedByGroup] = useState({});
   const [confirmRevealGroup, setConfirmRevealGroup] = useState(null);
@@ -3319,6 +3360,28 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => {
+        if (!cancelled) setImportsLoading(true);
+        return getImports();
+      })
+      .then((body) => {
+        if (!cancelled) setImports(body.imports || []);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setImportsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -3452,6 +3515,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
           <nav className="flex gap-2 overflow-x-auto border-b border-white/10 p-3 md:block md:space-y-2 md:overflow-visible md:border-b-0 md:border-r">
             {[
               ['account', User, 'Account'],
+              ['imports', Upload, 'Import History'],
               ['profile', Settings, 'Profile'],
               ['api', KeyRound, 'API Health'],
             ].map(([key, Icon, label]) => (
@@ -3492,6 +3556,85 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
                   Log out
                 </button>
+              </div>
+            )}
+
+            {activeTab === 'imports' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Import History</div>
+                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Past uploads</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    See what was uploaded and how many saves are currently linked to each import.
+                  </p>
+                </div>
+
+                {importsLoading ? (
+                  <div className="grid min-h-44 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] text-sm text-muted-foreground">
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      Loading imports...
+                    </span>
+                  </div>
+                ) : imports.length === 0 ? (
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-sm text-muted-foreground">
+                    No imports yet.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {imports.map((entry) => {
+                      const fileNames = Array.isArray(entry.fileNames) ? entry.fileNames : [];
+                      const shownFiles = fileNames.slice(0, 3);
+                      const remainingFiles = Math.max(fileNames.length - shownFiles.length, 0);
+                      const uploadFileCount = fileNames.length || entry.storageFileCount || 0;
+                      return (
+                        <article key={entry.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="font-display text-xl font-bold tracking-tight">{importSourceLabel(entry.source)}</h4>
+                                <span className={`rounded-full border px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] ${importStatusClass(entry.status)}`}>
+                                  {importStatusLabel(entry.status)}
+                                </span>
+                              </div>
+                              <div className="mt-2 text-xs text-muted-foreground">
+                                {formatImportDate(entry.createdAt)} - {formatCompactNumber(uploadFileCount)} file{uploadFileCount === 1 ? '' : 's'}
+                              </div>
+                            </div>
+                            <div className="rounded-xl border border-white/10 bg-black px-4 py-3 text-right">
+                              <div className="font-display text-2xl font-bold">{formatCompactNumber(entry.itemCount)}</div>
+                              <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">linked saves</div>
+                            </div>
+                          </div>
+
+                          {shownFiles.length > 0 && (
+                            <div className="mt-4 space-y-2">
+                              {shownFiles.map((fileName) => (
+                                <div key={fileName} className="truncate rounded-xl border border-white/10 bg-black px-3 py-2 font-mono text-xs text-muted-foreground" title={fileName}>
+                                  {fileName}
+                                </div>
+                              ))}
+                              {remainingFiles > 0 && (
+                                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                                  + {remainingFiles} more file{remainingFiles === 1 ? '' : 's'}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          <p className="mt-4 text-xs leading-5 text-muted-foreground">
+                            This count shows items currently linked to this import. Historical duplicate counts are only shown immediately after upload.
+                          </p>
+                          {entry.error && (
+                            <div className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm leading-6 text-destructive">
+                              {entry.error}
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 

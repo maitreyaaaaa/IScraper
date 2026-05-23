@@ -23,6 +23,10 @@ export function getItems() {
   return request('/items');
 }
 
+export function getImports() {
+  return request('/imports');
+}
+
 export function getIndexingSummary() {
   return request('/indexing/summary');
 }

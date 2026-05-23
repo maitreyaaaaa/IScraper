@@ -886,6 +886,14 @@ function createApp({ store, config = {} }) {
     res.json({ items });
   }));
 
+  app.get('/api/imports', asyncRoute(async (req, res) => {
+    if (typeof store.listUserImports !== 'function') {
+      return res.status(501).json({ error: 'Import history is not available.' });
+    }
+    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 25, 50));
+    return res.json({ imports: await store.listUserImports(req.user.id, { limit }) });
+  }));
+
   app.get('/api/items/:id', asyncRoute(async (req, res) => {
     const item = await store.getItem(req.user.id, req.params.id);
     if (!item) return res.status(404).json({ error: 'Item not found.' });

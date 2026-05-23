@@ -68,6 +68,76 @@ test('POST /api/imports adds uploaded export files and queues indexing jobs', as
   }
 });
 
+test('GET /api/imports lists only the current user imports with item counts', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const upload = async (userId, code) => {
+      const form = new FormData();
+      const html = `
+        <main>
+          <div class="_a6-g"><table>
+            <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/p/${code}/">x</a></div></td></tr>
+            <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">${code} caption</td></tr>
+          </table></div>
+        </main>`;
+      form.append('exportFiles', new Blob([html], { type: 'text/html' }), 'saved_posts.html');
+      return fetch(`http://127.0.0.1:${port}/api/imports`, {
+        method: 'POST',
+        headers: { 'x-user-id': userId, 'x-user-email': `${userId}@example.com` },
+        body: form,
+      });
+    };
+
+    const firstUpload = await upload('user-a', 'USERA111');
+    const secondUpload = await upload('user-b', 'USERB222');
+    assert.equal(firstUpload.status, 200);
+    assert.equal(secondUpload.status, 200);
+
+    const userAResponse = await fetch(`http://127.0.0.1:${port}/api/imports`, {
+      headers: { 'x-user-id': 'user-a', 'x-user-email': 'user-a@example.com' },
+    });
+    const userAHistory = await userAResponse.json();
+
+    assert.equal(userAResponse.status, 200);
+    assert.equal(userAHistory.imports.length, 1);
+    assert.equal(userAHistory.imports[0].itemCount, 1);
+    assert.equal(userAHistory.imports[0].fileNames[0], 'saved_posts.html');
+    assert.equal(userAHistory.imports[0].storageFileCount, 0);
+    assert.equal(Object.prototype.hasOwnProperty.call(userAHistory.imports[0], 'user'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(userAHistory.imports[0], 'userId'), false);
+
+    const userBResponse = await fetch(`http://127.0.0.1:${port}/api/imports`, {
+      headers: { 'x-user-id': 'user-b', 'x-user-email': 'user-b@example.com' },
+    });
+    const userBHistory = await userBResponse.json();
+    assert.equal(userBHistory.imports.length, 1);
+    assert.notEqual(userAHistory.imports[0].id, userBHistory.imports[0].id);
+
+    for (let index = 0; index < 55; index += 1) {
+      store.createImport({
+        userId: 'user-a',
+        source: 'manual-link',
+        mode: 'export',
+        fileNames: [`extra-${index}.txt`],
+      });
+    }
+    const clampedResponse = await fetch(`http://127.0.0.1:${port}/api/imports?limit=1000`, {
+      headers: { 'x-user-id': 'user-a', 'x-user-email': 'user-a@example.com' },
+    });
+    const clampedHistory = await clampedResponse.json();
+    assert.equal(clampedResponse.status, 200);
+    assert.equal(clampedHistory.imports.length, 50);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/imports accepts Instagram saved-post JSON files', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

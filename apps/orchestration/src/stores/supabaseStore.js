@@ -322,6 +322,20 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data.map(mapItemWithAnalysis);
     },
+    async listUserImports(userId, { limit = 25 } = {}) {
+      const safeLimit = importListLimit(limit);
+      const { data, error } = await client
+        .from('imports')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(safeLimit);
+      if (error) throw error;
+      return Promise.all((data || []).map(async (row) => ({
+        ...publicUserImport(mapImport(row)),
+        itemCount: await countRows(client, 'saved_items', (query) => query.eq('user_id', userId).eq('import_id', row.id)),
+      })));
+    },
     async getItem(userId, id) {
       const { data, error } = await client
         .from('saved_items')
@@ -880,6 +894,28 @@ function mapImport(row) {
     fileNames: row.file_names || [],
     storageFiles: row.storage_files || [],
     error: row.error || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  };
+}
+
+function importListLimit(limit = 25) {
+  return Math.max(1, Math.min(Number(limit) || 25, 50));
+}
+
+function publicUserImport(entry, itemCount = 0) {
+  const storageFiles = Array.isArray(entry.storageFiles) ? entry.storageFiles : [];
+  return {
+    id: entry.id,
+    source: entry.source,
+    mode: entry.mode,
+    status: entry.status,
+    fileNames: Array.isArray(entry.fileNames) ? entry.fileNames : [],
+    storageFileCount: storageFiles.length,
+    error: entry.error || null,
+    createdAt: entry.createdAt || null,
+    updatedAt: entry.updatedAt || null,
+    itemCount,
   };
 }
 

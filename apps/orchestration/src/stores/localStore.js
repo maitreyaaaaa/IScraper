@@ -14,6 +14,26 @@ function now() {
   return new Date().toISOString();
 }
 
+function importListLimit(limit = 25) {
+  return Math.max(1, Math.min(Number(limit) || 25, 50));
+}
+
+function publicUserImport(entry, itemCount = 0) {
+  const storageFiles = Array.isArray(entry.storageFiles) ? entry.storageFiles : [];
+  return {
+    id: entry.id,
+    source: entry.source,
+    mode: entry.mode,
+    status: entry.status,
+    fileNames: Array.isArray(entry.fileNames) ? entry.fileNames : [],
+    storageFileCount: storageFiles.length,
+    error: entry.error || null,
+    createdAt: entry.createdAt || null,
+    updatedAt: entry.updatedAt || null,
+    itemCount,
+  };
+}
+
 function readJson(file, fallback) {
   if (!fs.existsSync(file)) return fallback;
   return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -451,6 +471,18 @@ function createLocalStore({ dataPath }) {
 
     getItems(userId) {
       return state.items.filter((item) => item.userId === userId);
+    },
+
+    listUserImports(userId, { limit = 25 } = {}) {
+      const safeLimit = importListLimit(limit);
+      return state.imports
+        .filter((entry) => entry.userId === userId)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, safeLimit)
+        .map((entry) => publicUserImport(
+          entry,
+          state.items.filter((item) => item.userId === userId && item.importId === entry.id).length,
+        ));
     },
 
     getItem(userId, id) {
