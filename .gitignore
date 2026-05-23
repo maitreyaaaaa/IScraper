@@ -1,0 +1,58 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Personal Instagram exports and processed media
+data/
+**/data/
+**/uploads/
+**/videos/
+*.mp4
+*.mov
+*.webm
+
+# Dependencies and build output
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+coverage/
+
+# Logs and local runtime files
+logs/
+output/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+vite.out.log
+vite.err.log
+
+# Supabase local cache
+supabase/.temp/
+**/supabase/.temp/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+.vercel
+
+# Source asset folders copied into app/public already
+Logo/
+Screenshots/
+mobile-home*.png
+
+.vercel
