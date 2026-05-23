@@ -33,3 +33,5 @@ set
 
 create index if not exists saved_items_user_indexing_stage_idx
   on public.saved_items(user_id, indexing_stage);
+
+notify pgrst, 'reload schema';
