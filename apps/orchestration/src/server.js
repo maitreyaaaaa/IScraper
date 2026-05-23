@@ -657,6 +657,52 @@ function createApp({ store, config = {}, observability = createObservability(con
       scopeCount: scopes.length,
     });
   });
+
+  async function queueSingleItemEnrichment(req, itemId, { force = false, reason = 'detail-opened' } = {}) {
+    if (typeof store.updateSavedItem !== 'function' || typeof store.createJobs !== 'function') {
+      const error = new Error('Indexing jobs are not available.');
+      error.statusCode = 501;
+      throw error;
+    }
+
+    let item = await store.getItem(req.user.id, itemId);
+    if (!item) {
+      const error = new Error('Item not found.');
+      error.statusCode = 404;
+      throw error;
+    }
+    if (item.status === 'needs_review') {
+      return { item, skipped: true, reason: 'needs_review' };
+    }
+    if (!force && ['queued', 'downloading', 'analyzing'].includes(item.status)) {
+      return { item: { ...item, indexingStage: 'visual_indexing', lastEnrichmentRequestedAt: new Date().toISOString() }, skipped: true, reason: 'already_queued' };
+    }
+
+    const importEntry = await store.createImport({
+      userId: req.user.id,
+      source: reason,
+      mode: 'export',
+      fileNames: [item.url || item.id],
+    });
+    item = await store.updateSavedItem(req.user.id, item.id, {
+      importId: importEntry.id,
+      status: 'queued',
+      error: null,
+    });
+    const jobs = await store.createJobs({ userId: req.user.id, importId: importEntry.id, items: [item] });
+    const indexing = jobs.length
+      ? await queueIndexingWork({
+        reason,
+        userId: req.user.id,
+        importId: importEntry.id,
+        shouldDownload: req.body?.allowMedia !== false,
+      })
+      : null;
+    const responseItem = { ...item, indexingStage: 'visual_indexing', lastEnrichmentRequestedAt: new Date().toISOString() };
+    captureWorkflow(req, 'enrichment queued', { itemId: item.id, importId: importEntry.id, queuedJobCount: jobs.length, reason });
+    return { item: responseItem, enriched: false, queued: Boolean(jobs.length), queuedJobCount: jobs.length, jobs, indexing, reason };
+  }
+
   app.locals.observability = observability;
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
@@ -981,6 +1027,15 @@ function createApp({ store, config = {}, observability = createObservability(con
     return res.json({ item, queuedJobCount: jobs.length, jobs, indexing });
   }));
 
+  app.post('/api/items/:id/enrich', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    const result = await queueSingleItemEnrichment(req, req.params.id, {
+      force: req.body?.force === true,
+      reason: 'detail-opened',
+    });
+    return res.json(result);
+  }));
+
   app.post('/api/indexing/start', asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     if (typeof store.updateSavedItem !== 'function' || typeof store.createJobs !== 'function') {
@@ -1025,6 +1080,25 @@ function createApp({ store, config = {}, observability = createObservability(con
     }
     const summary = await store.getIndexingSummary(req.user.id);
     return res.json({ summary });
+  }));
+
+  app.post('/api/enrichment/intent-batch', searchRateLimit, asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    const itemIds = Array.isArray(req.body?.itemIds) ? req.body.itemIds.slice(0, 5) : [];
+    const results = [];
+    for (const itemId of itemIds) {
+      try {
+        results.push(await queueSingleItemEnrichment(req, itemId, { reason: 'search-intent' }));
+      } catch (error) {
+        results.push({ itemId, error: error.message });
+      }
+    }
+    captureWorkflow(req, 'enrichment intent batch queued', {
+      requestedCount: itemIds.length,
+      queuedCount: results.filter((entry) => entry.queued).length,
+      failedCount: results.filter((entry) => entry.error).length,
+    });
+    res.json({ results, processedCount: results.length });
   }));
 
   app.get('/api/credits', asyncRoute(async (req, res) => {

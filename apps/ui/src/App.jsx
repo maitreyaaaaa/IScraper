@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } from 'd3-force';
@@ -43,27 +43,25 @@ import {
 } from 'lucide-react';
 import {
   approveReviewItem,
-  createImportUploadUrls,
   deleteProviderCredential,
   downloadObsidianGraph,
   getItem,
   getItems,
-  getIndexingSummary,
   getCredits,
   getKnowledgeGraph,
   getProfile,
   getPublicFeedback,
   getProviderCredentials,
   importInstagramExport,
-  importStoredExport,
-  restartQueue,
+  queueStorageImport,
+  enrichIntentBatch,
+  enrichItem,
   revealProviderCredential,
   saveLink,
   saveProfile,
   saveProviderCredential,
   searchItems,
   setApiAccessToken,
-  startIndexing,
   submitPublicFeedback,
   testProviderCredential,
   updateReviewItem,
@@ -75,9 +73,6 @@ gsap.registerPlugin(ScrollTrigger);
 
 const STATUS_META = {
   needs_review: { color: 'text-accent', icon: FileText },
-  queued: { color: 'text-muted-foreground', icon: Activity },
-  downloading: { color: 'text-accent', icon: Loader2 },
-  analyzing: { color: 'text-primary', icon: Sparkles },
   done: { color: 'text-primary', icon: CheckCircle2 },
   failed: { color: 'text-destructive', icon: AlertCircle },
   paused: { color: 'text-muted-foreground', icon: Pause },
@@ -94,9 +89,11 @@ const INDEXING_META = {
   deep_indexed: { label: 'Transcript ready', color: 'text-primary', icon: Sparkles },
   index_failed: { label: 'Metadata', color: 'text-destructive', icon: AlertCircle },
 };
-const STATUSES = ['all', 'needs_review', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
+const ENRICHED_STAGES = new Set(['visual_indexed', 'deep_indexed']);
+const DASHBOARD_ENRICHED_STAGES = new Set(['text_indexed', 'visual_indexing', 'visual_indexed', 'deep_indexed']);
+const STALE_ENRICHMENT_UI_MS = 15 * 60 * 1000;
+const STATUSES = ['all', 'needs_review', 'done', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
-const DIRECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 const HERO_PLATFORMS = [
   { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
   { name: 'X', src: '/platforms/x.svg', bg: '#fff' },
@@ -105,6 +102,91 @@ const HERO_PLATFORMS = [
   { name: 'TikTok', src: '/platforms/tiktok.svg', bg: '#000' },
   { name: 'YouTube', src: '/platforms/youtube.svg', bg: '#ff0033' },
 ];
+const IMPORT_STORAGE_BUCKET = import.meta.env.VITE_SUPABASE_IMPORT_BUCKET || 'instagram-assets';
+const VERCEL_SAFE_UPLOAD_BYTES = 4 * 1024 * 1024;
+const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv']);
+const INSTAGRAM_SAVED_EXPORT_RE = /(^|\/)your_instagram_activity\/saved\/saved_(posts|collections)\.(html|htm|json)$/i;
+const INSTAGRAM_SAVED_FILE_RE = /^saved_(posts|collections)\.(html|htm|json)$/i;
+
+function fileImportName(file) {
+  return String(file?.webkitRelativePath || file?.name || '').replace(/\\/g, '/');
+}
+
+function fileExtension(name = '') {
+  const match = String(name).toLowerCase().match(/\.([a-z0-9]+)$/);
+  return match ? `.${match[1]}` : '';
+}
+
+function isInstagramSavedFile(file) {
+  const name = fileImportName(file);
+  const baseName = name.split('/').pop() || name;
+  return INSTAGRAM_SAVED_EXPORT_RE.test(name) || INSTAGRAM_SAVED_FILE_RE.test(baseName) || fileExtension(name) === '.zip';
+}
+
+function importCandidateFiles(files = [], sourceType = 'auto') {
+  const candidates = files.filter((file) => EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(fileImportName(file) || file.name)));
+  if (sourceType === 'instagram') return candidates.filter(isInstagramSavedFile);
+  if (sourceType === 'pinterest') return candidates;
+
+  const zipFiles = candidates.filter((file) => fileExtension(fileImportName(file) || file.name) === '.zip');
+  if (zipFiles.length) return zipFiles;
+
+  const instagramSavedFiles = candidates.filter(isInstagramSavedFile);
+  return instagramSavedFiles.length ? instagramSavedFiles : candidates;
+}
+
+function validateExportFiles(files = [], sourceType = 'auto') {
+  if (!files.length) throw new Error('Upload an Instagram ZIP/HTML/JSON file or your Pinterest export ZIP/JSON/CSV.');
+  for (const file of files) {
+    if (!EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(fileImportName(file) || file.name))) {
+      throw new Error('Upload Instagram HTML files or Pinterest ZIP/JSON/CSV exports. The selected file is missing a supported extension.');
+    }
+    if (!file.size) {
+      throw new Error('The selected export file is empty. Re-export from Instagram or Pinterest, then upload the .html, .zip, .json, or .csv file.');
+    }
+  }
+  if (sourceType === 'instagram' && !files.some(isInstagramSavedFile)) {
+    throw new Error('For Instagram, upload the full export ZIP or the saved_posts/saved_collections HTML or JSON file from your_instagram_activity/saved/.');
+  }
+}
+
+function shouldUseStorageUpload(files = []) {
+  const totalBytes = files.reduce((total, file) => total + Number(file.size || 0), 0);
+  return totalBytes > VERCEL_SAFE_UPLOAD_BYTES;
+}
+
+function safeStorageExtension(name = 'export') {
+  const extension = fileExtension(name);
+  return EXPORT_UPLOAD_EXTENSIONS.has(extension) ? extension : '.upload';
+}
+
+async function uploadImportFilesToStorage({ files, session }) {
+  if (!supabase || !session?.user?.id) return null;
+  const uploaded = [];
+  const batchId = crypto.randomUUID();
+  for (const file of files) {
+    const originalName = fileImportName(file) || file.name;
+    const storagePath = `${session.user.id}/imports/${batchId}/${crypto.randomUUID()}${safeStorageExtension(originalName)}`;
+    const { error } = await supabase.storage
+      .from(IMPORT_STORAGE_BUCKET)
+      .upload(storagePath, file, {
+        cacheControl: '3600',
+        contentType: file.type || 'application/octet-stream',
+        upsert: false,
+      });
+    if (error) {
+      const message = String(error.message || 'Supabase Storage upload failed.').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      throw new Error(message || 'Supabase Storage upload failed.');
+    }
+    uploaded.push({
+      path: storagePath,
+      name: originalName,
+      type: file.type || '',
+      size: file.size,
+    });
+  }
+  return uploaded;
+}
 
 const KEY_SETUP_OPTIONS = {
   openrouter_all: {
@@ -250,20 +332,8 @@ function normalizeStatus(status = 'queued') {
   return String(status).startsWith('paused') ? 'paused' : status;
 }
 
-function displayStatus(status = 'queued') {
-  const labels = {
-    needs_review: 'Needs review',
-    queued: 'Waiting',
-    downloading: 'Processing',
-    analyzing: 'Analyzing',
-    done: 'Done',
-    failed: 'Failed',
-    paused_needs_billing: 'Needs credits',
-    paused_api_limit: 'Provider limit',
-    paused_missing_provider: 'Needs AI key',
-    paused: 'Paused',
-  };
-  return labels[status] || String(status).replace(/_/g, ' ');
+function normalizeIndexingStage(stage = 'metadata_ready') {
+  return INDEXING_META[stage] ? stage : 'metadata_ready';
 }
 
 function indexingStageFromStatus(status = 'queued', analysis = null) {
@@ -277,9 +347,13 @@ function indexingStageFromStatus(status = 'queued', analysis = null) {
   return 'metadata_ready';
 }
 
+function shouldEnrichItem(item) {
+  return item && item.sourceStatus !== 'needs_review' && !ENRICHED_STAGES.has(item.indexingStage) && item.indexingStage !== 'visual_indexing';
+}
+
 function mapItem(item) {
   const analysis = item.analysis || {};
-  const indexingStage = item.indexingStage || indexingStageFromStatus(item.status, analysis);
+  const indexingStage = normalizeIndexingStage(item.indexingStage || indexingStageFromStatus(item.status, analysis));
   return {
     raw: item,
     id: item.id,
@@ -382,6 +456,31 @@ function scrollToLandingSection(id) {
   window.history.replaceState(null, '', id);
 }
 
+function setManualScrollRestoration() {
+  if ('scrollRestoration' in window.history) {
+    window.history.scrollRestoration = 'manual';
+  }
+}
+
+function resetPageScroll() {
+  setManualScrollRestoration();
+  window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+  document.querySelector('.dash-panel')?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+}
+
+function replaceAppTabUrl(tab) {
+  const params = new URLSearchParams(window.location.search);
+  if (tab === 'library') {
+    params.delete('tab');
+  } else {
+    params.set('tab', tab);
+  }
+  const query = params.toString();
+  window.history.replaceState({}, ROUTE_TITLES.app, `/app${query ? `?${query}` : ''}`);
+}
+
 function RotatingPlatformLogo() {
   const [activeIndex, setActiveIndex] = useState(0);
   const logoRef = useRef(null);
@@ -389,11 +488,6 @@ function RotatingPlatformLogo() {
   useEffect(() => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (reduceMotion) return undefined;
-    const logoElement = logoRef.current;
-    HERO_PLATFORMS.forEach((platform) => {
-      const image = new Image();
-      image.src = platform.src;
-    });
 
     const timer = window.setInterval(() => {
       const target = logoRef.current;
@@ -402,36 +496,20 @@ function RotatingPlatformLogo() {
         return;
       }
 
-      gsap.to(target, {
-        autoAlpha: 0,
-        scale: 0.84,
-        duration: 0.18,
-        ease: 'power2.out',
-        overwrite: true,
-        onComplete: () => {
-          setActiveIndex((current) => (current + 1) % HERO_PLATFORMS.length);
-          window.requestAnimationFrame(() => {
-            if (!logoRef.current) return;
-            gsap.fromTo(
-              logoRef.current,
-              { autoAlpha: 0, scale: 0.84 },
-              { autoAlpha: 1, scale: 1, duration: 0.24, ease: 'power3.out', overwrite: true },
-            );
-          });
-        },
-      });
-    }, 1800);
+      gsap.timeline()
+        .to(target, { yPercent: -115, autoAlpha: 0, duration: 0.35, ease: 'power2.in' })
+        .add(() => setActiveIndex((current) => (current + 1) % HERO_PLATFORMS.length))
+        .set(target, { yPercent: 115 })
+        .to(target, { yPercent: 0, autoAlpha: 1, duration: 0.45, ease: 'power3.out' });
+    }, 1600);
 
-    return () => {
-      window.clearInterval(timer);
-      if (logoElement) gsap.killTweensOf(logoElement);
-    };
+    return () => window.clearInterval(timer);
   }, []);
 
   const platform = HERO_PLATFORMS[activeIndex];
 
   return (
-    <span className="hero-platform-ticker ml-[0.12em] inline-grid h-[0.92em] w-[0.92em] translate-y-[0.08em] place-items-center overflow-hidden rounded-full align-baseline">
+    <span className="hero-platform-ticker ml-[0.12em] inline-grid translate-y-[0.08em] overflow-hidden rounded-full align-baseline">
       <span
         ref={logoRef}
         className="inline-flex h-[0.86em] w-[0.86em] items-center justify-center rounded-full shadow-[0_0_36px_rgba(255,106,0,0.24)]"
@@ -651,32 +729,6 @@ function rememberPendingSave() {
   window.localStorage.setItem('iscraper.pendingSaveLink', JSON.stringify(pending));
 }
 
-async function uploadImportFilesToStorage(files) {
-  if (!supabase) throw new Error('Direct uploads require Supabase login.');
-  const { bucket, uploads } = await createImportUploadUrls({ files });
-  const uploaded = [];
-
-  for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
-    const file = files[fileIndex];
-    const upload = uploads[fileIndex];
-    const { error } = await supabase.storage.from(bucket).upload(upload.path, file, {
-      contentType: file.type || 'application/octet-stream',
-      upsert: false,
-    });
-    if (error) {
-      throw new Error(`Upload failed for ${file.name}: ${error.message}`);
-    }
-    uploaded.push({
-      path: upload.path,
-      name: file.name,
-      type: file.type || 'application/octet-stream',
-      size: file.size,
-    });
-  }
-
-  return uploaded;
-}
-
 export default function App() {
   const [route, setRoute] = useState(() => {
     rememberPendingSave();
@@ -688,8 +740,14 @@ export default function App() {
     setRoute(routeName);
     window.history.pushState({}, ROUTE_TITLES[routeName], ROUTE_PATHS[routeName]);
     document.title = ROUTE_TITLES[routeName];
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    resetPageScroll();
   }, []);
+
+  useLayoutEffect(() => {
+    resetPageScroll();
+    const frame = window.requestAnimationFrame(resetPageScroll);
+    return () => window.cancelAnimationFrame(frame);
+  }, [route]);
 
   useEffect(() => {
     document.title = ROUTE_TITLES[route] || 'IScraper';
@@ -1070,8 +1128,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
   const landingInitial = initialForSession(landingSession, landingProfile);
 
   useEffect(() => {
-    window.history.scrollRestoration = 'manual';
-    window.scrollTo(0, 0);
+    resetPageScroll();
   }, []);
 
   useEffect(() => {
@@ -1448,7 +1505,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           style={{ background: 'radial-gradient(circle, var(--glow-2) 0%, transparent 70%)' }}
         />
 
-        <div className="hero-content relative mx-auto w-full max-w-[100rem] overflow-visible px-6 pr-16 md:px-10 md:pr-20 xl:px-14 xl:pr-24">
+        <div className="hero-content relative mx-auto w-full max-w-[100rem] overflow-visible px-6 md:px-10 md:pr-20 xl:px-14 xl:pr-24">
           <h1
             ref={heroTitle}
             className="overflow-visible text-balance font-display text-[clamp(3rem,10.5vw,11rem)] font-bold leading-[0.95] tracking-tighter"
@@ -1535,7 +1592,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
                 Your saves finally <span className="italic text-primary">work for you</span>.
               </h2>
             </div>
-            <p className="max-w-md text-muted-foreground">Stop losing useful saves inside different apps. Find the exact thing when you need it.</p>
+            <p className="max-w-md text-muted-foreground">Stop relying on Instagram's endless saved folder. Find the exact thing when you need it.</p>
           </div>
 
           <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
@@ -1544,10 +1601,10 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
               [Brain, 'Know why you saved it', 'Each save can get a plain-English summary, so old posts become useful again instead of forgotten.'],
               [CheckCircle2, 'First 200 saves included', 'Start with 200 imported saves covered by IScraper before paid credits matter. No API key needed for that first allowance.'],
               [Tag, 'Organized without the cleanup', 'Group saves by themes like travel, food, fitness, shopping, home, business, or inspiration.'],
-              [Lock, 'Private by default', 'Your export files start on your machine, so your personal taste and plans stay yours.'],
-              [ShieldCheck, 'Built around official export', 'Upload official export files to build your library without handing over your login.'],
-              [KeyRound, 'Browser extension', 'The extension will let you send the current tab into IScraper after the browser store release.', 'Coming soon'],
-            ].map(([Icon, title, description, badge], index) => (
+              [Lock, 'Private by default', 'Your saved export starts on your machine, so your personal taste and plans stay yours.'],
+              [ShieldCheck, 'Built around official export', 'Use Instagram export files to build your library without handing over your Instagram login.'],
+              [KeyRound, 'Browser extension coming soon', 'The extension will let you send the current tab into IScraper after the browser store release.'],
+            ].map(([Icon, title, description], index) => (
               <div
                 key={title}
                 className="step-card group relative min-h-56 overflow-hidden rounded-2xl border border-white/10 bg-black/80 p-7 transition-all hover:-translate-y-1 hover:border-primary/60"
@@ -1557,11 +1614,6 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
                   style={{ background: index % 2 ? 'var(--glow-2)' : 'var(--glow)' }}
                 />
                 <div className="relative">
-                  {badge && (
-                    <span className="absolute right-0 top-0 rounded-full bg-primary px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-primary-foreground">
-                      {badge}
-                    </span>
-                  )}
                   <Icon className="mb-8 h-6 w-6 text-primary" />
                   <h3 className="mb-3 font-display text-2xl font-semibold tracking-tight">{title}</h3>
                   <p className="text-sm leading-relaxed text-muted-foreground">{description}</p>
@@ -1575,7 +1627,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
       <section id="extension" className="relative border-y border-white/10 bg-black px-6 py-24 md:py-32">
         <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
           <div data-reveal>
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension</div>
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension - coming soon</div>
             <h2 className="max-w-4xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
               Extension support is coming soon.
             </h2>
@@ -1605,10 +1657,10 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
 
           <div data-reveal className="grid gap-4 sm:grid-cols-2">
             {[
-              [KeyRound, 'Limited token', 'The planned extension will use a revokable Lens token, not your main login.'],
-              [Search, 'Selected text search', 'You will be able to highlight text on a page and search it across your saved library.'],
-              [Eye, 'Image crop Lens', 'You will be able to drag over text or an object in an image and search matching saves.'],
-              [ShieldCheck, 'Store review', 'The extension needs browser-store approval before normal users can install it.'],
+              [KeyRound, 'Limited token - coming soon', 'The planned extension will use a revokable Lens token, not your main login.'],
+              [Search, 'Selected text search - coming soon', 'You will be able to highlight text on a page and search it across your saved library.'],
+              [Eye, 'Image crop Lens - coming soon', 'You will be able to drag over text or an object in an image and search matching saves.'],
+              [ShieldCheck, 'Store review - coming soon', 'The extension needs browser-store approval before normal users can install it.'],
             ].map(([Icon, title, description]) => (
               <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
                 <Icon className="h-6 w-6 text-primary" />
@@ -1949,7 +2001,7 @@ const HOW_TO_GUIDES = [
   { key: 'instagram', icon: Upload, title: 'Instagram export', copy: 'Get your saved posts file from Instagram and upload it into IScraper.', status: 'Guide ready' },
   { key: 'api-keys', icon: KeyRound, title: 'API keys', copy: 'Method 1: use OpenRouter for summaries, tags, and semantic search.', status: 'Guide ready' },
   { key: 'pinterest', icon: ExternalLink, title: 'Pinterest export', copy: 'Request and download your Pinterest data export.', status: 'Guide ready' },
-  { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Save pages, use Lens search, and open results from your browser after store release.', status: 'Coming soon' },
+  { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Coming soon: save pages, use Lens search, and open results from your browser.', status: 'Coming soon' },
 ];
 
 function HowToUsePage({ onBack, onOpenApp }) {
@@ -1966,7 +2018,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const ctx = gsap.context(() => {
       if (reduceMotion) {
-        gsap.set(['.howto-reveal', '.howto-step', '.howto-shot', '.howto-copy'], { autoAlpha: 1, x: 0, y: 0, clearProps: 'transform,opacity,visibility' });
+        gsap.set(['.howto-reveal', '.howto-shot', '.howto-copy'], { autoAlpha: 1, x: 0, y: 0 });
         return;
       }
 
@@ -1979,19 +2031,41 @@ function HowToUsePage({ onBack, onOpenApp }) {
       });
 
       gsap.utils.toArray('.howto-step').forEach((step) => {
+        const shot = step.querySelector('.howto-shot');
+        const copy = step.querySelector('.howto-copy');
+        const reverse = step.dataset.reverse === 'true';
+
         gsap.fromTo(
-          step,
-          { autoAlpha: 0, y: 42 },
+          shot,
+          { autoAlpha: 0, x: reverse ? 70 : -70, y: 16 },
           {
             autoAlpha: 1,
+            x: 0,
             y: 0,
-            duration: 0.75,
+            duration: 0.85,
             ease: 'power3.out',
-            clearProps: 'transform,opacity,visibility',
             scrollTrigger: {
               trigger: step,
-              start: 'top 78%',
-              once: true,
+              start: 'top 72%',
+              toggleActions: 'play none none reverse',
+            },
+          },
+        );
+
+        gsap.fromTo(
+          copy,
+          { autoAlpha: 0, x: reverse ? -70 : 70, y: 16 },
+          {
+            autoAlpha: 1,
+            x: 0,
+            y: 0,
+            duration: 0.85,
+            ease: 'power3.out',
+            delay: 0.08,
+            scrollTrigger: {
+              trigger: step,
+              start: 'top 72%',
+              toggleActions: 'play none none reverse',
             },
           },
         );
@@ -2025,7 +2099,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
             Guides for imports, API keys, and upcoming features.
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
-            Start with Instagram or Pinterest export today. We will keep adding simple guides here for API keys, the browser extension, and other import flows as they become available.
+            Start with Instagram export today. We will keep adding simple guides here for API keys, Pinterest, the browser extension, and other import flows as they become available.
           </p>
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
             {HOW_TO_GUIDES.map(({ key, icon: Icon, title, copy, status }) => (
@@ -2055,9 +2129,9 @@ function HowToUsePage({ onBack, onOpenApp }) {
         {!activeGuide && (
           <section className="howto-reveal rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 md:p-10">
             <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Choose a guide</div>
-            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">Click Instagram export or Pinterest export to see the import steps.</h2>
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">Click Instagram export to see the import steps.</h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-              The extension walkthrough will appear here after the browser-store release.
+              We will add Pinterest and extension walkthroughs here as those flows are finalized.
             </p>
           </section>
         )}
@@ -2194,7 +2268,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
 
         {activeGuide === 'extension' && (
           <section className="howto-reveal rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 md:p-10">
-            <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Browser extension</div>
+            <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Browser extension - coming soon</div>
             <h2 className="mt-3 font-display text-3xl font-bold tracking-tight md:text-5xl">The extension guide is coming soon.</h2>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground">
               The extension is not available for users yet. Once the browser-store listing is approved, this page will show the install and setup steps.
@@ -2270,7 +2344,7 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
     message: '',
   });
   const helpTopics = [
-    [Upload, 'Import help', 'Use the Instagram or Pinterest export guide if you are stuck getting your saved files.'],
+    [Upload, 'Import help', 'Use the Instagram export guide if you are stuck getting your saved posts file.'],
     [KeyRound, 'AI keys', 'IScraper is BYOK right now. Add your own text, media, and embedding keys in Keys & privacy.'],
     [Search, 'Search problems', 'If results feel wrong, make sure the saves were indexed. Search improves after summaries, OCR, and tags exist.'],
     [LifeBuoy, 'Account support', 'Email us if login, usernames, profile setup, or imports are not working.'],
@@ -2387,12 +2461,12 @@ const LEGAL_CONTENT = {
     title: 'Terms of Service',
     intro: 'These terms explain the rules for using IScraper. They are a practical starting point, not a substitute for advice from your lawyer.',
     sections: [
-      ['Using IScraper', 'IScraper helps you upload official export files, save links from other platforms, and turn saved posts into a private searchable library. You are responsible for using the app lawfully and only uploading or saving content you have the right to use.'],
+      ['Using IScraper', 'IScraper helps you upload your official Instagram export, save links from other platforms, and turn saved posts into a private searchable library. You are responsible for using the app lawfully and only uploading or saving content you have the right to use.'],
       ['Accounts', 'You must sign in before importing saved posts. You are responsible for activity on your account and for keeping your login secure. Usernames must be unique and may be changed if they impersonate someone, violate rights, or create abuse.'],
-      ['Your content', 'Your export files, saved links, captions, notes, summaries, graph data, username, and optional profile picture remain your content. You give IScraper permission to process that content only to provide the app features.'],
+      ['Your content', 'Your Instagram export, saved links, captions, notes, summaries, graph data, username, and optional profile picture remain your content. You give IScraper permission to process that content only to provide the app features.'],
       ['Emails and updates', 'We may send account, security, product, billing, import, and support emails to the email address on your account. We may also send product updates or marketing emails where you have opted in or where the law allows it, and those marketing emails must include a way to unsubscribe.'],
       ['AI processing', 'When indexing is enabled, content may be sent to configured AI providers to create summaries, OCR, transcripts, tags, and search data. AI output can be wrong, incomplete, or outdated, so you should verify important information yourself.'],
-      ['Browser extension', 'The IScraper browser extension is not available for users yet. When released, it will be optional and must be used only on pages and content you are allowed to process.'],
+      ['Browser extension coming soon', 'The IScraper browser extension is not available for users yet. When released, it will be optional and must be used only on pages and content you are allowed to process.'],
       ['Things you cannot do', 'Do not upload content you do not have rights to use, attack the service, bypass rate limits, scrape or copy other users data, reverse engineer protected parts of the service, or use IScraper for unlawful activity.'],
       ['Credits and paid features', 'The first 200 imported saved items are currently included without paid IScraper credits, subject to abuse prevention and fair-use limits. Credit purchases are currently marked as coming soon. If payments are enabled later, pricing, refunds, and billing terms will be shown before purchase.'],
       ['Service changes', 'We may change, pause, or discontinue features. We will try to avoid disrupting your saved library, but we do not guarantee uninterrupted access.'],
@@ -2403,11 +2477,11 @@ const LEGAL_CONTENT = {
   privacy: {
     eyebrow: 'Privacy Policy',
     title: 'Privacy Policy',
-    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Supabase login with Google or email, official export upload, saved links, AI indexing, private saved libraries, and the browser extension that is coming soon.',
+    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Supabase login with Google or email, Instagram export upload, saved links, AI indexing, private saved libraries, and the browser extension that is coming soon.',
     sections: [
-      ['Information we collect', 'We collect login details from Supabase and the login method you choose, such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs. Extension token records may be added when the extension launches.'],
+      ['Information we collect', 'We collect login details from Supabase and the login method you choose, such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded Instagram export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs. Extension token records may be added when the extension launches.'],
       ['Login data', 'Google or email login is used to authenticate you and create your IScraper account. From Supabase and Google, when used, we may receive basic account details such as your user ID, email address, name, and profile image if Google provides them. IScraper does not ask for Gmail, Drive, Calendar, contacts, or other Google account content.'],
-      ['Export data', 'IScraper uses official export files that you upload. We do not ask for your Instagram or Pinterest password. Your export is used to build your searchable library.'],
+      ['Instagram data', 'IScraper uses official Instagram export files that you upload. We do not ask for your Instagram password and we removed Instagram login scraping. Your export is used to build your searchable library.'],
       ['AI providers', 'If indexing is enabled, parts of your uploaded content may be sent to configured AI providers such as OpenRouter, Gemini, or your own connected provider key. This is done to generate summaries, transcripts, OCR, tags, and embeddings.'],
       ['Browser extension data - coming soon', 'The browser extension is not available for users yet. When released, it is planned to run only after you click it and use limited data such as the current page URL, selected text, or a user-selected screenshot crop.'],
       ['How we use data', 'We use your data to authenticate your account, keep your library separate from other users, process imports, search your saves, build your graph, show anonymous public feedback, prevent abuse, enforce limits, improve reliability, send service messages, respond to support requests, and send product updates or marketing emails only where you have opted in or where legally permitted.'],
@@ -2631,13 +2705,14 @@ function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, ico
 function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [tab, setTab] = useState(() => dashboardTabFromLocation());
   const [query, setQuery] = useState('');
-  const [aiSearch, setAiSearch] = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
   const [collectionFilter, setCollectionFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
   const [items, setItems] = useState([]);
+  const [searchResults, setSearchResults] = useState(null);
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
+  const [importSourceType, setImportSourceType] = useState('auto');
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
   const [credentials, setCredentials] = useState([]);
   const [credentialOptions, setCredentialOptions] = useState(null);
@@ -2658,11 +2733,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [indexingReminder, setIndexingReminder] = useState({ open: false, count: 0 });
-  const [indexingSummary, setIndexingSummary] = useState(null);
   const sidebarRef = useRef(null);
   const pendingSaveHandledRef = useRef(false);
   const pendingItemHandledRef = useRef(false);
+  const activeSearchRef = useRef(0);
   const authEnabled = Boolean(supabase);
   const signedIn = !authEnabled || Boolean(session);
   const canUsePrivateActions = signedIn && (!authEnabled || !profileRequired);
@@ -2692,16 +2766,30 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setItems((body.items || []).map(mapItem));
   }, []);
 
-  const loadIndexingSummary = useCallback(async () => {
-    const body = await getIndexingSummary();
-    setIndexingSummary(body.summary || null);
-  }, []);
-
   const loadControls = useCallback(async () => {
     const credentialBody = await getProviderCredentials();
     setCredentials(credentialBody.credentials || []);
     setCredentialOptions(credentialBody.options || null);
   }, []);
+
+  const mergeUpdatedItem = useCallback((updated) => {
+    const nextItem = mapItem(updated);
+    setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
+    setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
+    setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
+    return nextItem;
+  }, []);
+
+  const handleEnrichItem = useCallback(async (item, options = {}) => {
+    if (!item || !shouldEnrichItem(item)) return null;
+    try {
+      const body = await enrichItem(item.id, options);
+      return body.item ? mergeUpdatedItem(body.item) : null;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    }
+  }, [mergeUpdatedItem]);
 
   const applyProfileState = (nextProfile, required) => {
     setProfile(nextProfile || null);
@@ -2724,7 +2812,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           identifyPostHogUser(currentSession, profileBody.profile);
           if (profileBody.required) return;
         }
-        await Promise.all([loadItems(), loadControls(), loadIndexingSummary()]);
+        await Promise.all([loadItems(), loadControls()]);
       } catch (err) {
         if (!cancelled) setError(err.message);
       } finally {
@@ -2746,8 +2834,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         initialize(data.session).finally(() => cleanAuthCallbackUrl());
       } else {
         setItems([]);
+        setSearchResults(null);
         setCredentials([]);
-        setIndexingSummary(null);
         setLoading(false);
         resetPostHogUser();
       }
@@ -2760,8 +2848,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         initialize(nextSession).finally(() => cleanAuthCallbackUrl());
       } else {
         setItems([]);
+        setSearchResults(null);
         setCredentials([]);
-        setIndexingSummary(null);
         setProfile(null);
         setProfileRequired(false);
         setLoading(false);
@@ -2773,10 +2861,23 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       cancelled = true;
       listener.subscription.unsubscribe();
     };
-  }, [authEnabled, loadControls, loadIndexingSummary, loadItems]);
+  }, [authEnabled, loadControls, loadItems]);
 
   useEffect(() => {
     gsap.set([sidebarRef.current, '.dash-panel', '.dash-panel-inner'], { clearProps: 'opacity,transform' });
+  }, []);
+
+  useEffect(() => {
+    const onDashboardLocationChange = () => {
+      setTab(dashboardTabFromLocation());
+      resetPageScroll();
+    };
+    window.addEventListener('popstate', onDashboardLocationChange);
+    window.addEventListener('hashchange', onDashboardLocationChange);
+    return () => {
+      window.removeEventListener('popstate', onDashboardLocationChange);
+      window.removeEventListener('hashchange', onDashboardLocationChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -2787,35 +2888,37 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     );
   }, [tab]);
 
-  const collections = useMemo(() => ['all', ...unique(items.map((item) => item.collection))], [items]);
-  const platforms = useMemo(() => ['all', ...unique(items.map((item) => item.platform))], [items]);
+  const boardItems = searchResults || items;
+  const searchActive = searchResults !== null;
+  const collections = useMemo(() => ['all', ...unique(boardItems.map((item) => item.collection))], [boardItems]);
+  const platforms = useMemo(() => ['all', ...unique(boardItems.map((item) => item.platform))], [boardItems]);
   const pendingReviews = useMemo(() => items.filter((item) => item.sourceStatus === 'needs_review'), [items]);
 
   const filtered = useMemo(() => {
-    return items.filter((item) => {
+    return boardItems.filter((item) => {
       if (statusFilter !== 'all' && item.status !== statusFilter) return false;
       if (collectionFilter !== 'all' && item.collection !== collectionFilter) return false;
       if (platformFilter !== 'all' && item.platform !== platformFilter) return false;
       return true;
     });
-  }, [collectionFilter, items, platformFilter, statusFilter]);
+  }, [boardItems, collectionFilter, platformFilter, statusFilter]);
 
   const stats = useMemo(() => ({
     total: items.length,
     done: items.filter((item) => item.status === 'done').length,
-    queued: items.filter((item) => item.status === 'queued').length,
+    enriched: items.filter((item) => DASHBOARD_ENRICHED_STAGES.has(item.indexingStage)).length,
     needsReview: items.filter((item) => item.sourceStatus === 'needs_review').length,
     paused: items.filter((item) => item.status === 'paused' || item.status === 'failed').length,
   }), [items]);
-  const indexingActivity = useMemo(() => summarizeIndexing(items, indexingSummary), [indexingSummary, items]);
+  const indexingActivity = useMemo(() => summarizeIndexing(items), [items]);
 
   useEffect(() => {
     if (!canUsePrivateActions || indexingActivity.activeTotal <= 0) return undefined;
     const timer = window.setInterval(() => {
-      loadIndexingSummary().catch((err) => setError(err.message));
-    }, 8000);
+      loadItems().catch((err) => setError(err.message));
+    }, 3500);
     return () => window.clearInterval(timer);
-  }, [canUsePrivateActions, indexingActivity.activeTotal, loadIndexingSummary]);
+  }, [canUsePrivateActions, indexingActivity.activeTotal, loadItems]);
 
   const handleAvatarFile = (event) => {
     const file = event.target.files?.[0];
@@ -2856,21 +2959,29 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const handleSearch = async (event) => {
     event?.preventDefault();
     if (!requireSignIn('search your library')) return;
+    const searchRun = activeSearchRef.current + 1;
+    activeSearchRef.current = searchRun;
     setBusy(true);
     setError('');
-    setAiSearch(null);
     try {
       if (!query.trim()) {
+        setSearchResults(null);
         await loadItems();
       } else {
-        const filters = {
-          ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
-          ...(collectionFilter !== 'all' ? { collection: collectionFilter } : {}),
-          ...(platformFilter !== 'all' ? { platform: platformFilter } : {}),
-        };
-        const body = await searchItems(query, filters, { includeAi: true });
-        setItems((body.results || []).map(mapItem));
-        setAiSearch(body.ai || null);
+        const body = await searchItems(query);
+        const mappedResults = (body.results || []).map(mapItem);
+        setSearchResults(mappedResults);
+        const suggestedIds = (body.suggestedEnrichmentIds || mappedResults.filter(shouldEnrichItem).slice(0, 3).map((item) => item.id)).slice(0, 3);
+        if (suggestedIds.length) {
+          enrichIntentBatch(suggestedIds)
+            .then((batch) => {
+              if (activeSearchRef.current !== searchRun) return;
+              for (const result of batch.results || []) {
+                if (result.item) mergeUpdatedItem(result.item);
+              }
+            })
+            .catch(() => {});
+        }
       }
     } catch (err) {
       setError(err.message);
@@ -2894,7 +3005,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     try {
       const result = await saveLink({ ...payload, startProcessing: false });
       const duplicate = result.skippedDuplicateCount > 0;
-      setNotice(duplicate ? 'That link was already in your brain.' : 'Link saved to review. Approve it when you want to index it.');
+      setNotice(duplicate ? 'That link was already in your brain.' : 'Link saved to review. Approve it when you want it searchable.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
       await loadItems();
@@ -2915,6 +3026,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       pendingSaveHandledRef.current = true;
       timer = window.setTimeout(() => {
         setTab('upload');
+        replaceAppTabUrl('upload');
+        resetPageScroll();
         setLinkForm({
           url: pending.url || '',
           title: pending.title || '',
@@ -2940,6 +3053,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     pendingItemHandledRef.current = true;
     const timer = window.setTimeout(() => {
       setTab('library');
+      replaceAppTabUrl('library');
+      resetPageScroll();
       getItem(itemId)
         .then((body) => setSelected(mapItem(body.item)))
         .catch((err) => setError(err.message));
@@ -2951,61 +3066,32 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (!requireSignIn('import saves')) return;
     if (!requireProfile('import saves')) return;
     if (!files.length) {
-      setError('Upload Instagram ZIP/HTML/JSON files or your Pinterest export ZIP/JSON/CSV.');
-      return;
-    }
-    const oversizedFile = files.find((file) => file.size > DIRECT_UPLOAD_MAX_BYTES);
-    if (oversizedFile) {
-      setError(`${oversizedFile.name} is too large. Upload files must be 20 MB or smaller.`);
-      setNotice('');
+      setError('Upload an Instagram ZIP/HTML/JSON file or your Pinterest export ZIP/JSON/CSV.');
       return;
     }
     setBusy(true);
     setError('');
     setNotice('');
     try {
-      setNotice('Uploading files...');
-      const storedFiles = authEnabled ? await uploadImportFilesToStorage(files) : null;
-      setNotice('Importing saves...');
-      const result = storedFiles ? await importStoredExport({ files: storedFiles }) : await importInstagramExport({ files });
-      const newCount = result.newItemCount ?? result.itemCount ?? 0;
-      const skippedCount = result.skippedDuplicateCount ?? 0;
-      setQuery('');
-      setStatusFilter('all');
-      setCollectionFilter('all');
-      setPlatformFilter('all');
-      setTab('upload');
-      setNotice(`Added ${newCount} new saves. ${skippedCount} already existed. New saves are queued for batch indexing.`);
-      await loadItems();
-      await loadIndexingSummary();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleStartIndexing = async () => {
-    if (!requireSignIn('start indexing')) return;
-    if (!requireProfile('start indexing')) return;
-    setIndexingReminder({ open: false, count: 0 });
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      if (pendingReviews.length > 0) {
-        const body = await startIndexing();
-        const approved = (body.items || []).map(mapItem);
-        setItems((current) => current.map((entry) => approved.find((item) => item.id === entry.id) || entry));
-        setNotice(`Queued ${body.approvedCount || approved.length} waiting saves for batch indexing.`);
-      } else {
-        await restartQueue();
-        setNotice('Paused and failed saves were returned to the batch queue.');
+      const selectedFiles = importCandidateFiles(files, importSourceType);
+      validateExportFiles(selectedFiles, importSourceType);
+      if (selectedFiles.length > 20) {
+        throw new Error('Upload at most 20 export files at once. For full exports, upload the original ZIP instead of every folder file.');
       }
-      await loadIndexingSummary();
-      window.setTimeout(() => {
-        Promise.all([loadItems(), loadIndexingSummary()]).catch((err) => setError(err.message));
-      }, 1500);
+      const storageFiles = shouldUseStorageUpload(selectedFiles)
+        ? await uploadImportFilesToStorage({ files: selectedFiles, session })
+        : null;
+      const result = storageFiles
+        ? await queueStorageImport({ files: storageFiles, sourceType: importSourceType })
+        : await importInstagramExport({ files: selectedFiles, sourceType: importSourceType });
+      if (result.importQueued) {
+        setNotice('Upload received. Parsing from Supabase Storage now.');
+      } else {
+        const newCount = result.newItemCount ?? result.itemCount ?? 0;
+        const skippedCount = result.skippedDuplicateCount ?? 0;
+        setNotice(`Added ${newCount} new saves. ${skippedCount} already existed. They are searchable from metadata.`);
+      }
+      await loadItems();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -3023,6 +3109,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const body = await updateReviewItem(item.id, updates);
       const nextItem = mapItem(body.item);
       setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
+      setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
       setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
       setNotice('Review details saved.');
     } catch (err) {
@@ -3042,12 +3129,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const body = await approveReviewItem(item.id, { ...updates, startProcessing: true });
       const nextItem = mapItem(body.item);
       setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
+      setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
       setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
-      setNotice((body.queuedJobCount || 0) > 0 ? 'Approved. This save is queued for batch indexing.' : 'Approved. This save was already indexed.');
-      await loadIndexingSummary();
-      window.setTimeout(() => {
-        Promise.all([loadItems(), loadIndexingSummary()]).catch((err) => setError(err.message));
-      }, 1500);
+      setNotice('Approved. Searchable from metadata. Open it to enrich.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -3060,7 +3144,20 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setError('');
     try {
       const body = await getItem(item.id);
-      setSelected(mapItem(body.item));
+      const nextItem = mapItem(body.item);
+      setSelected(nextItem);
+      if (shouldEnrichItem(nextItem)) {
+        setItems((current) => current.map((entry) => (
+          entry.id === nextItem.id ? { ...nextItem, indexingStage: 'visual_indexing', indexingLabel: INDEXING_META.visual_indexing.label } : entry
+        )));
+        setSearchResults((current) => (current ? current.map((entry) => (
+          entry.id === nextItem.id ? { ...nextItem, indexingStage: 'visual_indexing', indexingLabel: INDEXING_META.visual_indexing.label } : entry
+        )) : current));
+        setSelected((current) => (current?.id === nextItem.id
+          ? { ...nextItem, indexingStage: 'visual_indexing', indexingLabel: INDEXING_META.visual_indexing.label }
+          : current));
+        handleEnrichItem(nextItem);
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -3111,6 +3208,19 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     ['settings', 'Keys & privacy', Settings],
   ];
 
+  const selectTab = useCallback((nextTab) => {
+    if (!['library', 'graph', 'upload', 'settings'].includes(nextTab)) return;
+    setTab(nextTab);
+    replaceAppTabUrl(nextTab);
+    resetPageScroll();
+  }, []);
+
+  useLayoutEffect(() => {
+    resetPageScroll();
+    const frame = window.requestAnimationFrame(resetPageScroll);
+    return () => window.cancelAnimationFrame(frame);
+  }, [tab]);
+
   return (
     <div className="flex h-screen overflow-hidden bg-black text-foreground">
       <aside ref={sidebarRef} className="hidden h-screen w-60 shrink-0 flex-col overflow-hidden border-r border-white/5 bg-black md:flex">
@@ -3155,7 +3265,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           {navItems.map(([key, title, Icon]) => (
             <button
               key={key}
-              onClick={() => setTab(key)}
+              onClick={() => selectTab(key)}
               className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition ${
                 tab === key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
               }`}
@@ -3182,7 +3292,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             <MobileTopbar
               onBack={onBack}
               tab={tab}
-              setTab={setTab}
+              setTab={selectTab}
               onOpenHowTo={onOpenHowTo}
               session={session}
               profile={profile}
@@ -3219,33 +3329,26 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                   <LibraryTab
                     items={filtered}
                     totalCount={items.length}
+                    searchActive={searchActive}
+                    searchResultCount={boardItems.length}
                     query={query}
-                    setQuery={(nextQuery) => {
-                      setAiSearch(null);
-                      setQuery(nextQuery);
+                    setQuery={setQuery}
+                    onClearSearch={() => {
+                      activeSearchRef.current += 1;
+                      setSearchResults(null);
+                      setQuery('');
                     }}
                     onSearch={handleSearch}
-                    aiSearch={aiSearch}
                     busy={busy}
                     statusFilter={statusFilter}
-                    setStatusFilter={(nextStatus) => {
-                      setAiSearch(null);
-                      setStatusFilter(nextStatus);
-                    }}
+                    setStatusFilter={setStatusFilter}
                     collectionFilter={collectionFilter}
-                    setCollectionFilter={(nextCollection) => {
-                      setAiSearch(null);
-                      setCollectionFilter(nextCollection);
-                    }}
+                    setCollectionFilter={setCollectionFilter}
                     collections={collections}
                     platformFilter={platformFilter}
-                    setPlatformFilter={(nextPlatform) => {
-                      setAiSearch(null);
-                      setPlatformFilter(nextPlatform);
-                    }}
+                    setPlatformFilter={setPlatformFilter}
                     platforms={platforms}
                     onSelect={openDetail}
-                    onRestart={handleStartIndexing}
                     indexingActivity={indexingActivity}
                   />
                 )}
@@ -3300,11 +3403,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                   <UploadTab
                     files={files}
                     setFiles={setFiles}
+                    importSourceType={importSourceType}
+                    setImportSourceType={setImportSourceType}
                     linkForm={linkForm}
                     setLinkForm={setLinkForm}
                     onSaveLink={handleSaveLink}
                     onImport={handleImport}
-                    onRestart={handleStartIndexing}
                     pendingReviews={pendingReviews}
                     onApproveReview={handleApproveReview}
                     onUpdateReview={handleUpdateReview}
@@ -3360,14 +3464,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       </main>
 
       {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} busy={busy} />}
-      {indexingReminder.open && (
-        <IndexingReminderModal
-          count={indexingReminder.count || pendingReviews.length}
-          busy={busy}
-          onClose={() => setIndexingReminder({ open: false, count: 0 })}
-          onStart={handleStartIndexing}
-        />
-      )}
       {accountSettingsOpen && (
         <AccountSettingsModal
           open
@@ -3380,44 +3476,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           }}
         />
       )}
-    </div>
-  );
-}
-
-function IndexingReminderModal({ count, busy, onClose, onStart }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-5 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="indexing-reminder-title">
-      <div className="w-full max-w-lg rounded-3xl border border-primary/30 bg-black p-6 shadow-2xl shadow-black/60">
-        <div className="mb-5 inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground">
-          <Sparkles className="h-5 w-5" />
-        </div>
-        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Indexing not started</div>
-        <h2 id="indexing-reminder-title" className="mt-2 font-display text-3xl font-bold tracking-tight">
-          {count === 1 ? '1 save is in your library.' : `${count} saves are in your library.`}
-        </h2>
-        <p className="mt-4 text-sm leading-6 text-muted-foreground">
-          They are saved, but not indexed yet. If you do not index them, they will stay in your library/review inbox, but AI summaries, OCR, transcripts, graph links, and smarter search will not be created.
-        </p>
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={onStart}
-            disabled={busy}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60"
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
-            Start indexing
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="inline-flex items-center justify-center rounded-xl border border-white/10 px-5 py-3 font-semibold text-foreground transition hover:bg-white/5 disabled:opacity-60"
-          >
-            Not now
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -4004,100 +4062,103 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
   );
 }
 
-function summarizeIndexing(items, summary = null) {
-  const fallback = {
-    totalJobs: items.filter((item) => item.sourceStatus !== 'needs_review').length,
-    waiting: items.filter((item) => item.status === 'queued').length,
-    downloading: items.filter((item) => item.status === 'downloading').length,
-    analyzing: items.filter((item) => item.status === 'analyzing').length,
-    done: items.filter((item) => item.status === 'done').length,
-    failed: items.filter((item) => item.status === 'failed').length,
-    paused: items.filter((item) => item.status === 'paused').length,
-    pausedMissingProvider: items.filter((item) => item.sourceStatus === 'paused_missing_provider').length,
-    pausedNeedsBilling: items.filter((item) => item.sourceStatus === 'paused_needs_billing').length,
-    pausedApiLimit: items.filter((item) => item.sourceStatus === 'paused_api_limit').length,
-  };
-  const source = summary || fallback;
-  const waiting = Number(source.waiting ?? source.queued ?? 0);
-  const downloading = Number(source.downloading || 0);
-  const analyzing = Number(source.analyzing || 0);
-  const processing = Number(source.processing ?? (downloading + analyzing));
-  const done = Number(source.done || 0);
-  const failed = Number(source.failed || 0);
-  const paused = Number(source.paused || 0);
-  const total = Math.max(Number(source.totalJobs || 0), waiting + processing + done + failed + paused);
-  const activeTotal = waiting + processing + failed + paused;
-  const progress = total > 0 ? Math.round((done / total) * 100) : 0;
+function summarizeIndexing(items) {
+  const activeItems = items
+    .filter((item) => item.indexingStage === 'visual_indexing' && !isStaleEnrichmentItem(item))
+    .map((item) => ({
+      id: item.id,
+      title: item.sourceTitle || item.title || firstLine(item.caption) || 'Untitled save',
+      source: item.sourceAuthor || item.user || item.platform || 'Saved source',
+    }))
+    .slice(0, 12);
+  const metadata = items.filter((item) => item.indexingStage === 'metadata_ready').length;
+  const text = items.filter((item) => item.indexingStage === 'text_indexed').length;
+  const visual = items.filter((item) => item.indexingStage === 'visual_indexed').length;
+  const deep = items.filter((item) => item.indexingStage === 'deep_indexed').length;
+  const indexing = items.filter((item) => item.indexingStage === 'visual_indexing' && !isStaleEnrichmentItem(item)).length;
+  const failed = items.filter((item) => item.indexingStage === 'index_failed').length;
+  const total = items.filter((item) => item.sourceStatus !== 'needs_review').length;
+  const enriched = text + indexing + visual + deep;
+  const progress = total > 0 ? Math.round((enriched / total) * 100) : 0;
 
   return {
-    waiting,
-    queued: waiting,
-    downloading,
-    analyzing,
-    processing,
-    active: processing,
-    activeTotal,
-    done,
+    metadata,
+    text,
+    visual,
+    deep,
+    indexing,
     failed,
-    paused,
-    pausedMissingProvider: Number(source.pausedMissingProvider || 0),
-    pausedNeedsBilling: Number(source.pausedNeedsBilling || 0),
-    pausedApiLimit: Number(source.pausedApiLimit || 0),
-    total,
+    active: indexing,
+    activeTotal: indexing,
+    activeItems,
+    enriched,
     progress,
   };
+}
+
+function isStaleEnrichmentItem(item) {
+  if (item?.indexingStage !== 'visual_indexing') return false;
+  const timestamp = Date.parse(item.lastEnrichmentRequestedAt || item.raw?.lastEnrichmentRequestedAt || item.raw?.updatedAt || '');
+  return Number.isFinite(timestamp) && Date.now() - timestamp > STALE_ENRICHMENT_UI_MS;
 }
 
 function IndexingProgressCard({ activity }) {
   if (!activity.activeTotal) return null;
 
   const progress = Math.min(99, Math.max(2, activity.progress));
-  const pausedReasons = [
-    activity.pausedMissingProvider ? `${activity.pausedMissingProvider} need an AI key` : null,
-    activity.pausedNeedsBilling ? `${activity.pausedNeedsBilling} need credits` : null,
-    activity.pausedApiLimit ? `${activity.pausedApiLimit} hit provider limits` : null,
-  ].filter(Boolean);
 
   return (
-    <div className="mt-5 overflow-hidden rounded-xl border border-primary/25 bg-primary/5 p-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Indexing in progress</div>
-          <h2 className="mt-1 font-display text-xl font-bold tracking-tight">
-            {activity.activeTotal} saves still need attention
-          </h2>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Saves are enriched in small batches. Completed saves stay usable while the queue continues.
-          </p>
+    <details className="group mt-5 w-full max-w-xl rounded-2xl border border-primary/30 bg-primary/5">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+          </span>
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Enrichment</div>
+            <div className="truncate text-sm font-semibold">{activity.activeTotal} active now</div>
+          </div>
         </div>
-        <div className="grid min-w-28 gap-1 rounded-lg border border-white/10 bg-black px-3 py-2 text-center">
-          <span className="font-display text-2xl font-bold text-primary">{activity.processing}</span>
-          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">processing</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition group-open:rotate-180 group-open:text-primary" />
+      </summary>
+      <div className="space-y-3 border-t border-primary/20 px-4 pb-4 pt-3">
+        <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+          <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${progress}%` }} />
+        </div>
+        <div className="flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+          <span>{activity.indexing} indexing</span>
+          <span>{activity.visual} visual indexed</span>
+          <span>{activity.deep} transcript ready</span>
+        </div>
+        <div className="space-y-2">
+          {activity.activeItems.map((item) => (
+            <div key={item.id} className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/60 px-3 py-2 text-xs">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+              <div className="min-w-0">
+                <div className="truncate font-semibold">{item.title}</div>
+                <div className="truncate text-[11px] text-muted-foreground">{item.source}</div>
+              </div>
+            </div>
+          ))}
+          {activity.activeTotal > activity.activeItems.length && (
+            <div className="text-xs text-muted-foreground">
+              {activity.activeTotal - activity.activeItems.length} more saves are also being enriched.
+            </div>
+          )}
         </div>
       </div>
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
-        <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${progress}%` }} />
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-        <span>{activity.waiting} waiting</span>
-        <span>{activity.downloading} downloading</span>
-        <span>{activity.analyzing} analyzing</span>
-        <span>{activity.paused} paused</span>
-        <span>{activity.failed} failed</span>
-      </div>
-      {pausedReasons.length ? (
-        <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-          {pausedReasons.map((reason) => <span key={reason}>{reason}</span>)}
-        </div>
-      ) : null}
-    </div>
+    </details>
   );
 }
+
 function LibraryTab({
   items,
   totalCount,
+  searchActive,
+  searchResultCount,
   query,
   setQuery,
+  onClearSearch,
   onSearch,
   busy,
   statusFilter,
@@ -4109,29 +4170,27 @@ function LibraryTab({
   setPlatformFilter,
   platforms,
   onSelect,
-  onRestart,
   indexingActivity,
-  aiSearch,
 }) {
   const boardRef = useRef(null);
   const [visibleCount, setVisibleCount] = useState(80);
   const activeFilters = (statusFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
   const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
-  const searchableCount = items.filter((item) => item.status === 'done').length;
-  const indexingNeeded = totalCount > 0 && searchableCount < totalCount;
+  const searchableCount = items.filter((item) => item.sourceStatus !== 'needs_review').length;
+  const enrichedCount = items.filter((item) => DASHBOARD_ENRICHED_STAGES.has(item.indexingStage)).length;
   const boardStats = useMemo(() => ([
     ['All saves', totalCount],
     ['On this board', items.length],
     ['Searchable', searchableCount],
-    ['Needs review', items.filter((item) => item.sourceStatus === 'needs_review').length],
-    ]), [items, searchableCount, totalCount]);
+    ['Enriched', enrichedCount],
+    ]), [enrichedCount, items.length, searchableCount, totalCount]);
 
   useEffect(() => {
     const cards = boardRef.current?.querySelectorAll('.pin-card');
     if (!cards?.length) return undefined;
 
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduceMotion) {
+    if (reduceMotion || cards.length > 48) {
       gsap.set(cards, { autoAlpha: 1, y: 0, scale: 1, clearProps: 'transform,opacity,visibility' });
       return undefined;
     }
@@ -4146,45 +4205,66 @@ function LibraryTab({
 
   return (
     <div className="mx-auto max-w-[1480px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
-      <div className="mb-7 flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-        <div className="max-w-2xl">
-          <p className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Saved board</p>
-          <h1 className="mt-3 font-display text-4xl font-bold tracking-tight md:text-6xl">Your saves, laid out like ideas.</h1>
-          <p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground">
-            Browse visually first, then open any save for the summary, tags, transcript, source link, and notes.
-          </p>
-        </div>
-
+      <div className="mb-7">
         <form
           onSubmit={(event) => {
             setVisibleCount(80);
             onSearch(event);
           }}
-          className="flex min-h-16 w-full items-center gap-3 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 shadow-2xl shadow-black/40 transition focus-within:border-primary xl:max-w-xl"
+          className="w-full rounded-2xl border border-white/10 bg-white/[0.035] p-5 shadow-2xl shadow-black/40 transition focus-within:border-primary focus-within:bg-white/[0.05] md:p-6"
         >
-          <Search className="h-5 w-5 shrink-0 text-primary" />
-          <input
+          <textarea
             autoFocus
+            rows={2}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search recipes, outfits, trips, products..."
-            className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground md:text-lg"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => {
+            onChange={(event) => {
+              const nextQuery = event.target.value;
+              setQuery(nextQuery);
+              if (!nextQuery.trim() && searchActive) {
                 setVisibleCount(80);
-                setQuery('');
-              }}
-              className="rounded-full p-1 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-          <button type="submit" className="inline-flex h-10 items-center justify-center rounded-full bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Search'}
-          </button>
+                onClearSearch();
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || event.shiftKey) return;
+              event.preventDefault();
+              setVisibleCount(80);
+              onSearch(event);
+            }}
+            placeholder="Ask anything..."
+            className="min-h-16 w-full resize-none bg-transparent text-lg leading-7 outline-none placeholder:text-muted-foreground md:min-h-20 md:text-2xl"
+          />
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 px-4 text-sm font-medium text-foreground">
+                <Search className="h-4 w-4 text-primary" />
+                Search
+              </span>
+              {searchActive && (
+                <span className="hidden text-xs text-muted-foreground sm:inline">
+                  {searchResultCount} matching saves
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVisibleCount(80);
+                    onClearSearch();
+                  }}
+                  className="grid h-9 w-9 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+              <button type="submit" className="grid h-11 w-11 place-items-center rounded-full bg-primary text-primary-foreground transition hover:scale-[1.03] disabled:opacity-60" aria-label="Search saves" disabled={busy}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-5 w-5" />}
+              </button>
+            </div>
+          </div>
         </form>
       </div>
 
@@ -4199,66 +4279,12 @@ function LibraryTab({
 
       <IndexingProgressCard activity={indexingActivity} />
 
-      {aiSearch && (
-        <div className="mt-5 rounded-2xl border border-primary/25 bg-primary/5 p-5">
-          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.24em] text-primary">
-            <Bot className="h-4 w-4" />
-            AI search
-          </div>
-          {aiSearch.error ? (
-            <p className="mt-3 text-sm leading-6 text-muted-foreground">{aiSearch.error}</p>
-          ) : (
-            <>
-              <p className="mt-3 max-w-4xl text-sm leading-6 text-foreground">{aiSearch.answer}</p>
-              {aiSearch.resultReasons?.length > 0 && (
-                <div className="mt-4 grid gap-2 md:grid-cols-2">
-                  {aiSearch.resultReasons.map((entry) => (
-                    <div key={entry.id} className="rounded-xl border border-white/10 bg-black/40 p-3 text-xs leading-5 text-muted-foreground">
-                      {entry.reason}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {aiSearch.suggestions?.length > 0 && (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {aiSearch.suggestions.map((suggestion) => (
-                    <span key={suggestion} className="rounded-full border border-white/10 bg-black/50 px-3 py-1.5 text-xs text-muted-foreground">
-                      {suggestion}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {indexingNeeded && (
-        <div className="mt-5 flex flex-col gap-4 rounded-2xl border border-primary/30 bg-primary/5 p-5 md:flex-row md:items-center md:justify-between">
-          <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Indexing needed</div>
-            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">
-              {searchableCount} of {totalCount} saves are searchable
-            </h2>
-            <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Search is strongest after OCR, transcript, and summaries are created. Terms like SOC 2 only work reliably once the save has been indexed.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onRestart}
-            disabled={busy}
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02] disabled:opacity-60"
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
-            Start indexing
-          </button>
-        </div>
-      )}
-
       <div className="sticky top-0 z-20 -mx-4 mt-5 border-y border-white/5 bg-black/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:-mx-10 md:px-10">
         <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
-          <span>{visibleItems.length} showing from {items.length} matching saves</span>
+          <span>
+            {visibleItems.length} showing from {items.length} matching saves
+            {searchActive ? ` · ${searchResultCount} search results from ${totalCount} total saves` : ''}
+          </span>
           <div className="flex flex-wrap gap-2">
             <DashboardFilterSelect
               label="Status"
@@ -4334,14 +4360,27 @@ const PIN_BACKDROPS = [
 
 const PIN_HEIGHTS = ['min-h-72', 'min-h-96', 'min-h-80', 'min-h-[28rem]', 'min-h-64', 'min-h-[24rem]'];
 
+function firstUsefulCardChip(item) {
+  return [item.collection, item.tags[0], item.topics[0], item.brands[0], item.tools[0]]
+    .map((value) => String(value || '').trim())
+    .find((value) => value && value !== 'Unsorted');
+}
+
+function shortCardText(value = '') {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
 function PinCard({ item, index, onClick }) {
-  const meta = STATUS_META[item.sourceStatus] || STATUS_META[item.status] || STATUS_META.queued;
+  const meta = item.sourceStatus === 'needs_review'
+    ? STATUS_META.needs_review
+    : INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
   const Icon = meta.icon;
-  const highlight = [item.collection, item.tags[0], item.topics[0], item.brands[0], item.tools[0]].filter(Boolean).slice(0, 3);
-  const preview = item.sourceDescription || item.visual || item.summary || item.caption || 'Open this save to see what was captured.';
+  const chip = firstUsefulCardChip(item);
+  const preview = shortCardText(item.sourceDescription || item.visual || item.summary || item.caption || 'Open this save to see what was captured.');
   const backdrop = PIN_BACKDROPS[index % PIN_BACKDROPS.length];
   const height = PIN_HEIGHTS[index % PIN_HEIGHTS.length];
-  const cardTitle = item.sourceTitle || item.title;
+  const cardTitle = shortCardText(item.sourceTitle || item.title || 'Saved post');
+  const source = shortCardText(item.sourceAuthor || item.user || item.platform || 'Saved source');
 
   return (
     <button
@@ -4360,39 +4399,24 @@ function PinCard({ item, index, onClick }) {
           </span>
         </div>
         <div className="relative">
-          <div className="mb-4 flex flex-wrap gap-2">
-            {highlight.map((tag) => (
-              <span key={tag} className="rounded-full bg-black/15 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-black">
-                {tag}
-              </span>
-            ))}
-          </div>
-          <h3 className="line-clamp-4 font-display text-3xl font-bold leading-[0.95] tracking-tight md:text-4xl">{cardTitle}</h3>
+          {chip && (
+            <span className="mb-3 inline-flex max-w-full rounded-full bg-black/15 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-black">
+              <span className="truncate">{chip}</span>
+            </span>
+          )}
+          <h3 className="line-clamp-3 font-display text-3xl font-bold leading-none tracking-tight md:text-[2.35rem]">{cardTitle}</h3>
         </div>
       </div>
       <div className="p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <span className="truncate font-mono text-xs text-primary">{item.sourceAuthor || item.user}</span>
+          <span className="truncate font-mono text-xs text-primary">{source}</span>
           <span className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider ${meta.color}`}>
-            <Icon className={`h-3 w-3 ${['downloading', 'analyzing'].includes(item.status) ? 'animate-spin' : ''}`} />
-            {displayStatus(item.sourceStatus)}
+            <Icon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
+            {item.sourceStatus === 'needs_review' ? 'Review' : meta.label}
           </span>
         </div>
-        <p className="line-clamp-3 text-sm leading-6 text-muted-foreground">{preview}</p>
-        <div className="mt-4 flex flex-wrap gap-1.5">
-          {item.tags.slice(0, 3).map((tag) => (
-            <span key={tag} className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              <Hash className="h-3 w-3" /> {tag}
-            </span>
-          ))}
-          {item.brands.slice(0, 2).map((brand) => (
-            <span key={brand} className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-primary">
-              <Tag className="h-3 w-3" /> {brand}
-            </span>
-          ))}
-        </div>
-        <div className="mt-5 flex items-center justify-between border-t border-white/10 pt-4 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-          <span>Open save</span>
+        <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">{preview}</p>
+        <div className="mt-4 flex items-center justify-end border-t border-white/10 pt-4 text-muted-foreground">
           <ExternalLink className="h-3.5 w-3.5 transition group-hover:translate-x-0.5 group-hover:text-primary" />
         </div>
       </div>
@@ -4403,22 +4427,32 @@ function PinCard({ item, index, onClick }) {
 function UploadTab({
   files,
   setFiles,
+  importSourceType,
+  setImportSourceType,
   linkForm,
   setLinkForm,
   onSaveLink,
   onImport,
-  onRestart,
+  pendingReviews,
+  onApproveReview,
+  onUpdateReview,
+  onSelect,
   busy,
   onOpenHowTo,
   indexingActivity,
 }) {
   const [dragging, setDragging] = useState(false);
+  const sourceOptions = [
+    { value: 'auto', label: 'Auto-detect', help: 'Best for full export ZIPs.' },
+    { value: 'instagram', label: 'Instagram', help: 'Looks in your_instagram_activity/saved/.' },
+    { value: 'pinterest', label: 'Pinterest', help: 'Reads Pinterest ZIP, JSON, CSV, or HTML.' },
+  ];
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-6 py-20">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <h1 className="font-display text-4xl font-bold tracking-tight">Add your saved posts</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Upload an Instagram or Pinterest export. New saves are queued for batch indexing.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Paste links or upload exports. Saves are added and searchable from metadata first, then enriched when opened.</p>
         </div>
         <button
           type="button"
@@ -4429,6 +4463,19 @@ function UploadTab({
         </button>
       </div>
 
+      <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Launch offer</div>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">First 200 imported saves are on us.</h2>
+          </div>
+          <span className="rounded-full bg-primary px-4 py-2 font-display text-xl font-bold text-primary-foreground">200</span>
+        </div>
+        <p className="mt-3 text-sm leading-6 text-muted-foreground">
+          Use your free included allowance for posts you actually open or inspect. Imports stay instantly searchable from captions, hashtags, collections, and source metadata.
+        </p>
+      </div>
+
       <IndexingProgressCard activity={indexingActivity} />
 
       <form onSubmit={onSaveLink} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
@@ -4436,7 +4483,7 @@ function UploadTab({
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save from any platform</div>
           <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Add a Pinterest pin, tweet, video, post, or article</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            New web links go into your library first. Nothing is processed until it is queued for batch indexing.
+            New web links go into review first. Approving makes their captured metadata searchable.
           </p>
         </div>
         <input
@@ -4463,9 +4510,70 @@ function UploadTab({
         />
         <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-          Save and queue
+          Save to review inbox
         </button>
       </form>
+
+      {pendingReviews.length > 0 && (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+          <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Review inbox</div>
+              <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saves waiting</h2>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">Clean up the title and notes before making the save searchable.</p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                for (const item of pendingReviews) {
+                  await onApproveReview(item);
+                }
+              }}
+              disabled={busy}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              Approve all reviewed
+            </button>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {pendingReviews.map((item) => (
+              <ReviewCard
+                key={item.id}
+                item={item}
+                busy={busy}
+                onSelect={onSelect}
+                onUpdate={onUpdateReview}
+                onApprove={onApproveReview}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+        <div className="mb-4">
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Export source</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose what you are importing</h2>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          {sourceOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setImportSourceType(option.value)}
+              className={`rounded-xl border px-4 py-3 text-left transition ${
+                importSourceType === option.value
+                  ? 'border-primary bg-primary/10 text-foreground'
+                  : 'border-white/10 bg-black text-muted-foreground hover:border-white/25 hover:text-foreground'
+              }`}
+            >
+              <span className="block text-sm font-semibold">{option.label}</span>
+              <span className="mt-1 block text-xs leading-5">{option.help}</span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <div
         onDragOver={(event) => {
@@ -4482,7 +4590,7 @@ function UploadTab({
       >
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
         <h3 className="mb-2 font-display text-xl font-bold">Upload your files here</h3>
-        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON / Pinterest ZIP/JSON/CSV / up to 20 MB per file</p>
+        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV</p>
         <button
           type="button"
           onClick={onOpenHowTo}
@@ -4495,38 +4603,112 @@ function UploadTab({
           Choose export files
           <input type="file" multiple accept=".html,.htm,.zip,.json,.csv" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
         </label>
+        <label className="ml-3 inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/10 px-6 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5">
+          Choose export folder
+          <input type="file" multiple webkitdirectory="" directory="" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
+        </label>
         {files.length > 0 && (
           <div className="mt-6 space-y-2 text-left">
-            {files.map((file, index) => (
-              <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black px-4 py-2 text-sm">
-                <span className="min-w-0 truncate font-mono">{file.name}</span>
-                <span className="shrink-0 text-xs text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</span>
-                <button
-                  type="button"
-                  onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 text-muted-foreground transition hover:border-destructive/60 hover:text-destructive"
-                  aria-label={`Remove ${file.name}`}
-                  title="Remove file"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+            {files.map((file) => (
+              <div key={`${fileImportName(file)}-${file.size}`} className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-black px-4 py-2 text-sm">
+                <span className="min-w-0 truncate font-mono">{fileImportName(file) || file.name}</span>
+                <span className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</span>
               </div>
             ))}
           </div>
         )}
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <button onClick={onImport} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+      <div>
+        <button onClick={onImport} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-          Import and queue
-        </button>
-        <button onClick={onRestart} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-5 py-3 font-semibold text-foreground disabled:opacity-60">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
-          Retry paused or failed saves
+          Add and search from metadata
         </button>
       </div>
     </div>
+  );
+}
+
+function ReviewCard({ item, busy, onSelect, onUpdate, onApprove }) {
+  const [draft, setDraft] = useState({
+    sourceTitle: item.sourceTitle || item.title || '',
+    sourceAuthor: item.sourceAuthor || '',
+    sourceDescription: item.sourceDescription || '',
+    collection: item.collection === 'Unsorted' ? '' : item.collection,
+  });
+
+  const payload = {
+    ...draft,
+    collections: draft.collection ? [draft.collection] : item.raw?.collections || [],
+  };
+
+  return (
+    <article className="rounded-2xl border border-white/10 bg-black p-4">
+      <div className="mb-4 flex items-start gap-3">
+        {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="h-20 w-20 shrink-0 rounded-xl object-cover" loading="lazy" /> : null}
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-widest text-primary">
+            <span>{item.platform}</span>
+            <span className="text-muted-foreground">{item.sourceStatus}</span>
+          </div>
+          <button type="button" onClick={() => onSelect(item)} className="line-clamp-2 text-left font-display text-xl font-bold tracking-tight hover:text-primary">
+            {item.sourceTitle || item.title}
+          </button>
+        </div>
+      </div>
+      <div className="space-y-3">
+        <input
+          value={draft.sourceTitle}
+          onChange={(event) => setDraft((current) => ({ ...current, sourceTitle: event.target.value }))}
+          placeholder="Clean title"
+          maxLength={160}
+          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm outline-none focus:border-primary"
+        />
+        <div className="grid gap-3 md:grid-cols-2">
+          <input
+            value={draft.sourceAuthor}
+            onChange={(event) => setDraft((current) => ({ ...current, sourceAuthor: event.target.value }))}
+            placeholder="Creator or source"
+            maxLength={120}
+            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm outline-none focus:border-primary"
+          />
+          <input
+            value={draft.collection}
+            onChange={(event) => setDraft((current) => ({ ...current, collection: event.target.value }))}
+            placeholder="Collection"
+            maxLength={80}
+            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm outline-none focus:border-primary"
+          />
+        </div>
+        <textarea
+          value={draft.sourceDescription}
+          onChange={(event) => setDraft((current) => ({ ...current, sourceDescription: event.target.value }))}
+          placeholder="Short note or reason you saved it"
+          maxLength={500}
+          className="min-h-24 w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm leading-6 outline-none focus:border-primary"
+        />
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onUpdate(item, payload)}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-60"
+        >
+          <Check className="h-4 w-4" />
+          Save edits
+        </button>
+        <button
+          type="button"
+          onClick={() => onApprove(item, payload)}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+        >
+          <CheckCircle2 className="h-4 w-4" />
+          Approve
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -4600,7 +4782,7 @@ function SettingsTab({
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Browser extension</div>
-            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Browser extension</h2>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Coming soon</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               Extension tokens and Lens search from the browser will be available after the extension is published in the browser stores.
             </p>
@@ -4778,6 +4960,9 @@ function GraphTab({ onSelectItem }) {
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  const graphViewportRef = useRef(null);
   const dragRef = useRef(null);
   const touchGestureRef = useRef(null);
   const prompt = [
@@ -4804,6 +4989,14 @@ function GraphTab({ onSelectItem }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
 
   const handleExport = async () => {
     setError('');
@@ -4853,8 +5046,49 @@ function GraphTab({ onSelectItem }) {
   const clampZoom = (value) => Math.max(0.55, Math.min(2.6, Number(value.toFixed(2))));
 
   const changeZoom = (delta) => {
-    setZoom((current) => clampZoom(current + delta));
+    setZoom((current) => {
+      const nextZoom = clampZoom(current + delta);
+      zoomRef.current = nextZoom;
+      return nextZoom;
+    });
   };
+
+  const zoomGraphAt = useCallback((clientX, clientY, deltaY, viewport) => {
+    if (!viewport || deltaY === 0) return;
+    const rect = viewport.getBoundingClientRect();
+    const pointerX = ((clientX - rect.left) / Math.max(rect.width, 1)) * 1000;
+    const pointerY = ((clientY - rect.top) / Math.max(rect.height, 1)) * 620;
+    const delta = Math.max(-1, Math.min(1, deltaY));
+    const scaleFactor = delta > 0 ? 0.9 : 1.1;
+
+    const currentZoom = zoomRef.current;
+    const currentPan = panRef.current;
+    const nextZoom = clampZoom(currentZoom * scaleFactor);
+    if (nextZoom === currentZoom) return;
+
+    const localX = (pointerX - 500 - currentPan.x) / currentZoom;
+    const localY = (pointerY - 310 - currentPan.y) / currentZoom;
+    const nextPan = {
+      x: pointerX - 500 - localX * nextZoom,
+      y: pointerY - 310 - localY * nextZoom,
+    };
+    zoomRef.current = nextZoom;
+    panRef.current = nextPan;
+    setZoom(nextZoom);
+    setPan(nextPan);
+  }, []);
+
+  useEffect(() => {
+    const viewport = graphViewportRef.current;
+    if (!viewport) return undefined;
+    const handleWheel = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      zoomGraphAt(event.clientX, event.clientY, event.deltaY, viewport);
+    };
+    viewport.addEventListener('wheel', handleWheel, { passive: false });
+    return () => viewport.removeEventListener('wheel', handleWheel);
+  }, [zoomGraphAt]);
 
   const getTouchDistance = (touches) => {
     const first = touches[0];
@@ -4915,6 +5149,8 @@ function GraphTab({ onSelectItem }) {
   };
 
   const resetView = () => {
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
     setZoom(1);
     setPan({ x: 0, y: 0 });
     setSelectedNodeId(null);
@@ -4950,8 +5186,8 @@ function GraphTab({ onSelectItem }) {
         <GraphStat label="Graph links" value={graph?.stats?.links ?? 0} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="relative min-h-[520px] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div ref={graphViewportRef} className="relative h-[340px] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025] shadow-2xl shadow-black/25 sm:h-[380px] lg:h-[430px] xl:h-[460px]">
           <div className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-full border border-white/10 bg-black/80 p-1 backdrop-blur">
             <button type="button" onClick={() => changeZoom(0.18)} className="rounded-full p-2 text-muted-foreground transition hover:bg-white/10 hover:text-primary" aria-label="Zoom in">
               <ZoomIn className="h-4 w-4" />
@@ -4973,15 +5209,16 @@ function GraphTab({ onSelectItem }) {
             ))}
           </div>
           {busy ? (
-            <div className="grid min-h-[520px] place-items-center text-muted-foreground">Loading graph...</div>
+            <div className="grid h-full place-items-center text-muted-foreground">Loading graph...</div>
           ) : !graph?.nodes?.length ? (
-            <div className="grid min-h-[520px] place-items-center px-8 text-center text-muted-foreground">
-              No indexed graph yet. Start indexing saves first, then come back here.
+            <div className="grid h-full place-items-center px-8 text-center text-muted-foreground">
+              No graph nodes yet. Add searchable saves first, then come back here.
             </div>
           ) : (
             <svg
               viewBox="0 0 1000 620"
-              className="h-full min-h-[520px] w-full touch-none cursor-grab active:cursor-grabbing"
+              className="h-full w-full touch-none select-none cursor-grab active:cursor-grabbing"
+              style={{ userSelect: 'none' }}
               onTouchStart={handleGraphTouchStart}
               onTouchMove={handleGraphTouchMove}
               onTouchEnd={handleGraphTouchEnd}
@@ -4990,21 +5227,37 @@ function GraphTab({ onSelectItem }) {
               }}
               onPointerDown={(event) => {
                 if (event.pointerType === 'touch') return;
-                if (event.target.closest?.('[data-graph-node]')) return;
+                event.preventDefault();
+                const nodeId = event.target.closest?.('[data-graph-node]')?.getAttribute('data-node-id') || '';
                 event.currentTarget.setPointerCapture?.(event.pointerId);
-                dragRef.current = { x: event.clientX, y: event.clientY, pan };
+                dragRef.current = {
+                  x: event.clientX,
+                  y: event.clientY,
+                  pan: panRef.current,
+                  nodeId,
+                  moved: false,
+                };
               }}
               onPointerMove={(event) => {
                 if (event.pointerType === 'touch') return;
                 if (!dragRef.current) return;
                 const dx = event.clientX - dragRef.current.x;
                 const dy = event.clientY - dragRef.current.y;
-                setPan({ x: dragRef.current.pan.x + dx, y: dragRef.current.pan.y + dy });
+                if (Math.hypot(dx, dy) > 3) {
+                  dragRef.current.moved = true;
+                }
+                const nextPan = { x: dragRef.current.pan.x + dx, y: dragRef.current.pan.y + dy };
+                panRef.current = nextPan;
+                setPan(nextPan);
               }}
               onPointerUp={(event) => {
                 if (event.pointerType === 'touch') return;
-                if (dragRef.current) event.currentTarget.releasePointerCapture?.(event.pointerId);
+                const gesture = dragRef.current;
+                if (gesture) event.currentTarget.releasePointerCapture?.(event.pointerId);
                 dragRef.current = null;
+                if (gesture?.nodeId && !gesture.moved) {
+                  setSelectedNodeId((current) => (current === gesture.nodeId ? null : gesture.nodeId));
+                }
               }}
               onPointerLeave={() => {
                 dragRef.current = null;
@@ -5043,12 +5296,10 @@ function GraphTab({ onSelectItem }) {
                   <g
                     key={node.id}
                     data-graph-node
+                    data-node-id={node.id}
                     transform={`translate(${point.x} ${point.y})`}
                     className="cursor-pointer"
                     opacity={dim ? 0.22 : 1}
-                    onClick={() => {
-                      setSelectedNodeId((current) => (current === node.id ? null : node.id));
-                    }}
                   >
                     <circle r={radius + (isSelected ? 9 : 5)} fill={color} opacity="0.16" />
                     <circle r={radius} fill={color} stroke={isSelected ? '#ffffff' : 'rgba(0,0,0,0.55)'} strokeWidth={isSelected ? 2 : 1} />
@@ -5215,8 +5466,153 @@ function layoutGraph(graph) {
   return points;
 }
 
+const DETAIL_VERIFY_PATTERN = /\b(price|pricing|offer|deal|discount|sale|available|availability|launch|deadline|apply|application|terms|funding|equity|investment|grant|salary|rate|cost|coupon|waitlist|beta|limited|expires|202[0-9]|203[0-9])\b|[$]\s?\d/i;
+
+function cleanDetailText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function detailCompareKey(value) {
+  return cleanDetailText(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function isWeakDetailText(value) {
+  const key = detailCompareKey(value);
+  return !key
+    || key === 'no summary yet'
+    || key === 'untitled saved item'
+    || key === 'useful saved instagram reference'
+    || key === 'useful saved reference'
+    || (key.startsWith('useful for') && key.length < 24);
+}
+
+function isRepeatedDetailText(value, previousValues = []) {
+  const key = detailCompareKey(value);
+  if (!key) return true;
+  return previousValues.some((previous) => {
+    const previousKey = detailCompareKey(previous);
+    if (!previousKey) return false;
+    return key === previousKey
+      || (key.length > 90 && previousKey.includes(key))
+      || (previousKey.length > 90 && key.includes(previousKey));
+  });
+}
+
+function shortenDetailText(value, maxLength = 420) {
+  const text = cleanDetailText(value);
+  if (text.length <= maxLength) return text;
+  const slice = text.slice(0, maxLength);
+  const boundary = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('; '), slice.lastIndexOf(', '), slice.lastIndexOf(' '));
+  return `${slice.slice(0, boundary > 180 ? boundary : maxLength).trim()}...`;
+}
+
+function pickDistinctDetailText(candidates, previousValues = [], maxLength = 420) {
+  const candidate = candidates.find((value) => !isWeakDetailText(value) && !isRepeatedDetailText(value, previousValues));
+  return candidate ? shortenDetailText(candidate, maxLength) : '';
+}
+
+function humanList(values) {
+  const items = values.filter(Boolean);
+  if (items.length <= 1) return items[0] || '';
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, and ${items.at(-1)}`;
+}
+
+function inferDetailUse(item) {
+  const topics = dedupeDetailItems([...(item.topics || []), ...(item.tags || [])]).slice(0, 3);
+  const mentions = dedupeDetailItems([...(item.tools || []), ...(item.brands || []), ...(item.repos || [])]).slice(0, 3);
+  if (!topics.length && !mentions.length) return '';
+  const topicText = topics.length ? `researching ${humanList(topics)}` : '';
+  const mentionText = mentions.length ? `tracking ${humanList(mentions)}` : '';
+  return `Useful for ${[topicText, mentionText].filter(Boolean).join(' and ')}.`;
+}
+
+function dedupeDetailItems(values = [], excludeValues = []) {
+  const seen = new Set(excludeValues.map(detailCompareKey));
+  const items = [];
+  for (const value of values) {
+    const item = cleanDetailText(value);
+    const key = detailCompareKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    items.push(item);
+  }
+  return items;
+}
+
+function needsDetailVerification(item) {
+  const text = [
+    item.title,
+    item.sourceTitle,
+    item.sourceDescription,
+    item.caption,
+    item.summary,
+    item.why,
+    item.visual,
+    item.ocr,
+  ].filter(Boolean).join(' ');
+  return DETAIL_VERIFY_PATTERN.test(text);
+}
+
+function buildOriginalDetailRows(item, insightRows = []) {
+  const rows = [];
+  const seen = insightRows.map((row) => row.text);
+  const addRow = (label, value, icon, mono = false) => {
+    const text = cleanDetailText(value);
+    if (!text || isRepeatedDetailText(text, seen)) return;
+    seen.push(text);
+    rows.push({ label, text, icon, mono });
+  };
+
+  addRow('Source', [item.platform, item.sourceId].filter(Boolean).join(' / '), ExternalLink);
+  addRow('Source description', item.sourceDescription, FileText);
+  addRow('Caption', item.caption, FileText, true);
+  addRow('Transcript', item.transcript, Activity, true);
+  addRow('Words on screen', item.ocr, Eye, true);
+  addRow('Visual notes', item.visual, Eye);
+  return rows;
+}
+
+function buildDetailInsight(item) {
+  const title = item.sourceTitle || item.title || '';
+  const seen = [title];
+  const what = pickDistinctDetailText([item.summary, item.visual, item.sourceDescription, item.caption], seen);
+  if (what) seen.push(what);
+
+  const why = pickDistinctDetailText([item.why, inferDetailUse(item)], seen, 360);
+  if (why) seen.push(why);
+
+  const visual = pickDistinctDetailText([item.visual, item.ocr], [...seen, item.sourceDescription, item.caption], 360);
+  if (visual) seen.push(visual);
+
+  const rows = [
+    what ? { label: 'What this is', text: what, icon: Sparkles } : null,
+    why ? { label: 'Why it matters', text: why, icon: Brain } : null,
+    visual ? { label: 'What is shown', text: visual, icon: Eye } : null,
+  ].filter(Boolean);
+
+  const mentions = dedupeDetailItems([
+    ...(item.tools || []),
+    ...(item.brands || []),
+    ...(item.people || []),
+    ...(item.repos || []),
+  ]).slice(0, 24);
+  const topics = dedupeDetailItems([...(item.topics || []), ...(item.tags || [])], mentions).slice(0, 18);
+
+  return {
+    rows,
+    mentions,
+    topics,
+    originalRows: buildOriginalDetailRows(item, rows),
+    verify: needsDetailVerification(item),
+  };
+}
+
 function DetailDrawer({ item, onClose, onApprove, busy }) {
   const ref = useRef(null);
+  const indexingMeta = INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
+  const IndexingIcon = indexingMeta.icon;
+  const insight = useMemo(() => buildDetailInsight(item), [item]);
   useEffect(() => {
     gsap.fromTo(ref.current, { x: '100%' }, { x: 0, duration: 0.5, ease: 'power3.out' });
   }, []);
@@ -5235,6 +5631,10 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
             <div className="mb-2 flex flex-wrap gap-2 font-mono text-xs text-primary">
               <span>{item.platform}</span>
               {item.sourceAuthor ? <span className="text-muted-foreground">/ {item.sourceAuthor}</span> : null}
+              <span className={`inline-flex items-center gap-1 ${indexingMeta.color}`}>
+                <IndexingIcon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
+                {indexingMeta.label}
+              </span>
             </div>
             {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="mb-5 max-h-64 w-full rounded-2xl object-cover" /> : null}
             <h2 className="mb-3 font-display text-3xl font-bold tracking-tight">{item.sourceTitle || item.title}</h2>
@@ -5249,27 +5649,59 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
                 className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                Approve and queue
+                Approve and make searchable
               </button>
             )}
           </div>
 
           {item.error && <Section icon={AlertCircle} label="Error">{item.error}</Section>}
-          <Section icon={ExternalLink} label="Source">{[item.platform, item.sourceId].filter(Boolean).join(' / ')}</Section>
-          <Section icon={FileText} label="Source description">{item.sourceDescription}</Section>
-          <Section icon={Sparkles} label="Summary">{item.summary}</Section>
-        <Section icon={Brain} label="Why you saved it">{item.why}</Section>
-          <Section icon={FileText} label="Caption" mono>{item.caption}</Section>
-          <Section icon={Activity} label="Transcript" mono>{item.transcript}</Section>
-        <Section icon={Eye} label="Words on screen" mono>{item.ocr}</Section>
-        <Section icon={Eye} label="What is shown">{item.visual}</Section>
-        <ChipGroup icon={Bot} label="Products / tools" items={item.tools} />
-        <ChipGroup icon={Tag} label="Brands / creators" items={item.brands} />
-          <ChipGroup icon={Hash} label="Topics" items={item.topics} />
-          <ChipGroup icon={GitBranch} label="Links / names" items={item.repos} />
+          {item.indexingError && <Section icon={AlertCircle} label="Enrichment note">{item.indexingError}</Section>}
+          {item.indexingStage === 'visual_indexing' && <Section icon={Loader2} label="Enrichment">Understanding this save now. Metadata search stays available.</Section>}
+          <InsightPanel insight={insight} />
+          {insight.verify && (
+            <Section icon={AlertCircle} label="Check before using">
+              This save may mention dates, prices, funding, availability, or terms that can change. Verify the original source before acting on it.
+            </Section>
+          )}
+          <ChipGroup icon={Bot} label="Mentioned" items={insight.mentions} />
+          <ChipGroup icon={Hash} label="Topics" items={insight.topics} />
+          <OriginalDetails rows={insight.originalRows} />
         </div>
       </div>
     </div>
+  );
+}
+
+function InsightPanel({ insight }) {
+  if (!insight.rows.length) return null;
+  return (
+    <div className="space-y-5 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      {insight.rows.map(({ label, text, icon: Icon }) => (
+        <div key={label}>
+          <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
+            <Icon className="h-3 w-3" /> {label}
+          </div>
+          <div className="text-sm leading-relaxed text-foreground">{text}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OriginalDetails({ rows }) {
+  if (!rows.length) return null;
+  return (
+    <details className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-mono text-xs uppercase tracking-widest text-muted-foreground">
+        <span className="inline-flex items-center gap-2"><FileText className="h-3 w-3" /> Original source text</span>
+        <ChevronDown className="h-4 w-4" />
+      </summary>
+      <div className="mt-5 space-y-6">
+        {rows.map(({ label, text, icon, mono }) => (
+          <Section key={label} icon={icon} label={label} mono={mono}>{text}</Section>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -5280,13 +5712,13 @@ function Section({ icon: Icon, label, children, mono }) {
       <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
         <Icon className="h-3 w-3" /> {label}
       </div>
-      <div className={`text-sm leading-relaxed ${mono ? 'font-mono text-muted-foreground' : ''}`}>{children}</div>
+      <div className={`break-words text-sm leading-relaxed ${mono ? 'whitespace-pre-wrap font-mono text-xs text-muted-foreground' : ''}`}>{children}</div>
     </div>
   );
 }
 
 function ChipGroup({ icon: Icon, label, items }) {
-  if (!items.length) return null;
+  if (!items?.length) return null;
   return (
     <div>
       <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
@@ -5314,4 +5746,3 @@ function Banner({ children, type = 'notice' }) {
     </div>
   );
 }
-

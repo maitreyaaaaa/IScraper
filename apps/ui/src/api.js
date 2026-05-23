@@ -233,6 +233,14 @@ export function importStoredExport({ files }) {
   });
 }
 
+export function queueStorageImport({ files, sourceType = 'auto' }) {
+  return request('/imports/storage', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files, sourceType }),
+  });
+}
+
 export function createImportUploadUrls({ files }) {
   return request('/imports/upload-urls', {
     method: 'POST',
@@ -273,6 +281,22 @@ export function saveLink(payload) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+  });
+}
+
+export function enrichItem(id, payload = {}) {
+  return request(`/items/${id}/enrich`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function enrichIntentBatch(itemIds = []) {
+  return request('/enrichment/intent-batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ itemIds }),
   });
 }
 

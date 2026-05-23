@@ -12,7 +12,7 @@ gsap.registerPlugin(useGSAP, ScrollTrigger);
 const FEATURES = [
   {
     title: 'Analyze saved posts',
-    detail: 'Turn raw export files into structured entries with captions, media context, and AI-ready metadata.',
+    detail: 'Turn raw Instagram exports into structured entries with captions, media context, and AI-ready metadata.',
     side: 'left',
     icon: FileSearch,
     accent: 'Inspect exports',
@@ -201,7 +201,7 @@ function FeaturePillsSection({ reducedMotion = false }) {
       <div className="feature-section-header">
         <span className="feature-section-label">What it does</span>
         <h2 id="feature-section-title">Your saved posts become a working system, not a dead list.</h2>
-        <p>Scroll through the core capabilities. Click any pill to see what that feature unlocks.</p>
+        <p>Scroll through the core capabilities. Click any pill to see what that feature actually unlocks.</p>
       </div>
       <div className="feature-pill-list">
         {FEATURES.map((feature, index) => (

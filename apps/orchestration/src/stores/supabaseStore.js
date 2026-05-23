@@ -321,13 +321,8 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return jobs.map(mapJob);
     },
     async getItems(userId) {
-      const { data, error } = await client
-        .from('saved_items')
-        .select('*, item_analysis(*)')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      return data.map(mapItemWithAnalysis);
+      const rows = await selectAllUserSavedItems(client, userId);
+      return rows.map(mapItemWithAnalysis);
     },
     async getItem(userId, id) {
       const { data, error } = await client
@@ -979,6 +974,26 @@ async function countRows(client, table, apply = null) {
   return count || 0;
 }
 
+async function selectAllUserSavedItems(client, userId) {
+  const pageSize = 1000;
+  const rows = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await client
+      .from('saved_items')
+      .select('*, item_analysis(*)')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+
+  return rows;
+}
+
 async function selectRows(client, table, columns = '*', limit = 1000, apply = null) {
   let query = client.from(table).select(columns).limit(limit);
   if (apply) query = apply(query);
@@ -1292,4 +1307,5 @@ module.exports = {
   createSupabaseStore,
   getExistingSavedItemKeys,
   cleanDbText,
+  selectAllUserSavedItems,
 };

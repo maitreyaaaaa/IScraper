@@ -12,7 +12,7 @@ const SYSTEM_STEPS = [
     label: '01',
     title: 'Saved posts',
     eyebrow: 'Raw input',
-    summary: 'Bring in the saves you already collected.',
+    summary: 'Bring in the Instagram saves you already collected.',
     detail:
       'IScraper starts with the raw export: post URLs, captions, and the media you actually cared enough to save. Nothing useful is assumed yet.',
     outputs: ['URLs', 'Captions', 'Media files'],
@@ -312,7 +312,7 @@ function SystemMapSection() {
           <div className="system-map-detail-block system-map-detail-block-final">
             <span className="system-map-detail-label">End state</span>
             <p>
-              Saved posts stop behaving like bookmarks and start behaving like usable knowledge inside your real
+              Saved Instagram posts stop behaving like bookmarks and start behaving like usable knowledge inside your real
               workflow.
             </p>
           </div>
