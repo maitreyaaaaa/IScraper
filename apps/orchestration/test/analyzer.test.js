@@ -127,6 +127,7 @@ test('buildOpenRouterAnalysisRequest creates a structured JSON chat request with
   assert.equal(request.model, 'deepseek/deepseek-v4-pro');
   assert.equal(request.response_format.type, 'json_schema');
   assert.match(request.messages[1].content, /Claude Code/);
+  assert.match(request.messages[1].content, /Do not copy the caption/);
   assert.doesNotMatch(JSON.stringify(request), /sk-or-v1/);
 });
 

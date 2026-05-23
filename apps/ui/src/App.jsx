@@ -4985,10 +4985,153 @@ function layoutGraph(graph) {
   return points;
 }
 
+const DETAIL_VERIFY_PATTERN = /\b(price|pricing|offer|deal|discount|sale|available|availability|launch|deadline|apply|application|terms|funding|equity|investment|grant|salary|rate|cost|coupon|waitlist|beta|limited|expires|202[0-9]|203[0-9])\b|[$]\s?\d/i;
+
+function cleanDetailText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function detailCompareKey(value) {
+  return cleanDetailText(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function isWeakDetailText(value) {
+  const key = detailCompareKey(value);
+  return !key
+    || key === 'no summary yet'
+    || key === 'untitled saved item'
+    || key === 'useful saved instagram reference'
+    || key === 'useful saved reference'
+    || (key.startsWith('useful for') && key.length < 24);
+}
+
+function isRepeatedDetailText(value, previousValues = []) {
+  const key = detailCompareKey(value);
+  if (!key) return true;
+  return previousValues.some((previous) => {
+    const previousKey = detailCompareKey(previous);
+    if (!previousKey) return false;
+    return key === previousKey
+      || (key.length > 90 && previousKey.includes(key))
+      || (previousKey.length > 90 && key.includes(previousKey));
+  });
+}
+
+function shortenDetailText(value, maxLength = 420) {
+  const text = cleanDetailText(value);
+  if (text.length <= maxLength) return text;
+  const slice = text.slice(0, maxLength);
+  const boundary = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('; '), slice.lastIndexOf(', '), slice.lastIndexOf(' '));
+  return `${slice.slice(0, boundary > 180 ? boundary : maxLength).trim()}...`;
+}
+
+function pickDistinctDetailText(candidates, previousValues = [], maxLength = 420) {
+  const candidate = candidates.find((value) => !isWeakDetailText(value) && !isRepeatedDetailText(value, previousValues));
+  return candidate ? shortenDetailText(candidate, maxLength) : '';
+}
+
+function humanList(values) {
+  const items = values.filter(Boolean);
+  if (items.length <= 1) return items[0] || '';
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, and ${items.at(-1)}`;
+}
+
+function inferDetailUse(item) {
+  const topics = dedupeDetailItems([...(item.topics || []), ...(item.tags || [])]).slice(0, 3);
+  const mentions = dedupeDetailItems([...(item.tools || []), ...(item.brands || []), ...(item.repos || [])]).slice(0, 3);
+  if (!topics.length && !mentions.length) return '';
+  const topicText = topics.length ? `researching ${humanList(topics)}` : '';
+  const mentionText = mentions.length ? `tracking ${humanList(mentions)}` : '';
+  return `Useful for ${[topicText, mentionText].filter(Boolean).join(' and ')}.`;
+}
+
+function dedupeDetailItems(values = [], excludeValues = []) {
+  const seen = new Set(excludeValues.map(detailCompareKey));
+  const items = [];
+  for (const value of values) {
+    const item = cleanDetailText(value);
+    const key = detailCompareKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    items.push(item);
+  }
+  return items;
+}
+
+function needsDetailVerification(item) {
+  const text = [
+    item.title,
+    item.sourceTitle,
+    item.sourceDescription,
+    item.caption,
+    item.summary,
+    item.why,
+    item.visual,
+    item.ocr,
+  ].filter(Boolean).join(' ');
+  return DETAIL_VERIFY_PATTERN.test(text);
+}
+
+function buildOriginalDetailRows(item, insightRows = []) {
+  const rows = [];
+  const seen = insightRows.map((row) => row.text);
+  const addRow = (label, value, icon, mono = false) => {
+    const text = cleanDetailText(value);
+    if (!text || isRepeatedDetailText(text, seen)) return;
+    seen.push(text);
+    rows.push({ label, text, icon, mono });
+  };
+
+  addRow('Source', [item.platform, item.sourceId].filter(Boolean).join(' / '), ExternalLink);
+  addRow('Source description', item.sourceDescription, FileText);
+  addRow('Caption', item.caption, FileText, true);
+  addRow('Transcript', item.transcript, Activity, true);
+  addRow('Words on screen', item.ocr, Eye, true);
+  addRow('Visual notes', item.visual, Eye);
+  return rows;
+}
+
+function buildDetailInsight(item) {
+  const title = item.sourceTitle || item.title || '';
+  const seen = [title];
+  const what = pickDistinctDetailText([item.summary, item.visual, item.sourceDescription, item.caption], seen);
+  if (what) seen.push(what);
+
+  const why = pickDistinctDetailText([item.why, inferDetailUse(item)], seen, 360);
+  if (why) seen.push(why);
+
+  const visual = pickDistinctDetailText([item.visual, item.ocr], [...seen, item.sourceDescription, item.caption], 360);
+  if (visual) seen.push(visual);
+
+  const rows = [
+    what ? { label: 'What this is', text: what, icon: Sparkles } : null,
+    why ? { label: 'Why it matters', text: why, icon: Brain } : null,
+    visual ? { label: 'What is shown', text: visual, icon: Eye } : null,
+  ].filter(Boolean);
+
+  const mentions = dedupeDetailItems([
+    ...(item.tools || []),
+    ...(item.brands || []),
+    ...(item.people || []),
+    ...(item.repos || []),
+  ]).slice(0, 24);
+  const topics = dedupeDetailItems([...(item.topics || []), ...(item.tags || [])], mentions).slice(0, 18);
+
+  return {
+    rows,
+    mentions,
+    topics,
+    originalRows: buildOriginalDetailRows(item, rows),
+    verify: needsDetailVerification(item),
+  };
+}
+
 function DetailDrawer({ item, onClose, onApprove, busy }) {
   const ref = useRef(null);
   const indexingMeta = INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
   const IndexingIcon = indexingMeta.icon;
+  const insight = useMemo(() => buildDetailInsight(item), [item]);
   useEffect(() => {
     gsap.fromTo(ref.current, { x: '100%' }, { x: 0, duration: 0.5, ease: 'power3.out' });
   }, []);
@@ -5033,21 +5176,51 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
           {item.error && <Section icon={AlertCircle} label="Error">{item.error}</Section>}
           {item.indexingError && <Section icon={AlertCircle} label="Enrichment note">{item.indexingError}</Section>}
           {item.indexingStage === 'visual_indexing' && <Section icon={Loader2} label="Enrichment">Understanding this save now. Metadata search stays available.</Section>}
-          <Section icon={ExternalLink} label="Source">{[item.platform, item.sourceId].filter(Boolean).join(' / ')}</Section>
-          <Section icon={FileText} label="Source description">{item.sourceDescription}</Section>
-          <Section icon={Sparkles} label="Summary">{item.summary}</Section>
-        <Section icon={Brain} label="Why you saved it">{item.why}</Section>
-          <Section icon={FileText} label="Caption" mono>{item.caption}</Section>
-          <Section icon={Activity} label="Transcript" mono>{item.transcript}</Section>
-        <Section icon={Eye} label="Words on screen" mono>{item.ocr}</Section>
-        <Section icon={Eye} label="What is shown">{item.visual}</Section>
-        <ChipGroup icon={Bot} label="Products / tools" items={item.tools} />
-        <ChipGroup icon={Tag} label="Brands / creators" items={item.brands} />
-          <ChipGroup icon={Hash} label="Topics" items={item.topics} />
-          <ChipGroup icon={GitBranch} label="Links / names" items={item.repos} />
+          <InsightPanel insight={insight} />
+          {insight.verify && (
+            <Section icon={AlertCircle} label="Check before using">
+              This save may mention dates, prices, funding, availability, or terms that can change. Verify the original source before acting on it.
+            </Section>
+          )}
+          <ChipGroup icon={Bot} label="Mentioned" items={insight.mentions} />
+          <ChipGroup icon={Hash} label="Topics" items={insight.topics} />
+          <OriginalDetails rows={insight.originalRows} />
         </div>
       </div>
     </div>
+  );
+}
+
+function InsightPanel({ insight }) {
+  if (!insight.rows.length) return null;
+  return (
+    <div className="space-y-5 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      {insight.rows.map(({ label, text, icon: Icon }) => (
+        <div key={label}>
+          <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
+            <Icon className="h-3 w-3" /> {label}
+          </div>
+          <div className="text-sm leading-relaxed text-foreground">{text}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OriginalDetails({ rows }) {
+  if (!rows.length) return null;
+  return (
+    <details className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-mono text-xs uppercase tracking-widest text-muted-foreground">
+        <span className="inline-flex items-center gap-2"><FileText className="h-3 w-3" /> Original source text</span>
+        <ChevronDown className="h-4 w-4" />
+      </summary>
+      <div className="mt-5 space-y-6">
+        {rows.map(({ label, text, icon, mono }) => (
+          <Section key={label} icon={icon} label={label} mono={mono}>{text}</Section>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -5058,13 +5231,13 @@ function Section({ icon: Icon, label, children, mono }) {
       <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
         <Icon className="h-3 w-3" /> {label}
       </div>
-      <div className={`text-sm leading-relaxed ${mono ? 'font-mono text-muted-foreground' : ''}`}>{children}</div>
+      <div className={`break-words text-sm leading-relaxed ${mono ? 'whitespace-pre-wrap font-mono text-xs text-muted-foreground' : ''}`}>{children}</div>
     </div>
   );
 }
 
 function ChipGroup({ icon: Icon, label, items }) {
-  if (!items.length) return null;
+  if (!items?.length) return null;
   return (
     <div>
       <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
