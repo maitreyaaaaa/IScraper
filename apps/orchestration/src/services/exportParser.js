@@ -1,6 +1,12 @@
-const path = require('path');
 const { parseInstagramExport } = require('./instagramParser');
 const { parsePinterestExport } = require('./pinterestParser');
+
+const IMPORT_SOURCE_TYPES = new Set(['auto', 'instagram', 'pinterest']);
+
+function normalizeImportSourceType(value) {
+  const sourceType = String(value || 'auto').trim().toLowerCase();
+  return IMPORT_SOURCE_TYPES.has(sourceType) ? sourceType : 'auto';
+}
 
 function mergeParsedResults(results) {
   const collections = [];
@@ -28,9 +34,24 @@ function mergeParsedResults(results) {
   };
 }
 
-async function parseImportExport(files = []) {
-  const htmlFiles = files.filter((file) => ['.html', '.htm'].includes(path.extname(file.originalname || '').toLowerCase()));
-  const instagramParsed = htmlFiles.length ? parseInstagramExport(htmlFiles) : { items: [], collections: [] };
+async function parseImportExport(files = [], options = {}) {
+  const sourceType = normalizeImportSourceType(options.sourceType);
+
+  if (sourceType === 'instagram') {
+    const parsed = await parseInstagramExport(files);
+    return { ...parsed, source: 'instagram-export' };
+  }
+
+  if (sourceType === 'pinterest') {
+    const parsed = await parsePinterestExport(files);
+    return { ...parsed, source: 'pinterest-export' };
+  }
+
+  const instagramParsed = await parseInstagramExport(files);
+  if (instagramParsed.items.length) {
+    return { ...instagramParsed, source: 'instagram-export' };
+  }
+
   const pinterestParsed = await parsePinterestExport(files);
   const parsed = mergeParsedResults([instagramParsed, pinterestParsed]);
 
@@ -42,4 +63,5 @@ async function parseImportExport(files = []) {
 
 module.exports = {
   parseImportExport,
+  normalizeImportSourceType,
 };

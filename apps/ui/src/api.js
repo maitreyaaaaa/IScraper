@@ -151,10 +151,11 @@ export function revealProviderCredential(id) {
   });
 }
 
-export function importInstagramExport({ files }) {
+export function importInstagramExport({ files, sourceType = 'auto' }) {
   const formData = new FormData();
+  formData.append('sourceType', sourceType);
   for (const file of files) {
-    formData.append('exportFiles', file);
+    formData.append('exportFiles', file, file.webkitRelativePath || file.name);
   }
 
   return request('/imports', {
@@ -163,11 +164,11 @@ export function importInstagramExport({ files }) {
   });
 }
 
-export function queueStorageImport({ files }) {
+export function queueStorageImport({ files, sourceType = 'auto' }) {
   return request('/imports/storage', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ files }),
+    body: JSON.stringify({ files, sourceType }),
   });
 }
 

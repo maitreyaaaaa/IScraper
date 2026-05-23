@@ -153,6 +153,49 @@ test('POST /api/imports accepts Pinterest export zip files', async () => {
   }
 });
 
+test('POST /api/imports accepts Instagram ZIP files with variable export roots', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const zip = new JSZip();
+    zip.file('instagram-maitreya_iguess-2026-05-09-0WPnfek7/unrelated/no-data.txt', '');
+    zip.file('instagram-maitreya_iguess-2026-05-09-0WPnfek7/your_instagram_activity/saved/saved_posts.json', JSON.stringify({
+      saved_saved_media: [
+        {
+          title: 'claude.daily',
+          string_map_data: {
+            'Saved on': {
+              href: 'https://www.instagram.com/reel/IGZIP333/',
+              timestamp: 1737394551,
+            },
+          },
+        },
+      ],
+    }));
+    const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+    const form = new FormData();
+    form.append('sourceType', 'instagram');
+    form.append('exportFiles', new Blob([buffer], { type: 'application/zip' }), 'instagram-export.zip');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/imports`, { method: 'POST', body: form });
+    const body = await response.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.itemCount, 1);
+    assert.equal(body.import.source, 'instagram-export');
+    assert.equal(items[0].platform, 'Instagram');
+    assert.equal(items[0].url, 'https://instagram.com/reel/IGZIP333');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/imports/storage requires Supabase Storage for large imports', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
