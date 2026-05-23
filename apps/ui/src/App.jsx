@@ -4608,6 +4608,8 @@ function GraphTab({ onSelectItem }) {
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
   const dragRef = useRef(null);
   const touchGestureRef = useRef(null);
   const prompt = [
@@ -4634,6 +4636,14 @@ function GraphTab({ onSelectItem }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
 
   const handleExport = async () => {
     setError('');
@@ -4683,7 +4693,37 @@ function GraphTab({ onSelectItem }) {
   const clampZoom = (value) => Math.max(0.55, Math.min(2.6, Number(value.toFixed(2))));
 
   const changeZoom = (delta) => {
-    setZoom((current) => clampZoom(current + delta));
+    setZoom((current) => {
+      const nextZoom = clampZoom(current + delta);
+      zoomRef.current = nextZoom;
+      return nextZoom;
+    });
+  };
+
+  const handleGraphWheel = (event) => {
+    event.preventDefault();
+    if (event.deltaY === 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const pointerX = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 1000;
+    const pointerY = ((event.clientY - rect.top) / Math.max(rect.height, 1)) * 620;
+    const delta = Math.max(-1, Math.min(1, event.deltaY));
+    const scaleFactor = delta > 0 ? 0.9 : 1.1;
+
+    const currentZoom = zoomRef.current;
+    const currentPan = panRef.current;
+    const nextZoom = clampZoom(currentZoom * scaleFactor);
+    if (nextZoom === currentZoom) return;
+
+    const localX = (pointerX - 500 - currentPan.x) / currentZoom;
+    const localY = (pointerY - 310 - currentPan.y) / currentZoom;
+    const nextPan = {
+      x: pointerX - 500 - localX * nextZoom,
+      y: pointerY - 310 - localY * nextZoom,
+    };
+    zoomRef.current = nextZoom;
+    panRef.current = nextPan;
+    setZoom(nextZoom);
+    setPan(nextPan);
   };
 
   const getTouchDistance = (touches) => {
@@ -4745,6 +4785,8 @@ function GraphTab({ onSelectItem }) {
   };
 
   const resetView = () => {
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
     setZoom(1);
     setPan({ x: 0, y: 0 });
     setSelectedNodeId(null);
@@ -4780,8 +4822,8 @@ function GraphTab({ onSelectItem }) {
         <GraphStat label="Graph links" value={graph?.stats?.links ?? 0} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="relative min-h-[520px] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="relative h-[340px] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025] shadow-2xl shadow-black/25 sm:h-[380px] lg:h-[430px] xl:h-[460px]">
           <div className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-full border border-white/10 bg-black/80 p-1 backdrop-blur">
             <button type="button" onClick={() => changeZoom(0.18)} className="rounded-full p-2 text-muted-foreground transition hover:bg-white/10 hover:text-primary" aria-label="Zoom in">
               <ZoomIn className="h-4 w-4" />
@@ -4803,15 +4845,16 @@ function GraphTab({ onSelectItem }) {
             ))}
           </div>
           {busy ? (
-            <div className="grid min-h-[520px] place-items-center text-muted-foreground">Loading graph...</div>
+            <div className="grid h-full place-items-center text-muted-foreground">Loading graph...</div>
           ) : !graph?.nodes?.length ? (
-            <div className="grid min-h-[520px] place-items-center px-8 text-center text-muted-foreground">
+            <div className="grid h-full place-items-center px-8 text-center text-muted-foreground">
               No graph nodes yet. Add searchable saves first, then come back here.
             </div>
           ) : (
             <svg
               viewBox="0 0 1000 620"
-              className="h-full min-h-[520px] w-full touch-none cursor-grab active:cursor-grabbing"
+              className="h-full w-full touch-none cursor-grab active:cursor-grabbing"
+              onWheel={handleGraphWheel}
               onTouchStart={handleGraphTouchStart}
               onTouchMove={handleGraphTouchMove}
               onTouchEnd={handleGraphTouchEnd}
