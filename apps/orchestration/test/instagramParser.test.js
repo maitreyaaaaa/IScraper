@@ -1,9 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const JSZip = require('jszip');
 
 const { parseInstagramExport } = require('../src/services/instagramParser');
 
-test('parseInstagramExport extracts every saved post with owner, hashtags, and date', () => {
+test('parseInstagramExport extracts every saved post with owner, hashtags, and date', async () => {
   const savedPostsHtml = `
     <main>
       <div class="_a6-g">
@@ -25,7 +26,7 @@ test('parseInstagramExport extracts every saved post with owner, hashtags, and d
       </div>
     </main>`;
 
-  const result = parseInstagramExport([{ originalname: 'saved_posts.html', buffer: Buffer.from(savedPostsHtml) }]);
+  const result = await parseInstagramExport([{ originalname: 'saved_posts.html', buffer: Buffer.from(savedPostsHtml) }]);
 
   assert.equal(result.items.length, 2);
   assert.equal(result.items[0].id, 'AAA111');
@@ -40,7 +41,7 @@ test('parseInstagramExport extracts every saved post with owner, hashtags, and d
   assert.equal(result.items[1].contentType, 'post');
 });
 
-test('parseInstagramExport links collection names to saved items', () => {
+test('parseInstagramExport links collection names to saved items', async () => {
   const collectionsHtml = `
     <main>
       <div class="_a6-g">
@@ -52,7 +53,7 @@ test('parseInstagramExport links collection names to saved items', () => {
       </div>
     </main>`;
 
-  const result = parseInstagramExport([{ originalname: 'saved_collections.html', buffer: Buffer.from(collectionsHtml) }]);
+  const result = await parseInstagramExport([{ originalname: 'saved_collections.html', buffer: Buffer.from(collectionsHtml) }]);
 
   assert.equal(result.collections.length, 1);
   assert.equal(result.collections[0].name, 'AI Tools');
@@ -60,7 +61,7 @@ test('parseInstagramExport links collection names to saved items', () => {
   assert.deepEqual(result.items[0].collections, ['AI Tools']);
 });
 
-test('parseInstagramExport canonicalizes Instagram URLs before deduping', () => {
+test('parseInstagramExport canonicalizes Instagram URLs before deduping', async () => {
   const html = `
     <main>
       <div class="_a6-g"><table>
@@ -76,10 +77,57 @@ test('parseInstagramExport canonicalizes Instagram URLs before deduping', () => 
       </table></div>
     </main>`;
 
-  const result = parseInstagramExport([{ originalname: 'saved_posts.html', buffer: Buffer.from(html) }]);
+  const result = await parseInstagramExport([{ originalname: 'saved_posts.html', buffer: Buffer.from(html) }]);
 
   assert.equal(result.items.length, 2);
   assert.equal(result.items[0].url, 'https://instagram.com/reel/AAA111');
   assert.equal(result.items[0].id, 'AAA111');
   assert.equal(result.items[1].url, 'https://instagram.com/p/BBB222');
+});
+
+test('parseInstagramExport reads saved posts from a variable-root Instagram ZIP', async () => {
+  const zip = new JSZip();
+  zip.file('instagram-maitreya_iguess-2026-05-09-0WPnfek7/personal_information/profile_information.json', '{}');
+  zip.file('instagram-maitreya_iguess-2026-05-09-0WPnfek7/your_instagram_activity/saved/saved_posts.html', `
+    <main>
+      <div class="_a6-g"><table>
+        <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/reel/ZIP111/">x</a></div></td></tr>
+        <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Nested export reel #zip</td></tr>
+      </table></div>
+    </main>`);
+  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+  const result = await parseInstagramExport([{ originalname: 'instagram-export.zip', buffer }]);
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].url, 'https://instagram.com/reel/ZIP111');
+  assert.deepEqual(result.items[0].hashtags, ['zip']);
+});
+
+test('parseInstagramExport reads saved posts JSON from the Instagram saved folder', async () => {
+  const json = {
+    saved_saved_media: [
+      {
+        title: 'claude.daily',
+        string_map_data: {
+          'Saved on': {
+            href: 'https://www.instagram.com/p/JSON222/',
+            timestamp: 1737394551,
+          },
+        },
+      },
+    ],
+  };
+
+  const result = await parseInstagramExport([
+    {
+      originalname: 'instagram-user-2026/your_instagram_activity/saved/saved_posts.json',
+      buffer: Buffer.from(JSON.stringify(json)),
+    },
+  ]);
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].url, 'https://instagram.com/p/JSON222');
+  assert.equal(result.items[0].sourceAuthor, 'claude.daily');
+  assert.match(result.items[0].sourceDescription, /claude\.daily/);
 });

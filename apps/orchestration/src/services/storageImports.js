@@ -39,6 +39,12 @@ function validateStorageFile(file, { userId, maxUploadFileSizeBytes = 25 * 1024 
   };
 }
 
+function sourceTypeFromImportSource(source) {
+  if (source === 'instagram-export') return 'instagram';
+  if (source === 'pinterest-export') return 'pinterest';
+  return 'auto';
+}
+
 function storagePathBelongsToUser(storagePath, userId) {
   const normalized = String(storagePath || '').replace(/\\/g, '/');
   if (normalized.includes('..')) return false;
@@ -82,9 +88,9 @@ async function processStorageImport({ store, config, importEntry }) {
       bucket: config.importUploadBucket,
       storageFiles: claimed.storageFiles || [],
     });
-    const parsed = await parseImportExport(files);
+    const parsed = await parseImportExport(files, { sourceType: sourceTypeFromImportSource(claimed.source) });
     if (!parsed.items.length) {
-      throw new Error('No saves were found in those files. Upload Instagram saved-post HTML files or the Pinterest export ZIP.');
+      throw new Error('No saves were found in those files. Upload an Instagram export ZIP/saved_posts file or the Pinterest export ZIP/JSON/CSV.');
     }
     const items = await store.upsertImportData({ userId: claimed.userId, importId: claimed.id, parsed });
     await store.updateImportStatus(claimed.id, 'imported');

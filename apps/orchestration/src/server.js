@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const path = require('path');
 const Stripe = require('stripe');
 const JSZip = require('jszip');
-const { parseImportExport } = require('./services/exportParser');
+const { parseImportExport, normalizeImportSourceType } = require('./services/exportParser');
 const { processStorageImport, validateStorageFile } = require('./services/storageImports');
 const { enrichIntentBatch, enrichSavedItem } = require('./services/onDemandEnrichment');
 const { initialIndexingStage } = require('./services/indexingStages');
@@ -199,6 +199,22 @@ function uploadFileFilter(_req, file, callback) {
   return callback(null, true);
 }
 
+function importSourceForType(sourceType, fallback = 'user-export') {
+  if (sourceType === 'instagram') return 'instagram-export';
+  if (sourceType === 'pinterest') return 'pinterest-export';
+  return fallback;
+}
+
+function noSavesFoundMessage(sourceType) {
+  if (sourceType === 'instagram') {
+    return 'No Instagram saves were found. Upload the Instagram export ZIP, saved_posts.html, saved_posts.json, saved_collections.html, or saved_collections.json from your_instagram_activity/saved/.';
+  }
+  if (sourceType === 'pinterest') {
+    return 'No Pinterest saves were found. Upload the Pinterest export ZIP, JSON, CSV, or HTML file.';
+  }
+  return 'No saves were found in those files. Upload an Instagram export ZIP/saved_posts file or the Pinterest export ZIP/JSON/CSV.';
+}
+
 function cleanText(value, maxLength) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
@@ -266,6 +282,7 @@ function createApp({ store, config = {} }) {
   const app = express();
   const upload = multer({
     storage: multer.memoryStorage(),
+    preservePath: true,
     fileFilter: uploadFileFilter,
     limits: {
       fileSize: config.maxUploadFileSizeBytes || 25 * 1024 * 1024,
@@ -746,11 +763,12 @@ function createApp({ store, config = {} }) {
   app.post('/api/imports', importRateLimit, upload.array('exportFiles', 20), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
-    if (!files.length) return res.status(400).json({ error: 'Upload Instagram HTML files or your Pinterest export ZIP.' });
+    const sourceType = normalizeImportSourceType(req.body?.sourceType);
+    if (!files.length) return res.status(400).json({ error: 'Upload an Instagram or Pinterest export file before starting an import.' });
 
-    const parsed = await parseImportExport(files);
+    const parsed = await parseImportExport(files, { sourceType });
     if (!parsed.items.length) {
-      return res.status(400).json({ error: 'No saves were found in those files. Upload Instagram saved-post HTML files or the Pinterest export ZIP.' });
+      return res.status(400).json({ error: noSavesFoundMessage(sourceType) });
     }
     const importEntry = await store.createImport({
       userId: req.user.id,
@@ -776,6 +794,7 @@ function createApp({ store, config = {} }) {
   app.post('/api/imports/storage', importRateLimit, asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    const sourceType = normalizeImportSourceType(req.body?.sourceType);
     if (!files.length) return res.status(400).json({ error: 'Upload at least one export file before starting an import.' });
     if (files.length > 20) return res.status(400).json({ error: 'Upload at most 20 export files at once.' });
 
@@ -785,7 +804,7 @@ function createApp({ store, config = {} }) {
     }));
     const importEntry = await store.createImport({
       userId: req.user.id,
-      source: 'storage-upload',
+      source: importSourceForType(sourceType, 'storage-upload'),
       mode: 'export',
       fileNames: storageFiles.map((file) => file.name),
       status: 'queued_storage',

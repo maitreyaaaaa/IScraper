@@ -102,21 +102,48 @@ const HERO_PLATFORMS = [
 const IMPORT_STORAGE_BUCKET = import.meta.env.VITE_SUPABASE_IMPORT_BUCKET || 'instagram-assets';
 const VERCEL_SAFE_UPLOAD_BYTES = 4 * 1024 * 1024;
 const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv']);
+const INSTAGRAM_SAVED_EXPORT_RE = /(^|\/)your_instagram_activity\/saved\/saved_(posts|collections)\.(html|htm|json)$/i;
+const INSTAGRAM_SAVED_FILE_RE = /^saved_(posts|collections)\.(html|htm|json)$/i;
+
+function fileImportName(file) {
+  return String(file?.webkitRelativePath || file?.name || '').replace(/\\/g, '/');
+}
 
 function fileExtension(name = '') {
   const match = String(name).toLowerCase().match(/\.([a-z0-9]+)$/);
   return match ? `.${match[1]}` : '';
 }
 
-function validateExportFiles(files = []) {
-  if (!files.length) throw new Error('Upload Instagram HTML files or your Pinterest export ZIP.');
+function isInstagramSavedFile(file) {
+  const name = fileImportName(file);
+  const baseName = name.split('/').pop() || name;
+  return INSTAGRAM_SAVED_EXPORT_RE.test(name) || INSTAGRAM_SAVED_FILE_RE.test(baseName) || fileExtension(name) === '.zip';
+}
+
+function importCandidateFiles(files = [], sourceType = 'auto') {
+  const candidates = files.filter((file) => EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(fileImportName(file) || file.name)));
+  if (sourceType === 'instagram') return candidates.filter(isInstagramSavedFile);
+  if (sourceType === 'pinterest') return candidates;
+
+  const zipFiles = candidates.filter((file) => fileExtension(fileImportName(file) || file.name) === '.zip');
+  if (zipFiles.length) return zipFiles;
+
+  const instagramSavedFiles = candidates.filter(isInstagramSavedFile);
+  return instagramSavedFiles.length ? instagramSavedFiles : candidates;
+}
+
+function validateExportFiles(files = [], sourceType = 'auto') {
+  if (!files.length) throw new Error('Upload an Instagram ZIP/HTML/JSON file or your Pinterest export ZIP/JSON/CSV.');
   for (const file of files) {
-    if (!EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(file.name))) {
+    if (!EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(fileImportName(file) || file.name))) {
       throw new Error('Upload Instagram HTML files or Pinterest ZIP/JSON/CSV exports. The selected file is missing a supported extension.');
     }
     if (!file.size) {
       throw new Error('The selected export file is empty. Re-export from Instagram or Pinterest, then upload the .html, .zip, .json, or .csv file.');
     }
+  }
+  if (sourceType === 'instagram' && !files.some(isInstagramSavedFile)) {
+    throw new Error('For Instagram, upload the full export ZIP or the saved_posts/saved_collections HTML or JSON file from your_instagram_activity/saved/.');
   }
 }
 
@@ -146,7 +173,7 @@ async function uploadImportFilesToStorage({ files, session }) {
     if (error) throw new Error(error.message || 'Supabase Storage upload failed.');
     uploaded.push({
       path: storagePath,
-      name: file.name,
+      name: fileImportName(file) || file.name,
       type: file.type || '',
       size: file.size,
     });
@@ -771,7 +798,7 @@ function LoginPage({ onBack, onOpenApp }) {
   const steps = [
     ['1', 'Sign in', 'Use Google or email code. Use the same login every time.'],
     ['2', 'Choose a username', 'This keeps your private library tied to your account.'],
-    ['3', 'Import your saves', 'Upload Instagram HTML or Pinterest export files from the Add saves page.'],
+    ['3', 'Import your saves', 'Upload Instagram ZIP/HTML/JSON or Pinterest export files from the Add saves page.'],
   ];
 
   return (
@@ -2529,6 +2556,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
+  const [importSourceType, setImportSourceType] = useState('auto');
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
   const [credentials, setCredentials] = useState([]);
   const [credentialOptions, setCredentialOptions] = useState(null);
@@ -2851,20 +2879,24 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (!requireSignIn('import saves')) return;
     if (!requireProfile('import saves')) return;
     if (!files.length) {
-      setError('Upload Instagram HTML files or your Pinterest export ZIP.');
+      setError('Upload an Instagram ZIP/HTML/JSON file or your Pinterest export ZIP/JSON/CSV.');
       return;
     }
     setBusy(true);
     setError('');
     setNotice('');
     try {
-      validateExportFiles(files);
-      const storageFiles = shouldUseStorageUpload(files)
-        ? await uploadImportFilesToStorage({ files, session })
+      const selectedFiles = importCandidateFiles(files, importSourceType);
+      validateExportFiles(selectedFiles, importSourceType);
+      if (selectedFiles.length > 20) {
+        throw new Error('Upload at most 20 export files at once. For full exports, upload the original ZIP instead of every folder file.');
+      }
+      const storageFiles = shouldUseStorageUpload(selectedFiles)
+        ? await uploadImportFilesToStorage({ files: selectedFiles, session })
         : null;
       const result = storageFiles
-        ? await queueStorageImport({ files: storageFiles })
-        : await importInstagramExport({ files });
+        ? await queueStorageImport({ files: storageFiles, sourceType: importSourceType })
+        : await importInstagramExport({ files: selectedFiles, sourceType: importSourceType });
       if (result.importQueued) {
         setNotice('Upload received. Parsing from Supabase Storage now.');
       } else {
@@ -3155,6 +3187,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                   <UploadTab
                     files={files}
                     setFiles={setFiles}
+                    importSourceType={importSourceType}
+                    setImportSourceType={setImportSourceType}
                     linkForm={linkForm}
                     setLinkForm={setLinkForm}
                     onSaveLink={handleSaveLink}
@@ -3975,6 +4009,8 @@ function PinCard({ item, index, onClick }) {
 function UploadTab({
   files,
   setFiles,
+  importSourceType,
+  setImportSourceType,
   linkForm,
   setLinkForm,
   onSaveLink,
@@ -3988,6 +4024,11 @@ function UploadTab({
   indexingActivity,
 }) {
   const [dragging, setDragging] = useState(false);
+  const sourceOptions = [
+    { value: 'auto', label: 'Auto-detect', help: 'Best for full export ZIPs.' },
+    { value: 'instagram', label: 'Instagram', help: 'Looks in your_instagram_activity/saved/.' },
+    { value: 'pinterest', label: 'Pinterest', help: 'Reads Pinterest ZIP, JSON, CSV, or HTML.' },
+  ];
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-6 py-20">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -4092,6 +4133,30 @@ function UploadTab({
         </section>
       )}
 
+      <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+        <div className="mb-4">
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Export source</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose what you are importing</h2>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          {sourceOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setImportSourceType(option.value)}
+              className={`rounded-xl border px-4 py-3 text-left transition ${
+                importSourceType === option.value
+                  ? 'border-primary bg-primary/10 text-foreground'
+                  : 'border-white/10 bg-black text-muted-foreground hover:border-white/25 hover:text-foreground'
+              }`}
+            >
+              <span className="block text-sm font-semibold">{option.label}</span>
+              <span className="mt-1 block text-xs leading-5">{option.help}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
       <div
         onDragOver={(event) => {
           event.preventDefault();
@@ -4107,7 +4172,7 @@ function UploadTab({
       >
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
         <h3 className="mb-2 font-display text-xl font-bold">Upload your files here</h3>
-        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram HTML · Pinterest ZIP/JSON/CSV</p>
+        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV</p>
         <button
           type="button"
           onClick={onOpenHowTo}
@@ -4120,11 +4185,15 @@ function UploadTab({
           Choose export files
           <input type="file" multiple accept=".html,.htm,.zip,.json,.csv" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
         </label>
+        <label className="ml-3 inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/10 px-6 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5">
+          Choose export folder
+          <input type="file" multiple webkitdirectory="" directory="" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
+        </label>
         {files.length > 0 && (
           <div className="mt-6 space-y-2 text-left">
             {files.map((file) => (
-              <div key={file.name} className="flex items-center justify-between rounded-lg border border-white/10 bg-black px-4 py-2 text-sm">
-                <span className="font-mono">{file.name}</span>
+              <div key={`${fileImportName(file)}-${file.size}`} className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-black px-4 py-2 text-sm">
+                <span className="min-w-0 truncate font-mono">{fileImportName(file) || file.name}</span>
                 <span className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</span>
               </div>
             ))}
