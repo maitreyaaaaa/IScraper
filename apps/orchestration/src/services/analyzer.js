@@ -113,7 +113,12 @@ function buildOpenRouterAnalysisRequest({ model, item, baseAnalysis }) {
   const content = [
     'Analyze this Instagram saved item for a searchable personal knowledge base.',
     'Extract exact brands, AI tools, product names, GitHub repositories, people, topics, and tags.',
-    'Keep it useful for future search. Do not invent links or repos not present in the text.',
+    'Keep it useful for future search and for a detail drawer that explains why the save matters.',
+    'Do not copy the caption into summary or whyUseful. Do not invent links, repos, prices, people, or claims not present in the text.',
+    'summary: explain what the saved item is in 1-2 plain sentences.',
+    'whyUseful: explain the practical value, decision, workflow, or future use in 1-2 plain sentences.',
+    'visualDescription: describe what is actually visible, not the same caption again.',
+    'If the caption is mostly a list, turn it into a concise explanation and keep exact names in the arrays.',
     '',
     `URL: ${item.url || ''}`,
     `Content type: ${item.contentType || ''}`,
@@ -139,7 +144,7 @@ function buildOpenRouterAnalysisRequest({ model, item, baseAnalysis }) {
     messages: [
       {
         role: 'system',
-        content: 'You return strict JSON only. You are indexing Instagram saved content for search and deep-dive retrieval.',
+        content: 'You return strict JSON only. You are indexing Instagram saved content for search and useful deep-dive retrieval.',
       },
       { role: 'user', content },
     ],
@@ -218,6 +223,8 @@ async function analyzeMediaWithGemini({ apiKey, mediaPaths, item }) {
     const prompt = [
       'Analyze this Instagram saved item media part for a searchable personal knowledge base.',
       'If this is video, transcribe spoken audio. If this is image, OCR all visible text.',
+      'Do not copy the caption into summary or whyUseful. Explain what the save is and why it is practically useful.',
+      'Keep visualDescription focused on what is actually visible in the media.',
       'Return strict JSON only with these keys:',
       'title, summary, transcript, ocrText, visualDescription, brandsMentioned, toolsMentioned, reposMentioned, peopleMentioned, topics, tags, whyUseful.',
       `Original caption: ${item.caption || ''}`,
