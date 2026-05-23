@@ -90,6 +90,17 @@ const STATUS_META = {
 const STATUSES = ['all', 'needs_review', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 const DIRECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+const SEARCH_PREFERENCES_KEY = 'iscraper.searchPreferences';
+const DEFAULT_SEARCH_PREFERENCES = {
+  includeAi: true,
+  pageSize: 80,
+  semanticStrictness: 'balanced',
+};
+const SEMANTIC_THRESHOLD_VALUES = {
+  broad: 0.12,
+  balanced: 0.2,
+  strict: 0.32,
+};
 const HERO_PLATFORMS = [
   { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
   { name: 'X', src: '/platforms/x.svg', bg: '#fff' },
@@ -552,6 +563,28 @@ function groupProviderCredentials(credentials = []) {
     groups[key].credentials.push(credential);
     return groups;
   }, {});
+}
+
+function normalizeSearchPreferences(input = {}) {
+  return {
+    includeAi: input.includeAi !== false,
+    pageSize: [40, 80, 120].includes(Number(input.pageSize)) ? Number(input.pageSize) : DEFAULT_SEARCH_PREFERENCES.pageSize,
+    semanticStrictness: Object.prototype.hasOwnProperty.call(SEMANTIC_THRESHOLD_VALUES, input.semanticStrictness)
+      ? input.semanticStrictness
+      : DEFAULT_SEARCH_PREFERENCES.semanticStrictness,
+  };
+}
+
+function loadSearchPreferences() {
+  try {
+    return normalizeSearchPreferences(JSON.parse(window.localStorage.getItem(SEARCH_PREFERENCES_KEY) || '{}'));
+  } catch {
+    return DEFAULT_SEARCH_PREFERENCES;
+  }
+}
+
+function saveSearchPreferences(preferences) {
+  window.localStorage.setItem(SEARCH_PREFERENCES_KEY, JSON.stringify(normalizeSearchPreferences(preferences)));
 }
 
 function fileDateStamp() {
@@ -2648,6 +2681,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [statusFilter, setStatusFilter] = useState('all');
   const [collectionFilter, setCollectionFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
+  const [searchPreferences, setSearchPreferences] = useState(loadSearchPreferences);
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
@@ -2691,6 +2725,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setNotice('');
     return false;
   }, [authEnabled, profileRequired, session]);
+
+  const updateSearchPreferences = useCallback((patch) => {
+    setSearchPreferences((current) => {
+      const next = normalizeSearchPreferences({ ...current, ...patch });
+      saveSearchPreferences(next);
+      return next;
+    });
+  }, []);
 
   const loadItems = useCallback(async () => {
     const body = await getItems();
@@ -2872,8 +2914,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
           ...(collectionFilter !== 'all' ? { collection: collectionFilter } : {}),
           ...(platformFilter !== 'all' ? { platform: platformFilter } : {}),
+          semanticThreshold: SEMANTIC_THRESHOLD_VALUES[searchPreferences.semanticStrictness] || SEMANTIC_THRESHOLD_VALUES.balanced,
         };
-        const body = await searchItems(query, filters, { includeAi: true });
+        const body = await searchItems(query, filters, { includeAi: searchPreferences.includeAi });
         setItems((body.results || []).map(mapItem));
         setAiSearch(body.ai || null);
       }
@@ -3248,6 +3291,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     onSelect={openDetail}
                     onRestart={handleStartIndexing}
                     indexingActivity={indexingActivity}
+                    searchPreferences={searchPreferences}
                   />
                 )}
                 {authEnabled && !session && tab === 'graph' && (
@@ -3378,6 +3422,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             applyProfileState(nextProfile, false);
             setNotice('Profile saved.');
           }}
+          searchPreferences={searchPreferences}
+          onSearchPreferencesChange={updateSearchPreferences}
         />
       )}
     </div>
@@ -3422,7 +3468,7 @@ function IndexingReminderModal({ count, busy, onClose, onStart }) {
   );
 }
 
-function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved }) {
+function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved, searchPreferences, onSearchPreferencesChange }) {
   const [activeTab, setActiveTab] = useState('account');
   const [profileForm, setProfileForm] = useState({
     username: profile?.username || '',
@@ -3681,6 +3727,11 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     working: ['Working', 'text-primary', CheckCircle2],
     failed: ['Needs attention', 'text-destructive', AlertCircle],
   };
+  const effectiveSearchPreferences = normalizeSearchPreferences(searchPreferences);
+  const updateSearchSetting = (patch) => {
+    onSearchPreferencesChange?.(patch);
+    setMessage('Search preferences saved.');
+  };
   const activeCredentials = credentials.filter((credential) => credential.status !== 'disabled');
   const hasTextKey = activeCredentials.some((credential) => credential.purpose === 'text');
   const hasMediaKey = activeCredentials.some((credential) => credential.purpose === 'media');
@@ -3748,6 +3799,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
               ['imports', Upload, 'Import History'],
               ['enrichment', Sparkles, 'Enrichment'],
               ['privacy-export', Download, 'Privacy Export'],
+              ['search-preferences', Search, 'Search'],
               ['profile', Settings, 'Profile'],
               ['api', KeyRound, 'API Health'],
             ].map(([key, Icon, label]) => (
@@ -4014,6 +4066,77 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                 <div className="rounded-2xl border border-white/10 bg-black p-4 text-sm leading-6 text-muted-foreground">
                   API key secrets, login tokens, and admin-only fields are not included. Revealed keys are never written into this export.
                 </div>
+              </div>
+            )}
+
+            {activeTab === 'search-preferences' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Search Preferences</div>
+                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Tune search locally</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    These settings stay in this browser and do not change your saved data.
+                  </p>
+                </div>
+
+                <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <h4 className="font-display text-2xl font-bold tracking-tight">AI answer</h4>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Show the short AI answer above regular results.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => updateSearchSetting({ includeAi: !effectiveSearchPreferences.includeAi })}
+                      className={`inline-flex min-w-32 items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold ${
+                        effectiveSearchPreferences.includeAi ? 'bg-primary text-primary-foreground' : 'border border-white/10 text-muted-foreground'
+                      }`}
+                    >
+                      {effectiveSearchPreferences.includeAi ? 'On' : 'Off'}
+                    </button>
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <h4 className="font-display text-2xl font-bold tracking-tight">Results per batch</h4>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                    {[40, 80, 120].map((pageSize) => (
+                      <button
+                        key={pageSize}
+                        type="button"
+                        onClick={() => updateSearchSetting({ pageSize })}
+                        className={`rounded-xl px-4 py-3 text-sm font-semibold ${
+                          effectiveSearchPreferences.pageSize === pageSize ? 'bg-primary text-primary-foreground' : 'border border-white/10 text-muted-foreground hover:bg-white/5'
+                        }`}
+                      >
+                        {pageSize}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <h4 className="font-display text-2xl font-bold tracking-tight">Semantic matching</h4>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">Broad finds more loose matches. Strict favors closer matches.</p>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                    {[
+                      ['broad', 'Broad'],
+                      ['balanced', 'Balanced'],
+                      ['strict', 'Strict'],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => updateSearchSetting({ semanticStrictness: value })}
+                        className={`rounded-xl px-4 py-3 text-sm font-semibold ${
+                          effectiveSearchPreferences.semanticStrictness === value ? 'bg-primary text-primary-foreground' : 'border border-white/10 text-muted-foreground hover:bg-white/5'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
               </div>
             )}
 
@@ -4342,9 +4465,11 @@ function LibraryTab({
   onRestart,
   indexingActivity,
   aiSearch,
+  searchPreferences,
 }) {
   const boardRef = useRef(null);
-  const [visibleCount, setVisibleCount] = useState(80);
+  const pageSize = Number(searchPreferences?.pageSize || DEFAULT_SEARCH_PREFERENCES.pageSize);
+  const [visibleCount, setVisibleCount] = useState(pageSize);
   const activeFilters = (statusFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
   const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
   const searchableCount = items.filter((item) => item.status === 'done').length;
@@ -4387,7 +4512,7 @@ function LibraryTab({
 
         <form
           onSubmit={(event) => {
-            setVisibleCount(80);
+            setVisibleCount(pageSize);
             onSearch(event);
           }}
           className="flex min-h-16 w-full items-center gap-3 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 shadow-2xl shadow-black/40 transition focus-within:border-primary xl:max-w-xl"
@@ -4404,7 +4529,7 @@ function LibraryTab({
             <button
               type="button"
               onClick={() => {
-                setVisibleCount(80);
+                setVisibleCount(pageSize);
                 setQuery('');
               }}
               className="rounded-full p-1 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
@@ -4497,7 +4622,7 @@ function LibraryTab({
               value={statusFilter}
               options={STATUSES}
               onChange={(nextStatus) => {
-                  setVisibleCount(80);
+                  setVisibleCount(pageSize);
                   setStatusFilter(nextStatus);
                 }}
             />
@@ -4507,7 +4632,7 @@ function LibraryTab({
               value={platformFilter}
               options={platforms}
               onChange={(nextPlatform) => {
-                  setVisibleCount(80);
+                  setVisibleCount(pageSize);
                   setPlatformFilter(nextPlatform);
                 }}
             />
@@ -4517,7 +4642,7 @@ function LibraryTab({
               value={collectionFilter}
               options={collections}
               onChange={(nextCollection) => {
-                  setVisibleCount(80);
+                  setVisibleCount(pageSize);
                   setCollectionFilter(nextCollection);
                 }}
             />
@@ -4542,7 +4667,7 @@ function LibraryTab({
         <div className="mt-4 flex justify-center">
           <button
             type="button"
-            onClick={() => setVisibleCount((count) => count + 80)}
+            onClick={() => setVisibleCount((count) => count + pageSize)}
             className="rounded-full border border-white/10 bg-white/[0.04] px-6 py-3 text-sm font-semibold transition hover:border-primary hover:text-primary"
           >
             Show more saves
