@@ -221,16 +221,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       const ids = [...new Set(parsed.items.map((item) => item.id).filter(Boolean))];
       const urls = [...new Set(parsed.items.map((item) => item.url).filter(Boolean))];
       const existingKeys = new Set();
-      if (ids.length || urls.length) {
-        const filters = [];
-        if (ids.length) filters.push(`id.in.(${ids.map(escapeSupabaseListValue).join(',')})`);
-        if (urls.length) filters.push(`url.in.(${urls.map(escapeSupabaseListValue).join(',')})`);
-        const { data: existing, error: existingError } = await client
-          .from('saved_items')
-          .select('id,url')
-          .eq('user_id', userId)
-          .or(filters.join(','));
-        if (existingError) throw existingError;
+      for (const existing of await findExistingSavedItems({ client, userId, ids, urls })) {
         for (const row of existing || []) {
           existingKeys.add(`id:${row.id}`);
           existingKeys.add(`url:${row.url}`);
@@ -767,8 +758,39 @@ function mapImport(row) {
   };
 }
 
-function escapeSupabaseListValue(value) {
-  return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+function chunkArray(values, size = 50) {
+  const chunks = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
+async function findExistingSavedItems({ client, userId, ids = [], urls = [] }) {
+  const results = [];
+  const chunkSize = 40;
+
+  for (const idChunk of chunkArray(ids, chunkSize)) {
+    const { data, error } = await client
+      .from('saved_items')
+      .select('id,url')
+      .eq('user_id', userId)
+      .in('id', idChunk);
+    if (error) throw error;
+    results.push(data || []);
+  }
+
+  for (const urlChunk of chunkArray(urls, chunkSize)) {
+    const { data, error } = await client
+      .from('saved_items')
+      .select('id,url')
+      .eq('user_id', userId)
+      .in('url', urlChunk);
+    if (error) throw error;
+    results.push(data || []);
+  }
+
+  return results;
 }
 
 async function countRows(client, table, apply = null) {
