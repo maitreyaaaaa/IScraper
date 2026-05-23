@@ -3974,16 +3974,27 @@ const PIN_BACKDROPS = [
 
 const PIN_HEIGHTS = ['min-h-72', 'min-h-96', 'min-h-80', 'min-h-[28rem]', 'min-h-64', 'min-h-[24rem]'];
 
+function firstUsefulCardChip(item) {
+  return [item.collection, item.tags[0], item.topics[0], item.brands[0], item.tools[0]]
+    .map((value) => String(value || '').trim())
+    .find((value) => value && value !== 'Unsorted');
+}
+
+function shortCardText(value = '') {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
 function PinCard({ item, index, onClick }) {
   const meta = item.sourceStatus === 'needs_review'
     ? STATUS_META.needs_review
     : INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
   const Icon = meta.icon;
-  const highlight = [item.collection, item.tags[0], item.topics[0], item.brands[0], item.tools[0]].filter(Boolean).slice(0, 3);
-  const preview = item.sourceDescription || item.visual || item.summary || item.caption || 'Open this save to see what was captured.';
+  const chip = firstUsefulCardChip(item);
+  const preview = shortCardText(item.sourceDescription || item.visual || item.summary || item.caption || 'Open this save to see what was captured.');
   const backdrop = PIN_BACKDROPS[index % PIN_BACKDROPS.length];
   const height = PIN_HEIGHTS[index % PIN_HEIGHTS.length];
-  const cardTitle = item.sourceTitle || item.title;
+  const cardTitle = shortCardText(item.sourceTitle || item.title || 'Saved post');
+  const source = shortCardText(item.sourceAuthor || item.user || item.platform || 'Saved source');
 
   return (
     <button
@@ -4002,39 +4013,24 @@ function PinCard({ item, index, onClick }) {
           </span>
         </div>
         <div className="relative">
-          <div className="mb-4 flex flex-wrap gap-2">
-            {highlight.map((tag) => (
-              <span key={tag} className="rounded-full bg-black/15 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-black">
-                {tag}
-              </span>
-            ))}
-          </div>
-          <h3 className="line-clamp-4 font-display text-3xl font-bold leading-[0.95] tracking-tight md:text-4xl">{cardTitle}</h3>
+          {chip && (
+            <span className="mb-3 inline-flex max-w-full rounded-full bg-black/15 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-black">
+              <span className="truncate">{chip}</span>
+            </span>
+          )}
+          <h3 className="line-clamp-3 font-display text-3xl font-bold leading-none tracking-tight md:text-[2.35rem]">{cardTitle}</h3>
         </div>
       </div>
       <div className="p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <span className="truncate font-mono text-xs text-primary">{item.sourceAuthor || item.user}</span>
+          <span className="truncate font-mono text-xs text-primary">{source}</span>
           <span className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider ${meta.color}`}>
             <Icon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
             {item.sourceStatus === 'needs_review' ? 'Review' : meta.label}
           </span>
         </div>
-        <p className="line-clamp-3 text-sm leading-6 text-muted-foreground">{preview}</p>
-        <div className="mt-4 flex flex-wrap gap-1.5">
-          {item.tags.slice(0, 3).map((tag) => (
-            <span key={tag} className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              <Hash className="h-3 w-3" /> {tag}
-            </span>
-          ))}
-          {item.brands.slice(0, 2).map((brand) => (
-            <span key={brand} className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-primary">
-              <Tag className="h-3 w-3" /> {brand}
-            </span>
-          ))}
-        </div>
-        <div className="mt-5 flex items-center justify-between border-t border-white/10 pt-4 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-          <span>Open save</span>
+        <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">{preview}</p>
+        <div className="mt-4 flex items-center justify-end border-t border-white/10 pt-4 text-muted-foreground">
           <ExternalLink className="h-3.5 w-3.5 transition group-hover:translate-x-0.5 group-hover:text-primary" />
         </div>
       </div>
