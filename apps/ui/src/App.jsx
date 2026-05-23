@@ -152,9 +152,9 @@ function shouldUseStorageUpload(files = []) {
   return totalBytes > VERCEL_SAFE_UPLOAD_BYTES;
 }
 
-function safeStorageName(name = 'export') {
-  const cleaned = String(name).replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-  return cleaned || 'export';
+function safeStorageExtension(name = 'export') {
+  const extension = fileExtension(name);
+  return EXPORT_UPLOAD_EXTENSIONS.has(extension) ? extension : '.upload';
 }
 
 async function uploadImportFilesToStorage({ files, session }) {
@@ -162,7 +162,8 @@ async function uploadImportFilesToStorage({ files, session }) {
   const uploaded = [];
   const batchId = crypto.randomUUID();
   for (const file of files) {
-    const storagePath = `${session.user.id}/imports/${batchId}/${crypto.randomUUID()}-${safeStorageName(file.name)}`;
+    const originalName = fileImportName(file) || file.name;
+    const storagePath = `${session.user.id}/imports/${batchId}/${crypto.randomUUID()}${safeStorageExtension(originalName)}`;
     const { error } = await supabase.storage
       .from(IMPORT_STORAGE_BUCKET)
       .upload(storagePath, file, {
@@ -170,10 +171,13 @@ async function uploadImportFilesToStorage({ files, session }) {
         contentType: file.type || 'application/octet-stream',
         upsert: false,
       });
-    if (error) throw new Error(error.message || 'Supabase Storage upload failed.');
+    if (error) {
+      const message = String(error.message || 'Supabase Storage upload failed.').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      throw new Error(message || 'Supabase Storage upload failed.');
+    }
     uploaded.push({
       path: storagePath,
-      name: fileImportName(file) || file.name,
+      name: originalName,
       type: file.type || '',
       size: file.size,
     });
