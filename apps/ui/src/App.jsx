@@ -49,6 +49,7 @@ import {
   getItem,
   getItems,
   getIndexingSummary,
+  getCredits,
   getKnowledgeGraph,
   getProfile,
   getPublicFeedback,
@@ -85,6 +86,14 @@ const STATUS_META = {
   paused_missing_provider: { color: 'text-muted-foreground', icon: Pause },
 };
 
+const INDEXING_META = {
+  metadata_ready: { label: 'Metadata', color: 'text-muted-foreground', icon: FileText },
+  text_indexed: { label: 'Text indexed', color: 'text-primary', icon: CheckCircle2 },
+  visual_indexing: { label: 'Indexing', color: 'text-accent', icon: Loader2 },
+  visual_indexed: { label: 'Visual indexed', color: 'text-primary', icon: Eye },
+  deep_indexed: { label: 'Transcript ready', color: 'text-primary', icon: Sparkles },
+  index_failed: { label: 'Metadata', color: 'text-destructive', icon: AlertCircle },
+};
 const STATUSES = ['all', 'needs_review', 'done', 'analyzing', 'queued', 'downloading', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 const DIRECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
@@ -173,6 +182,33 @@ const KEY_SETUP_OPTIONS = {
       },
     ],
   },
+  glm: {
+    label: 'GLM / Z.ai key',
+    shortLabel: 'GLM / Z.ai',
+    help: 'Works for text summaries and tags only.',
+    credentials: (options) => [
+      {
+        purpose: 'text',
+        provider: 'glm',
+        model: options?.textProviders?.glm?.defaultModel || 'z-ai/glm-5.1',
+      },
+    ],
+  },
+  openai_compatible: {
+    label: 'OpenAI-compatible service',
+    shortLabel: 'OpenAI-compatible',
+    help: 'Advanced option for services that let apps use an OpenAI-style chat API.',
+    advanced: true,
+    credentials: (_options, form) => [
+      {
+        purpose: 'text',
+        provider: 'openai_compatible',
+        model: String(form.model || '').trim(),
+        baseUrl: String(form.baseUrl || '').trim(),
+        displayName: String(form.displayName || '').trim(),
+      },
+    ],
+  },
 };
 
 const PROVIDER_DISPLAY_LABELS = {
@@ -182,6 +218,32 @@ const PROVIDER_DISPLAY_LABELS = {
   anthropic: 'Anthropic',
   deepseek: 'DeepSeek',
   glm: 'Z.ai',
+  openai_compatible: 'OpenAI-compatible service',
+};
+
+const OPENAI_COMPATIBLE_NOTE = 'Advanced option. This can work if your service supports OpenAI-style chat APIs. It is usually for text summaries only unless you know your model supports images, video, or embeddings.';
+
+const PROVIDER_WARNING_COPY = {
+  anthropic: {
+    title: 'Claude is text-only here.',
+    body: 'This key can help IScraper understand text, captions, and notes. It will not help index Reels or videos. It will not read images, extract text from screenshots, or power smart search by itself.',
+  },
+  openai: {
+    title: 'OpenAI is limited in this setup.',
+    body: 'This key can help with text summaries and tags. In this setup, it does not fully handle Reels/video indexing or smart search by itself.',
+  },
+  gemini: {
+    title: 'Gemini is not the full setup.',
+    body: 'This key can help IScraper read images and some video content, plus create basic summaries. It does not power smart search by itself.',
+  },
+  deepseek: {
+    title: 'DeepSeek is mainly for text.',
+    body: 'This key can help summarize captions, notes, and saved-page text. It will not read Reels/videos or images, and it will not power smart search by itself.',
+  },
+  glm: {
+    title: 'GLM / Z.ai is mainly for text.',
+    body: 'This key can help summarize captions, notes, and saved-page text. It will not read Reels/videos or images, and it will not power smart search by itself.',
+  },
 };
 
 function normalizeStatus(status = 'queued') {
@@ -204,8 +266,20 @@ function displayStatus(status = 'queued') {
   return labels[status] || String(status).replace(/_/g, ' ');
 }
 
+function indexingStageFromStatus(status = 'queued', analysis = null) {
+  if (status === 'failed') return 'index_failed';
+  if (status === 'done') {
+    if (analysis?.transcript) return 'deep_indexed';
+    if (analysis?.visualDescription || analysis?.ocrText) return 'visual_indexed';
+    return 'text_indexed';
+  }
+  if (status === 'downloading' || status === 'analyzing') return 'visual_indexing';
+  return 'metadata_ready';
+}
+
 function mapItem(item) {
   const analysis = item.analysis || {};
+  const indexingStage = item.indexingStage || indexingStageFromStatus(item.status, analysis);
   return {
     raw: item,
     id: item.id,
@@ -233,6 +307,10 @@ function mapItem(item) {
     saved: item.savedAt || '',
     status: normalizeStatus(item.status || 'queued'),
     sourceStatus: item.status || 'queued',
+    indexingStage,
+    indexingLabel: INDEXING_META[indexingStage].label,
+    indexingError: item.indexingError || '',
+    lastEnrichmentRequestedAt: item.lastEnrichmentRequestedAt || '',
     url: item.url,
     why: analysis.whyUseful || '',
     error: item.error || '',
@@ -245,6 +323,49 @@ function unique(values) {
 
 function firstLine(value = '') {
   return String(value).split('\n').find(Boolean)?.slice(0, 90);
+}
+
+function formatUsageNumber(value = 0) {
+  return Number(value || 0).toLocaleString();
+}
+
+function formatUsageDate(value) {
+  if (!value) return 'No saves yet';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'No saves yet';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function buildDataUsage(items = [], credits = null) {
+  const searchableItems = items.filter((item) => item.sourceStatus !== 'needs_review');
+  const visualReady = items.filter((item) => ['visual_indexed', 'deep_indexed'].includes(item.indexingStage)).length;
+  const transcriptReady = items.filter((item) => item.indexingStage === 'deep_indexed').length;
+  const latestDate = items
+    .map((item) => item.raw?.createdAt || item.raw?.updatedAt || item.saved)
+    .filter(Boolean)
+    .sort((a, b) => String(b).localeCompare(String(a)))[0];
+
+  return {
+    total: items.length,
+    searchable: searchableItems.length,
+    metadataOnly: items.filter((item) => item.indexingStage === 'metadata_ready').length,
+    textIndexed: items.filter((item) => item.indexingStage === 'text_indexed').length,
+    visualReady,
+    transcriptReady,
+    indexing: items.filter((item) => item.indexingStage === 'visual_indexing').length,
+    failed: items.filter((item) => item.indexingStage === 'index_failed' || item.status === 'failed').length,
+    needsReview: items.filter((item) => item.sourceStatus === 'needs_review').length,
+    platforms: unique(items.map((item) => item.platform)).length,
+    collections: unique(items.map((item) => item.collection).filter((value) => value && value !== 'Unsorted')).length,
+    latestDate,
+    credits: {
+      freeUsed: credits?.freeItemsUsed || 0,
+      freeLimit: credits?.freeItemsLimit || 0,
+      freeRemaining: credits?.freeItemsRemaining || 0,
+      paid: credits?.paidCredits || 0,
+      available: credits?.totalAvailableCredits || 0,
+    },
+  };
 }
 
 function BrandLogo({ className = 'h-8 w-28', align = 'left' }) {
@@ -480,9 +601,19 @@ async function verifyEmailOtp(email, token) {
   return data;
 }
 
-function keyValidationMessage(setup, apiKey) {
+function keyValidationMessage(setup, apiKey, form = {}) {
   const value = String(apiKey || '').trim();
   if (!value) return 'Paste your API key first.';
+  if (setup === 'openai_compatible') {
+    if (!String(form.baseUrl || '').trim()) return 'Paste the base URL for your OpenAI-compatible service.';
+    if (!String(form.model || '').trim()) return 'Enter the model ID for your OpenAI-compatible service.';
+    try {
+      const parsed = new URL(String(form.baseUrl || '').trim());
+      if (parsed.protocol !== 'https:') return 'The base URL must start with https://.';
+    } catch {
+      return 'The base URL must be a valid URL.';
+    }
+  }
   if (setup === 'openrouter_all' && !value.startsWith('sk-or-')) return 'This does not look like an OpenRouter key. OpenRouter keys usually start with sk-or-.';
   if (setup === 'gemini' && !value.startsWith('AIza')) return 'This does not look like a Gemini API key. Gemini keys usually start with AIza.';
   if (setup === 'anthropic' && !value.startsWith('sk-ant-')) return 'This does not look like an Anthropic key. Anthropic keys usually start with sk-ant-.';
@@ -2513,7 +2644,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [credentialForm, setCredentialForm] = useState({
     setup: 'openrouter_all',
     apiKey: '',
+    displayName: '',
+    baseUrl: '',
+    model: '',
   });
+  const [credentialSaveSuccess, setCredentialSaveSuccess] = useState(false);
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [profileRequired, setProfileRequired] = useState(false);
@@ -2533,6 +2668,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const canUsePrivateActions = signedIn && (!authEnabled || !profileRequired);
   const dashboardAvatarUrl = avatarUrlForSession(session, profile);
   const dashboardInitial = initialForSession(session, profile);
+  const updateCredentialForm = useCallback((updater) => {
+    setCredentialSaveSuccess(false);
+    setCredentialForm(updater);
+  }, []);
 
   const requireSignIn = useCallback((action = 'do this') => {
     if (!authEnabled || session) return true;
@@ -2932,13 +3071,15 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (!requireSignIn('save API keys')) return;
     if (!requireProfile('save API keys')) return;
     const selectedSetup = KEY_SETUP_OPTIONS[credentialForm.setup] || KEY_SETUP_OPTIONS.openrouter_all;
-    const plannedCredentials = selectedSetup.credentials(credentialOptions);
-    const validationMessage = keyValidationMessage(credentialForm.setup, credentialForm.apiKey);
+    const plannedCredentials = selectedSetup.credentials(credentialOptions, credentialForm);
+    const validationMessage = keyValidationMessage(credentialForm.setup, credentialForm.apiKey, credentialForm);
     if (validationMessage) {
+      setCredentialSaveSuccess(false);
       setError(validationMessage);
       return;
     }
     setBusy(true);
+    setCredentialSaveSuccess(false);
     setError('');
     setNotice('');
     const savedCredentials = [];
@@ -2952,8 +3093,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       }
       await loadControls();
       setCredentialForm((current) => ({ ...current, apiKey: '' }));
-      setNotice(`${selectedSetup.shortLabel} key saved. IScraper will use our default models automatically.`);
+      setCredentialSaveSuccess(true);
+      setNotice(`${selectedSetup.shortLabel} key saved. IScraper will use it when it can.`);
     } catch (err) {
+      setCredentialSaveSuccess(false);
       setError(savedCredentials.length ? `Some key settings were saved, but one failed: ${err.message}` : err.message);
       await loadControls().catch(() => {});
     } finally {
@@ -3192,7 +3335,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                   <SettingsTab
                     credentials={credentials}
                     credentialForm={credentialForm}
-                    setCredentialForm={setCredentialForm}
+                    setCredentialForm={updateCredentialForm}
+                    credentialSaveSuccess={credentialSaveSuccess}
                     onSave={saveCredential}
                     onDelete={async (id) => {
                       setBusy(true);
@@ -3285,6 +3429,9 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     avatarUrl: profile?.avatarUrl || avatarUrlForSession(session, profile) || '',
   });
   const [credentials, setCredentials] = useState([]);
+  const [usageItems, setUsageItems] = useState([]);
+  const [credits, setCredits] = useState(null);
+  const [usageLoading, setUsageLoading] = useState(false);
   const [healthByGroup, setHealthByGroup] = useState({});
   const [revealedByGroup, setRevealedByGroup] = useState({});
   const [confirmRevealGroup, setConfirmRevealGroup] = useState(null);
@@ -3295,6 +3442,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
   const initial = initialForSession(session, profile);
   const groupedCredentials = Object.values(groupProviderCredentials(credentials));
   const email = session?.user?.email || 'Not available';
+  const dataUsage = useMemo(() => buildDataUsage(usageItems, credits), [credits, usageItems]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -3319,6 +3467,30 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => {
+        if (!cancelled) setUsageLoading(true);
+        return Promise.all([getItems(), getCredits()]);
+      })
+      .then(([itemsBody, creditsBody]) => {
+        if (cancelled) return;
+        setUsageItems((itemsBody.items || []).map(mapItem));
+        setCredits(creditsBody.credits || null);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setUsageLoading(false);
       });
     return () => {
       cancelled = true;
@@ -3424,6 +3596,12 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     working: ['Working', 'text-primary', CheckCircle2],
     failed: ['Needs attention', 'text-destructive', AlertCircle],
   };
+  const freeCreditProgress = dataUsage.credits.freeLimit
+    ? Math.min(100, Math.round((dataUsage.credits.freeUsed / dataUsage.credits.freeLimit) * 100))
+    : 0;
+  const visualCoverage = dataUsage.searchable
+    ? Math.round((dataUsage.visualReady / dataUsage.searchable) * 100)
+    : 0;
 
   return (
     <div
@@ -3452,6 +3630,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
           <nav className="flex gap-2 overflow-x-auto border-b border-white/10 p-3 md:block md:space-y-2 md:overflow-visible md:border-b-0 md:border-r">
             {[
               ['account', User, 'Account'],
+              ['usage', Database, 'Data & usage'],
               ['profile', Settings, 'Profile'],
               ['api', KeyRound, 'API Health'],
             ].map(([key, Icon, label]) => (
@@ -3492,6 +3671,119 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
                   Log out
                 </button>
+              </div>
+            )}
+
+            {activeTab === 'usage' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Data & usage</div>
+                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Your library health</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    A quick view of what is saved, what is searchable, and how much enrichment allowance remains.
+                  </p>
+                </div>
+
+                {usageLoading ? (
+                  <div className="grid min-h-56 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] text-sm text-muted-foreground">
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      Loading usage...
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        ['All saves', dataUsage.total, Brain],
+                        ['Searchable', dataUsage.searchable, Search],
+                        ['Needs review', dataUsage.needsReview, FileText],
+                        ['Enrichment issues', dataUsage.failed, AlertCircle],
+                      ].map(([label, value, Icon]) => (
+                        <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{label}</span>
+                            <Icon className="h-4 w-4 text-primary" />
+                          </div>
+                          <div className="mt-3 font-display text-3xl font-bold">{formatUsageNumber(value)}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Indexing coverage</div>
+                          <h4 className="mt-2 font-display text-2xl font-bold tracking-tight">{visualCoverage}% visually enriched</h4>
+                        </div>
+                        <span className="rounded-full border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                          {formatUsageNumber(dataUsage.indexing)} indexing now
+                        </span>
+                      </div>
+                      <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
+                        <div className="h-full rounded-full bg-primary" style={{ width: `${visualCoverage}%` }} />
+                      </div>
+                      <div className="mt-4 grid gap-3 text-sm sm:grid-cols-4">
+                        <div>
+                          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Metadata only</div>
+                          <div className="mt-1 font-semibold">{formatUsageNumber(dataUsage.metadataOnly)}</div>
+                        </div>
+                        <div>
+                          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Text indexed</div>
+                          <div className="mt-1 font-semibold">{formatUsageNumber(dataUsage.textIndexed)}</div>
+                        </div>
+                        <div>
+                          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Visual ready</div>
+                          <div className="mt-1 font-semibold">{formatUsageNumber(dataUsage.visualReady)}</div>
+                        </div>
+                        <div>
+                          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Transcript ready</div>
+                          <div className="mt-1 font-semibold">{formatUsageNumber(dataUsage.transcriptReady)}</div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <div className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+                      <section className="rounded-2xl border border-primary/25 bg-primary/5 p-5">
+                        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Allowance</div>
+                        <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
+                          <div>
+                            <div className="font-display text-3xl font-bold">{formatUsageNumber(dataUsage.credits.available)}</div>
+                            <div className="mt-1 text-sm text-muted-foreground">available enrichment credits</div>
+                          </div>
+                          <div className="text-right text-sm text-muted-foreground">
+                            {formatUsageNumber(dataUsage.credits.freeUsed)} / {formatUsageNumber(dataUsage.credits.freeLimit)} free used
+                          </div>
+                        </div>
+                        <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
+                          <div className="h-full rounded-full bg-primary" style={{ width: `${freeCreditProgress}%` }} />
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                          <span>{formatUsageNumber(dataUsage.credits.freeRemaining)} free left</span>
+                          <span>{formatUsageNumber(dataUsage.credits.paid)} paid credits</span>
+                        </div>
+                      </section>
+
+                      <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Library shape</div>
+                        <div className="mt-4 grid gap-4 text-sm">
+                          <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
+                            <span className="text-muted-foreground">Platforms</span>
+                            <span className="font-semibold">{formatUsageNumber(dataUsage.platforms)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
+                            <span className="text-muted-foreground">Collections</span>
+                            <span className="font-semibold">{formatUsageNumber(dataUsage.collections)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-muted-foreground">Latest save</span>
+                            <span className="text-right font-semibold">{formatUsageDate(dataUsage.latestDate)}</span>
+                          </div>
+                        </div>
+                      </section>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
@@ -4242,6 +4534,7 @@ function SettingsTab({
   credentials,
   credentialForm,
   setCredentialForm,
+  credentialSaveSuccess,
   onSave,
   onDelete,
   onTest,
@@ -4251,12 +4544,15 @@ function SettingsTab({
 }) {
   const selectedSetup = KEY_SETUP_OPTIONS[credentialForm.setup] || KEY_SETUP_OPTIONS.openrouter_all;
   const [providerWarning, setProviderWarning] = useState(null);
+  const providerWarningCopy = providerWarning ? PROVIDER_WARNING_COPY[providerWarning] : null;
   const groupedCredentials = credentials.reduce((groups, credential) => {
-    const key = `${credential.provider}:${credential.keyHint}`;
+    const key = `${credential.provider}:${credential.keyHint}:${credential.baseUrl || ''}:${credential.displayName || ''}`;
     if (!groups[key]) {
       groups[key] = {
         id: key,
         provider: credential.provider,
+        baseUrl: credential.baseUrl,
+        displayName: credential.displayName,
         keyHint: credential.keyHint,
         credentials: [],
       };
@@ -4300,23 +4596,6 @@ function SettingsTab({
         </p>
       </div>
 
-      <section className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
-        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Valid keys</div>
-        <h2 className="font-display text-2xl font-bold tracking-tight">Use these keys only</h2>
-        <div className="grid gap-3">
-          {[
-            ['OpenRouter', 'Recommended. One key covers summaries, image/video reading, and smart search.'],
-            ['Gemini API', 'Good for image/video reading and basic summaries. No smart semantic search by itself.'],
-            ['OpenAI / Anthropic / DeepSeek', 'Text summaries only. Not the best first setup.'],
-          ].map(([title, copy]) => (
-            <div key={title} className="rounded-xl border border-white/10 bg-black p-4">
-              <div className="font-semibold">{title}</div>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">{copy}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
       <section className="space-y-4 rounded-2xl border border-white/10 p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
@@ -4337,7 +4616,7 @@ function SettingsTab({
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Add key</div>
           <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose where your key is from</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            You do not need to choose a model. We handle that.
+            For built-in providers, IScraper chooses the model. Advanced OpenAI-compatible services need their base URL and model ID.
           </p>
         </div>
         <div className="grid gap-2 rounded-xl border border-white/10 p-1">
@@ -4346,7 +4625,7 @@ function SettingsTab({
               key={setup}
               type="button"
               onClick={() => {
-                if (setup !== 'openrouter_all' && credentialForm.setup === 'openrouter_all') {
+                if (PROVIDER_WARNING_COPY[setup] && credentialForm.setup !== setup) {
                   setProviderWarning(setup);
                   return;
                 }
@@ -4368,14 +4647,52 @@ function SettingsTab({
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm leading-6 text-muted-foreground">
           Selected: <span className="font-semibold text-foreground">{selectedSetup.label}</span>. {selectedSetup.help}
         </div>
-        <input
-          type="password"
-          value={credentialForm.apiKey}
-          onChange={(event) => setCredentialForm((current) => ({ ...current, apiKey: event.target.value }))}
-          placeholder="Paste API key"
-          required
-          className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 font-mono text-sm outline-none focus:border-primary"
-        />
+        {credentialForm.setup === 'openai_compatible' && (
+          <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <p className="text-sm leading-6 text-muted-foreground">{OPENAI_COMPATIBLE_NOTE}</p>
+            <input
+              value={credentialForm.displayName}
+              onChange={(event) => setCredentialForm((current) => ({ ...current, displayName: event.target.value }))}
+              placeholder="Service name optional, e.g. Groq or Together"
+              className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm outline-none focus:border-primary"
+            />
+            <input
+              type="url"
+              value={credentialForm.baseUrl}
+              onChange={(event) => setCredentialForm((current) => ({ ...current, baseUrl: event.target.value }))}
+              placeholder="Base URL, e.g. https://api.example.com/v1"
+              required
+              className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 font-mono text-sm outline-none focus:border-primary"
+            />
+            <input
+              value={credentialForm.model}
+              onChange={(event) => setCredentialForm((current) => ({ ...current, model: event.target.value }))}
+              placeholder="Model ID, e.g. provider/model-name"
+              required
+              className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 font-mono text-sm outline-none focus:border-primary"
+            />
+          </div>
+        )}
+        <div className={`space-y-3 rounded-xl border p-4 transition ${
+          credentialSaveSuccess ? 'border-emerald-400 bg-emerald-500/15' : 'border-white/10 bg-transparent'
+        }`}>
+          {credentialSaveSuccess && (
+            <div className="rounded-lg border border-emerald-300/40 bg-emerald-400/15 px-4 py-3 text-sm leading-6 text-emerald-100">
+              <div className="font-display text-xl font-black tracking-tight text-emerald-200">SUCCESS</div>
+              <div>Your key was saved. IScraper will use it when it can.</div>
+            </div>
+          )}
+          <input
+            type="password"
+            value={credentialForm.apiKey}
+            onChange={(event) => setCredentialForm((current) => ({ ...current, apiKey: event.target.value }))}
+            placeholder="Paste API key"
+            required
+            className={`w-full rounded-xl border bg-black px-4 py-3 font-mono text-sm outline-none ${
+              credentialSaveSuccess ? 'border-emerald-400 focus:border-emerald-300' : 'border-white/10 focus:border-primary'
+            }`}
+          />
+        </div>
         <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
           Save key
@@ -4386,9 +4703,10 @@ function SettingsTab({
         {Object.values(groupedCredentials).map((group) => (
           <div key={group.id} className="flex items-center gap-3 rounded-xl border border-white/10 p-4">
             <div className="min-w-0 flex-1">
-              <div className="font-semibold">{PROVIDER_DISPLAY_LABELS[group.provider] || group.provider}</div>
+              <div className="font-semibold">{group.displayName || PROVIDER_DISPLAY_LABELS[group.provider] || group.provider}</div>
               <div className="truncate text-xs text-muted-foreground">
                 {group.credentials.map((credential) => credential.purpose).join(', ')} - {group.keyHint}
+                {group.baseUrl ? ` - ${group.baseUrl}` : ''}
               </div>
             </div>
             <button onClick={() => onTest(group.credentials[0].id)} className="rounded-lg border border-white/10 p-2 text-primary" aria-label="Test key">
@@ -4415,13 +4733,13 @@ function SettingsTab({
         </button>
       )}
 
-      {providerWarning && (
+      {providerWarningCopy && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-orange-500/50 bg-black p-6 shadow-[0_24px_80px_rgba(0,0,0,0.65)]">
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-orange-400">Recommended setup</div>
-            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">OpenRouter is the best setup.</h2>
+          <div className="w-full max-w-md rounded-2xl border border-red-500/60 bg-black p-6 shadow-[0_24px_80px_rgba(0,0,0,0.65)]">
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-red-400">Before you continue</div>
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight text-red-100">{providerWarningCopy.title}</h2>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              OpenRouter is the simplest choice because one key can handle summaries, image/video reading, and smart search. Other keys may work, but output can be limited.
+              {providerWarningCopy.body} For the easiest full setup, use OpenRouter.
             </p>
             <div className="mt-6 grid gap-3 sm:grid-cols-2">
               <button
@@ -4430,7 +4748,7 @@ function SettingsTab({
                   setCredentialForm((current) => ({ ...current, setup: 'openrouter_all' }));
                   setProviderWarning(null);
                 }}
-                className="rounded-xl bg-orange-500 px-4 py-3 text-sm font-semibold text-black"
+                className="rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground"
               >
                 Use OpenRouter
               </button>

@@ -129,13 +129,18 @@
         payload: {
           appUrl: session.appUrl,
           lensToken: session.lensToken,
+          requestId: createRequestId(),
           body,
         },
       });
-      if (!response?.ok) throw new Error(response?.error || 'Lens search failed.');
+      if (!response?.ok) {
+        const error = new Error(response?.error || 'Lens search failed.');
+        error.requestId = response?.requestId || '';
+        throw error;
+      }
       renderResults(response.body);
     } catch (error) {
-      showPanel(error.message || 'Lens search failed.', 'Lens error');
+      showPanel(lensErrorMessage(error), 'Lens error');
     }
   }
 
@@ -209,6 +214,17 @@
     root = null;
     startPoint = null;
     box = null;
+  }
+
+  function createRequestId() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    return `ext-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function lensErrorMessage(error) {
+    const message = error.message || 'Lens search failed.';
+    if (!error.requestId || /Reference ID:/i.test(message)) return message;
+    return `${message} Reference ID: ${error.requestId}`;
   }
 
   function escapeHtml(value) {

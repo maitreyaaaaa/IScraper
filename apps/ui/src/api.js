@@ -1,21 +1,64 @@
+import { captureClientError, captureClientEvent } from './posthog'
+
 const API_BASE = import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '/api');
 let accessToken = '';
+
+export class ApiError extends Error {
+  constructor(message, { status, requestId, endpoint, action } = {}) {
+    super(requestId ? `${message} Reference ID: ${requestId}` : message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.requestId = requestId || '';
+    this.endpoint = endpoint || '';
+    this.action = action || '';
+  }
+}
 
 export function setApiAccessToken(token) {
   accessToken = token || '';
 }
 
+function createRequestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function safeAction(path, method) {
+  return `${method.toLowerCase()}:${path.replace(/\/[a-zA-Z0-9_-]{8,}/g, '/:id')}`.slice(0, 80);
+}
+
 async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
+  const method = String(options.method || 'GET').toUpperCase();
+  const requestId = options.requestId || createRequestId();
+  const action = options.action || safeAction(path, method);
+  headers.set('X-Request-ID', requestId);
+  headers.set('X-IScraper-Client-Action', action);
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  } catch {
+    const apiError = new ApiError('Network request failed.', { status: 0, requestId, endpoint: path, action });
+    captureClientError(apiError, { requestId, endpoint: path, action, status: 0 });
+    throw apiError;
+  }
+  const responseRequestId = response.headers.get('x-request-id') || requestId;
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 413) {
-      throw new Error('This file is too large. Upload files must be 20 MB or smaller.');
-    }
-    throw new Error(body.error || `Request failed: ${response.status}`);
+    const message = response.status === 413
+      ? 'This file is too large. Upload files must be 20 MB or smaller.'
+      : body.error || `Request failed: ${response.status}`;
+    const apiError = new ApiError(message, {
+      status: response.status,
+      requestId: body.requestId || responseRequestId,
+      endpoint: path,
+      action,
+    });
+    captureClientError(apiError, { requestId: apiError.requestId, endpoint: path, action, status: response.status });
+    throw apiError;
   }
+  captureClientEvent('api request completed', { requestId: responseRequestId, endpoint: path, action, status: response.status });
   return body;
 }
 
@@ -89,12 +132,24 @@ export function getKnowledgeGraph() {
 
 export async function downloadObsidianGraph() {
   const headers = new Headers();
+  const requestId = createRequestId();
+  const action = 'get:/graph/obsidian-export';
+  headers.set('X-Request-ID', requestId);
+  headers.set('X-IScraper-Client-Action', action);
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
   const response = await fetch(`${API_BASE}/graph/obsidian-export`, { headers });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Request failed: ${response.status}`);
+    const apiError = new ApiError(body.error || `Request failed: ${response.status}`, {
+      status: response.status,
+      requestId: body.requestId || response.headers.get('x-request-id') || requestId,
+      endpoint: '/graph/obsidian-export',
+      action,
+    });
+    captureClientError(apiError, { requestId: apiError.requestId, endpoint: '/graph/obsidian-export', action, status: response.status });
+    throw apiError;
   }
+  captureClientEvent('api request completed', { requestId: response.headers.get('x-request-id') || requestId, endpoint: '/graph/obsidian-export', action, status: response.status });
   return response.blob();
 }
 

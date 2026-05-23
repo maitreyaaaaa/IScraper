@@ -11,9 +11,6 @@
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
-    "@opentelemetry/exporter-logs-otlp-http": "^0.217.0",
-    "@opentelemetry/resources": "^2.7.1",
-    "@opentelemetry/sdk-logs": "^0.217.0",
     "@radix-ui/react-popover": "^1.1.15",
     "@react-three/fiber": "^9.6.1",
     "@supabase/supabase-js": "^2.87.1",

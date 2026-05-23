@@ -2,7 +2,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'ISCRAPER_LENS_SEARCH') {
     lensSearch(message.payload)
       .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, error: error.message || 'Lens search failed.' }));
+      .catch((error) => sendResponse({ ok: false, error: error.message || 'Lens search failed.', requestId: error.requestId || message.payload?.requestId || '' }));
     return true;
   }
 
@@ -30,6 +30,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function lensSearch(payload = {}) {
   const appUrl = String(payload.appUrl || '').replace(/\/$/, '');
   const token = String(payload.lensToken || '').trim();
+  const requestId = payload.requestId || createRequestId();
   if (!safeHttpUrl(appUrl)) throw new Error('Set a valid IScraper app URL first.');
   if (!token) throw new Error('Connect your Lens token first.');
 
@@ -37,13 +38,20 @@ async function lensSearch(payload = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-Request-ID': requestId,
+      'X-IScraper-Client-Action': 'extension:lens_search',
       'X-IScraper-Extension-Token': token,
     },
     body: JSON.stringify(payload.body || {}),
   });
+  const responseRequestId = response.headers.get('x-request-id') || requestId;
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `Lens search failed: ${response.status}`);
-  return { ok: true, body };
+  if (!response.ok) {
+    const error = new Error(body.error || `Lens search failed: ${response.status}`);
+    error.requestId = body.requestId || responseRequestId;
+    throw error;
+  }
+  return { ok: true, body, requestId: responseRequestId };
 }
 
 function safeHttpUrl(value) {
@@ -53,4 +61,9 @@ function safeHttpUrl(value) {
   } catch {
     return '';
   }
+}
+
+function createRequestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `ext-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }

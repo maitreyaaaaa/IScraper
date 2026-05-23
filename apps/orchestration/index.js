@@ -2,6 +2,7 @@ const { getConfig } = require('./src/config');
 const { createApp } = require('./src/server');
 const { createLocalStore } = require('./src/stores/localStore');
 const { createSupabaseStore } = require('./src/stores/supabaseStore');
+const { createObservability } = require('./src/services/observability');
 
 const config = getConfig();
 const store =
@@ -12,9 +13,13 @@ const store =
       })
     : createLocalStore({ dataPath: config.dataPath });
 
-const app = createApp({ store, config });
+const observability = createObservability(config);
+const app = createApp({ store, config, observability });
 
 app.listen(config.port, () => {
-  console.log(`Instagram Brain API running at http://localhost:${config.port}`);
-  console.log(`Storage mode: ${config.storageMode}`);
+  observability.info('server started', {
+    port: config.port,
+    storageMode: config.storageMode,
+    posthogEnabled: observability.enabled,
+  });
 });

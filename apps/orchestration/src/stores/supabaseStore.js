@@ -1,6 +1,13 @@
 const { createClient } = require('@supabase/supabase-js');
 const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
-const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/providers');
+const {
+  OPENAI_COMPATIBLE_PROVIDER,
+  assertMediaModelAllowed,
+  assertOpenAICompatibleConfig,
+  assertProviderPurpose,
+  normalizeOpenAICompatibleBaseUrl,
+  normalizeOpenAICompatibleDisplayName,
+} = require('../services/providers');
 const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
@@ -424,9 +431,20 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async getIndexingSummary(userId) {
       const statuses = ['queued', 'downloading', 'analyzing', 'done', 'failed', ...PAUSED_JOB_STATUSES];
-      const byStatus = {};
-      for (const status of statuses) {
-        byStatus[status] = await countRows(client, 'processing_jobs', (query) => query.eq('user_id', userId).eq('status', status));
+      const byStatus = Object.fromEntries(statuses.map((status) => [status, 0]));
+      const { data: jobs, error } = await client
+        .from('processing_jobs')
+        .select('status, lease_expires_at')
+        .eq('user_id', userId)
+        .in('status', statuses)
+        .limit(10000);
+      if (error) throw error;
+      const nowMs = Date.now();
+      for (const job of jobs || []) {
+        const activeExpired = ['downloading', 'analyzing'].includes(job.status)
+          && (!job.lease_expires_at || Date.parse(job.lease_expires_at) <= nowMs);
+        const status = activeExpired ? 'queued' : job.status;
+        byStatus[status] = (byStatus[status] || 0) + 1;
       }
       const needsReview = await countRows(client, 'saved_items', (query) => query.eq('user_id', userId).eq('status', 'needs_review'));
       const paused = PAUSED_JOB_STATUSES.reduce((total, status) => total + (byStatus[status] || 0), 0);
@@ -780,10 +798,13 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data.map(mapCredential).map(publicCredential);
     },
-    async saveProviderCredential(userId, { provider, purpose, model, apiKey, encryptionKey, status = 'active', isPreferred = true }) {
+    async saveProviderCredential(userId, { provider, purpose, model, apiKey, encryptionKey, status = 'active', isPreferred = true, baseUrl = '', displayName = '' }) {
       assertProviderPurpose(provider, purpose);
       if (purpose === 'media' && provider === 'openrouter') assertMediaModelAllowed(model);
+      assertOpenAICompatibleConfig({ provider, purpose, model, baseUrl });
       if (!apiKey) throw new Error('API key is required.');
+      const normalizedBaseUrl = provider === OPENAI_COMPATIBLE_PROVIDER ? normalizeOpenAICompatibleBaseUrl(baseUrl) : null;
+      const normalizedDisplayName = provider === OPENAI_COMPATIBLE_PROVIDER ? normalizeOpenAICompatibleDisplayName(displayName) : null;
 
       if (isPreferred) {
         await client
@@ -799,6 +820,8 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         provider,
         purpose,
         model,
+        base_url: normalizedBaseUrl,
+        display_name: normalizedDisplayName,
         encrypted_key: encryptSecret(apiKey, encryptionKey),
         key_hint: maskSecret(apiKey),
         status,
@@ -1118,6 +1141,8 @@ function mapCredential(row) {
     provider: row.provider,
     purpose: row.purpose,
     model: row.model,
+    baseUrl: row.base_url || null,
+    displayName: row.display_name || null,
     encryptedKey: row.encrypted_key,
     keyHint: row.key_hint,
     status: row.status,

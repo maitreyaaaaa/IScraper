@@ -67,6 +67,8 @@ function saveUrlFor(tab, appUrl) {
     platform: detectPlatform(tab.url || ''),
     note: noteEl.value || '',
     autoSave: '1',
+    source: 'extension',
+    clientActionId: createRequestId(),
   });
   return `${appUrl}/#app?${params.toString()}`;
 }
@@ -158,3 +160,8 @@ saveTokenEl.addEventListener('click', async () => {
 init().catch((error) => {
   statusEl.textContent = error.message || 'Could not read current tab.';
 });
+
+function createRequestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `ext-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}

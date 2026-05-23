@@ -2,6 +2,7 @@ const { getConfig } = require('../apps/orchestration/src/config');
 const { createApp } = require('../apps/orchestration/src/server');
 const { createLocalStore } = require('../apps/orchestration/src/stores/localStore');
 const { createSupabaseStore } = require('../apps/orchestration/src/stores/supabaseStore');
+const { createObservability } = require('../apps/orchestration/src/services/observability');
 
 const config = getConfig();
 const store =
@@ -12,4 +13,4 @@ const store =
       })
     : createLocalStore({ dataPath: config.dataPath });
 
-module.exports = createApp({ store, config });
+module.exports = createApp({ store, config, observability: createObservability(config) });

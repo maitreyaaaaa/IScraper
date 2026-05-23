@@ -7,6 +7,8 @@ const { pickNextProcessableJob } = require('./queue');
 const { downloadInstagramMedia } = require('./downloader');
 const { DEFAULT_APP_MEDIA_MODEL } = require('./providers');
 
+const AI_STEP_TIMEOUT_MS = 90 * 1000;
+
 async function analyzeItem({ item, mediaPaths = [], geminiApiKey = null, openRouterApiKey = null, openRouterModel = 'deepseek/deepseek-v4-pro' }) {
   let baseAnalysis = null;
   if (mediaPaths.length && geminiApiKey) {
@@ -173,19 +175,27 @@ async function processOneJob({
     await store.setItemStatus?.(userId, item.id, 'analyzing', null);
 
     const mediaAnalysis = analysisPlan.mediaCredential && mediaPaths.length
-      ? await analyzeMediaWithCredential({
-          credential: analysisPlan.mediaCredential,
-          mediaPaths,
-          item,
-        })
+      ? await withTimeout(
+        analyzeMediaWithCredential({
+            credential: analysisPlan.mediaCredential,
+            mediaPaths,
+            item,
+          }),
+        AI_STEP_TIMEOUT_MS,
+        'Media indexing timed out.',
+      )
       : null;
     const baseAnalysis = buildTextBaseAnalysis(item, mediaAnalysis);
     const textAnalysis = analysisPlan.textCredential
-      ? await analyzeTextWithCredential({
-          credential: analysisPlan.textCredential,
-          item,
-          baseAnalysis,
-        })
+      ? await withTimeout(
+        analyzeTextWithCredential({
+            credential: analysisPlan.textCredential,
+            item,
+            baseAnalysis,
+          }),
+        AI_STEP_TIMEOUT_MS,
+        'Text indexing timed out.',
+      )
       : null;
     const analysis = mergeAnalysis(baseAnalysis, textAnalysis);
     await store.saveAnalysis(userId, item.id, analysis);
@@ -201,13 +211,17 @@ async function processOneJob({
     if (analysisPlan.embeddingCredential && typeof store.saveEmbedding === 'function') {
       try {
         const content = buildEmbeddingContent(item, analysis);
-        const embedding = await createOpenRouterEmbedding({
-          apiKey: analysisPlan.embeddingCredential.apiKey,
-          model: analysisPlan.embeddingCredential.model || openRouterEmbeddingModel,
-          input: content,
-          dimensions: embeddingDimensions,
-          inputType: 'search_document',
-        });
+        const embedding = await withTimeout(
+          createOpenRouterEmbedding({
+            apiKey: analysisPlan.embeddingCredential.apiKey,
+            model: analysisPlan.embeddingCredential.model || openRouterEmbeddingModel,
+            input: content,
+            dimensions: embeddingDimensions,
+            inputType: 'search_document',
+          }),
+          AI_STEP_TIMEOUT_MS,
+          'Search embedding timed out.',
+        );
         if (embedding) {
           await store.saveEmbedding(userId, item.id, {
             content,
@@ -356,6 +370,14 @@ function pauseError(status, message) {
   const error = new Error(message);
   error.pauseStatus = status;
   return error;
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
 async function pauseJob({ store, userId, item, job, status, message }) {

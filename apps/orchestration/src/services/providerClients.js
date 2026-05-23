@@ -9,7 +9,7 @@ const {
   parseOpenRouterAnalysisResponse,
 } = require('./analyzer');
 const { createOpenRouterEmbedding } = require('./embeddings');
-const { assertMediaModelAllowed } = require('./providers');
+const { OPENAI_COMPATIBLE_PROVIDER, assertMediaModelAllowed, openAICompatibleChatEndpoint } = require('./providers');
 
 const OPENAI_COMPATIBLE_TEXT_ENDPOINTS = {
   openai: 'https://api.openai.com/v1/chat/completions',
@@ -48,6 +48,17 @@ async function analyzeTextWithCredential({ credential, item, baseAnalysis, fetch
       apiKey: credential.apiKey,
       model: credential.model,
       endpoint: OPENAI_COMPATIBLE_TEXT_ENDPOINTS[credential.provider],
+      item,
+      baseAnalysis,
+      fetchImpl,
+    });
+  }
+
+  if (credential.provider === OPENAI_COMPATIBLE_PROVIDER) {
+    return analyzeTextWithOpenAICompatible({
+      apiKey: credential.apiKey,
+      model: credential.model,
+      endpoint: openAICompatibleChatEndpoint(credential.baseUrl),
       item,
       baseAnalysis,
       fetchImpl,
@@ -97,6 +108,16 @@ async function testProviderCredential({ credential, fetchImpl = fetch }) {
       apiKey: credential.apiKey,
       model: credential.model,
       endpoint: OPENAI_COMPATIBLE_TEXT_ENDPOINTS[credential.provider],
+      fetchImpl,
+    });
+    return true;
+  }
+
+  if (credential.provider === OPENAI_COMPATIBLE_PROVIDER) {
+    await simpleOpenAICompatibleRequest({
+      apiKey: credential.apiKey,
+      model: credential.model,
+      endpoint: openAICompatibleChatEndpoint(credential.baseUrl),
       fetchImpl,
     });
     return true;

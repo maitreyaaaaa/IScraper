@@ -22,6 +22,7 @@
     "express": "^5.2.1",
     "jszip": "^3.10.1",
     "multer": "^2.1.1",
+    "posthog-node": "^5.35.1",
     "stripe": "^22.1.1",
     "yt-dlp-exec": "^1.0.2"
   }

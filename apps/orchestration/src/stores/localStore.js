@@ -3,7 +3,14 @@ const path = require('path');
 const { createJobsForImport, hasActiveLease, isReclaimableJob, isRestartableJob, PAUSED_JOB_STATUSES } = require('../services/queue');
 const { searchItems } = require('../services/analyzer');
 const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
-const { assertMediaModelAllowed, assertProviderPurpose } = require('../services/providers');
+const {
+  OPENAI_COMPATIBLE_PROVIDER,
+  assertMediaModelAllowed,
+  assertOpenAICompatibleConfig,
+  assertProviderPurpose,
+  normalizeOpenAICompatibleBaseUrl,
+  normalizeOpenAICompatibleDisplayName,
+} = require('../services/providers');
 const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
@@ -555,10 +562,12 @@ function createLocalStore({ dataPath }) {
     },
 
     getIndexingSummary(userId) {
+      const currentTime = new Date();
       const jobs = state.jobs.filter((job) => job.userId === userId);
       const items = state.items.filter((item) => item.userId === userId);
       const byStatus = jobs.reduce((stats, job) => {
-        stats[job.status || 'unknown'] = (stats[job.status || 'unknown'] || 0) + 1;
+        const status = staleActiveJobStatus(job, currentTime);
+        stats[status] = (stats[status] || 0) + 1;
         return stats;
       }, {});
       const needsReview = items.filter((item) => item.status === 'needs_review').length;
@@ -894,10 +903,13 @@ function createLocalStore({ dataPath }) {
         .map(publicCredential);
     },
 
-    saveProviderCredential(userId, { provider, purpose, model, apiKey, encryptionKey, status = 'active', isPreferred = true }) {
+    saveProviderCredential(userId, { provider, purpose, model, apiKey, encryptionKey, status = 'active', isPreferred = true, baseUrl = '', displayName = '' }) {
       assertProviderPurpose(provider, purpose);
       if (purpose === 'media' && provider === 'openrouter') assertMediaModelAllowed(model);
+      assertOpenAICompatibleConfig({ provider, purpose, model, baseUrl });
       if (!apiKey) throw new Error('API key is required.');
+      const normalizedBaseUrl = provider === OPENAI_COMPATIBLE_PROVIDER ? normalizeOpenAICompatibleBaseUrl(baseUrl) : null;
+      const normalizedDisplayName = provider === OPENAI_COMPATIBLE_PROVIDER ? normalizeOpenAICompatibleDisplayName(displayName) : null;
 
       if (isPreferred) {
         state.providerCredentials
@@ -920,6 +932,8 @@ function createLocalStore({ dataPath }) {
       };
       Object.assign(row, {
         model,
+        baseUrl: normalizedBaseUrl,
+        displayName: normalizedDisplayName,
         encryptedKey: encryptSecret(apiKey, encryptionKey),
         keyHint: maskSecret(apiKey),
         status,
@@ -962,6 +976,13 @@ function createLocalStore({ dataPath }) {
       return state;
     },
   };
+}
+
+function staleActiveJobStatus(job, currentTime = new Date()) {
+  if (['downloading', 'analyzing'].includes(job.status) && !hasActiveLease(job, currentTime)) {
+    return 'queued';
+  }
+  return job.status || 'unknown';
 }
 
 module.exports = {

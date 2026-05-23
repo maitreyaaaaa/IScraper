@@ -64,6 +64,14 @@ function getConfig() {
     stripeSecretKey: process.env.STRIPE_SECRET_KEY,
     stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
     enableCreditCheckout: process.env.ENABLE_CREDIT_CHECKOUT === 'true',
+    posthogProjectKey: process.env.POSTHOG_PROJECT_KEY,
+    posthogHost: process.env.POSTHOG_HOST || 'https://us.i.posthog.com',
+    posthogEnabled: process.env.POSTHOG_ENABLED !== 'false',
+    posthogDebug: process.env.POSTHOG_DEBUG === 'true',
+    posthogFlushImmediate: process.env.POSTHOG_FLUSH_IMMEDIATE
+      ? process.env.POSTHOG_FLUSH_IMMEDIATE === 'true'
+      : process.env.VERCEL === '1',
+    logLevel: process.env.LOG_LEVEL || 'info',
   };
 }
 

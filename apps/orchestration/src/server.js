@@ -15,6 +15,7 @@ const { buildKnowledgeGraph, buildObsidianFiles } = require('./services/graph');
 const { createDeepSeekSearchAnswer } = require('./services/aiSearch');
 const { parseManualLinkPayload } = require('./services/linkSaver');
 const { validateProfileInput } = require('./services/profiles');
+const { contextForRequest, createObservability } = require('./services/observability');
 const {
   DEFAULT_EXTENSION_SCOPES,
   defaultExtensionExpiry,
@@ -173,7 +174,18 @@ function createRateLimiter({ windowMs, max, name, namespace = 'app' }) {
 
     if (bucket.count > max) {
       res.setHeader('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)));
-      return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+      req.app?.locals?.observability?.warn('rate limit exceeded', contextForRequest(req, {
+        limiter: name,
+        windowMs,
+        max,
+      }));
+      req.app?.locals?.observability?.capture('rate limit exceeded', contextForRequest(req, {
+        limiter: name,
+        windowMs,
+        max,
+        statusCode: 429,
+      }), req.user?.id || 'server');
+      return res.status(429).json({ error: 'Too many requests. Please try again later.', requestId: req.context?.requestId });
     }
 
     if (rateBuckets.size > 5000) {
@@ -570,7 +582,15 @@ async function runSearch({ store, config, userId, query, filters = {} }) {
   return store.search(userId, query, filters, { queryEmbedding });
 }
 
-function createApp({ store, config = {} }) {
+function captureWorkflow(req, event, properties = {}) {
+  req.app?.locals?.observability?.capture(event, contextForRequest(req, properties), req.user?.id || properties.userId || 'server');
+}
+
+function warnWorkflow(req, event, properties = {}) {
+  req.app?.locals?.observability?.warn(event, contextForRequest(req, properties));
+}
+
+function createApp({ store, config = {}, observability = createObservability(config) }) {
   const app = express();
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -637,11 +657,14 @@ function createApp({ store, config = {} }) {
       scopeCount: scopes.length,
     });
   });
+  app.locals.observability = observability;
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
+  app.use(observability.requestMiddleware);
   app.use(securityHeaders);
   app.use(generalRateLimit);
   app.use(cors({
+    exposedHeaders: ['X-Request-ID'],
     origin(origin, callback) {
       if (!origin || !allowedOrigins.size || allowedOrigins.has(String(origin).replace(/\/$/, ''))) {
         return callback(null, true);
@@ -660,6 +683,7 @@ function createApp({ store, config = {} }) {
     try {
       event = stripe.webhooks.constructEvent(req.body, req.header('stripe-signature'), config.stripeWebhookSecret);
     } catch (_error) {
+      warnWorkflow(req, 'stripe webhook rejected', { reason: 'invalid_signature', statusCode: 400 });
       return res.status(400).json({ error: 'Invalid Stripe signature.' });
     }
 
@@ -669,6 +693,10 @@ function createApp({ store, config = {} }) {
         purchaseId: session.metadata?.purchaseId,
         checkoutSessionId: session.id,
         paymentIntentId: typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id,
+      });
+      captureWorkflow(req, 'stripe checkout completed', {
+        checkoutSessionId: session.id,
+        purchaseId: session.metadata?.purchaseId,
       });
     }
 
@@ -712,9 +740,11 @@ function createApp({ store, config = {} }) {
     const validLength = Buffer.byteLength(password) === Buffer.byteLength(expected);
     const validPassword = validLength && crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expected));
     if (!email || !adminEmails.has(email) || !validPassword) {
+      warnWorkflow(req, 'admin login rejected', { statusCode: 403 });
       return res.status(403).json({ error: 'Invalid admin email or password.' });
     }
 
+    captureWorkflow(req, 'admin login completed', { actorType: 'password_admin' });
     return res.json({ admin: { email } });
   }));
 
@@ -752,6 +782,7 @@ function createApp({ store, config = {} }) {
       adminActor: adminUser.email || 'admin',
     });
     if (!user) return res.status(404).json({ error: 'User not found.' });
+    captureWorkflow(req, 'admin user blocked', { targetUserId: req.params.userId, actorType: 'admin' });
     res.json({ user });
   }));
 
@@ -765,6 +796,7 @@ function createApp({ store, config = {} }) {
       adminActor: adminUser.email || 'admin',
     });
     if (!user) return res.status(404).json({ error: 'User not found.' });
+    captureWorkflow(req, 'admin user unblocked', { targetUserId: req.params.userId, actorType: 'admin' });
     res.json({ user });
   }));
 
@@ -791,6 +823,7 @@ function createApp({ store, config = {} }) {
     if (typeof store.setFeedbackStatus !== 'function') return res.status(501).json({ error: 'Feedback moderation is not available.' });
     const feedback = await store.setFeedbackStatus(req.params.id, 'hidden');
     if (!feedback) return res.status(404).json({ error: 'Feedback not found.' });
+    captureWorkflow(req, 'admin feedback moderated', { feedbackId: req.params.id, status: 'hidden' });
     res.json({ feedback });
   }));
 
@@ -799,6 +832,7 @@ function createApp({ store, config = {} }) {
     if (typeof store.setFeedbackStatus !== 'function') return res.status(501).json({ error: 'Feedback moderation is not available.' });
     const feedback = await store.setFeedbackStatus(req.params.id, 'visible');
     if (!feedback) return res.status(404).json({ error: 'Feedback not found.' });
+    captureWorkflow(req, 'admin feedback moderated', { feedbackId: req.params.id, status: 'visible' });
     res.json({ feedback });
   }));
 
@@ -819,6 +853,7 @@ function createApp({ store, config = {} }) {
     if (!reason) return res.status(400).json({ error: 'reason is required.' });
 
     const result = await store.addAdminCreditAdjustment({ userId, amount, reason, adminActor });
+    captureWorkflow(req, 'admin credits adjusted', { targetUserId: userId, amount, actorType: 'admin' });
     return res.status(201).json(result);
   }));
 
@@ -856,6 +891,12 @@ function createApp({ store, config = {} }) {
     if (typeof store.recordLensSearchEvent === 'function') {
       await store.recordLensSearchEvent({ userId: user.id, queryType: type, resultCount: results.length });
     }
+    captureWorkflow(req, 'lens search completed', {
+      userId: user.id,
+      queryType: type,
+      resultCount: results.length,
+      hasImageAnalysis: Boolean(imageAnalysis),
+    });
 
     return res.json({
       query,
@@ -924,6 +965,7 @@ function createApp({ store, config = {} }) {
       importId = importEntry.id;
       item = await store.updateSavedItem(req.user.id, item.id, { importId });
     }
+    captureWorkflow(req, 'review item approved', { itemId: item.id, importId });
 
     const jobs = item.status === 'done' ? [] : await store.createJobs({ userId: req.user.id, importId, items: [item] });
     let indexing = null;
@@ -1002,6 +1044,7 @@ function createApp({ store, config = {} }) {
         metadata: { email: req.user.email },
       });
     }
+    captureWorkflow(req, 'sign in activity recorded', {});
     res.json({ ok: true });
   }));
 
@@ -1011,6 +1054,7 @@ function createApp({ store, config = {} }) {
       avatarUrl: req.body?.avatarUrl,
     });
     const profile = await store.saveProfile(req.user.id, input);
+    captureWorkflow(req, 'profile saved', { hasAvatar: Boolean(profile.avatarUrl) });
     res.json({ profile });
   }));
 
@@ -1029,6 +1073,7 @@ function createApp({ store, config = {} }) {
       scopes: DEFAULT_EXTENSION_SCOPES,
       expiresAt: defaultExtensionExpiry(),
     });
+    captureWorkflow(req, 'extension token created', { extensionTokenId: token.id, scopeCount: DEFAULT_EXTENSION_SCOPES.length });
     return res.status(201).json({ token, secret: rawToken });
   }));
 
@@ -1036,12 +1081,15 @@ function createApp({ store, config = {} }) {
     if (typeof store.revokeExtensionToken !== 'function') return res.status(501).json({ error: 'Extension tokens are not available.' });
     const revoked = await store.revokeExtensionToken(req.user.id, req.params.id);
     if (!revoked) return res.status(404).json({ error: 'Extension token not found.' });
+    captureWorkflow(req, 'extension token revoked', { extensionTokenId: req.params.id });
     return res.json({ revoked: true });
   }));
 
   app.get('/api/graph', asyncRoute(async (req, res) => {
     const items = await store.getItems(req.user.id);
-    res.json({ graph: buildKnowledgeGraph(items) });
+    const graph = buildKnowledgeGraph(items);
+    captureWorkflow(req, 'knowledge graph built', { itemCount: items.length, nodeCount: graph.nodes.length, linkCount: graph.links.length });
+    res.json({ graph });
   }));
 
   app.get('/api/graph/obsidian-export', asyncRoute(async (req, res) => {
@@ -1055,6 +1103,7 @@ function createApp({ store, config = {} }) {
     const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="iscraper-obsidian-graph.zip"');
+    captureWorkflow(req, 'obsidian graph exported', { itemCount: items.length, fileCount: files.length });
     res.send(buffer);
   }));
 
@@ -1097,6 +1146,7 @@ function createApp({ store, config = {} }) {
     });
 
     await store.updateCreditPurchaseSession({ purchaseId: purchase.id, checkoutSessionId: session.id });
+    captureWorkflow(req, 'credit checkout created', { purchaseId: purchase.id, checkoutSessionId: session.id, packageId: packageEntry.id, credits: packageEntry.credits });
     return res.json({ url: session.url, sessionId: session.id });
   }));
 
@@ -1113,14 +1163,18 @@ function createApp({ store, config = {} }) {
       purpose: req.body.purpose,
       model: req.body.model,
       apiKey: req.body.apiKey,
+      baseUrl: req.body.baseUrl,
+      displayName: req.body.displayName,
       encryptionKey: config.credentialEncryptionKey,
     });
+    captureWorkflow(req, 'provider credential saved', { provider: credential.provider, purpose: credential.purpose, model: credential.model, displayName: credential.displayName, credentialId: credential.id });
     res.json({ credential });
   }));
 
   app.delete('/api/provider-credentials/:id', asyncRoute(async (req, res) => {
     const deleted = await store.deleteProviderCredential(req.user.id, req.params.id);
     if (!deleted) return res.status(404).json({ error: 'Credential not found.' });
+    captureWorkflow(req, 'provider credential deleted', { credentialId: req.params.id });
     return res.json({ deleted: true });
   }));
 
@@ -1128,6 +1182,7 @@ function createApp({ store, config = {} }) {
     const credential = await store.getProviderCredential(req.user.id, req.params.id, config.credentialEncryptionKey);
     if (!credential) return res.status(404).json({ error: 'Credential not found.' });
     await testProviderCredential({ credential });
+    captureWorkflow(req, 'provider credential tested', { credentialId: req.params.id, provider: credential.provider, purpose: credential.purpose, model: credential.model });
     return res.json({ ok: true, provider: credential.provider, purpose: credential.purpose, model: credential.model });
   }));
 
@@ -1152,6 +1207,13 @@ function createApp({ store, config = {} }) {
         shouldDownload: false,
       });
     }
+    captureWorkflow(req, 'import completed', {
+      importId: result.import.id,
+      source: result.import.source,
+      fileCount: files.length,
+      newItemCount: result.newItemCount,
+      queuedJobCount: result.queuedJobCount,
+    });
     res.json(result);
   }));
 
@@ -1235,6 +1297,13 @@ function createApp({ store, config = {} }) {
         shouldDownload: false,
       });
     }
+    captureWorkflow(req, 'storage import completed', {
+      importId: result.import.id,
+      source: result.import.source,
+      fileCount: storageFiles.length,
+      newItemCount: result.newItemCount,
+      queuedJobCount: result.queuedJobCount,
+    });
     res.json(result);
   }));
 
@@ -1260,6 +1329,11 @@ function createApp({ store, config = {} }) {
         shouldDownload: false,
       });
     }
+    captureWorkflow(req, 'manual save created', {
+      importId: importEntry.id,
+      newItemCount: items.length,
+      initialStatus,
+    });
 
     res.status(201).json({
       import: importEntry,
@@ -1324,13 +1398,19 @@ function createApp({ store, config = {} }) {
         ai = { error: 'AI answer is unavailable right now. Showing regular search results.' };
       }
     }
+    captureWorkflow(req, 'search completed', { resultCount: results.length, hasFilters: Boolean(Object.keys(req.body.filters || {}).length), includeAi: Boolean(req.body.includeAi) });
     res.json({ results, ai });
   }));
 
-  app.use((error, _req, res, _next) => {
+  app.use((error, req, res, _next) => {
     const statusCode = error.statusCode || (error instanceof multer.MulterError || /Upload Instagram/.test(error.message) ? 400 : 500);
-    if (statusCode >= 500) console.error(error);
-    res.status(statusCode).json({ error: error.message });
+    const properties = contextForRequest(req, { statusCode });
+    if (statusCode >= 500) {
+      req.app?.locals?.observability?.captureError(error, properties, req.user?.id || 'server');
+    } else {
+      warnWorkflow(req, 'api request rejected', { statusCode, errorCategory: error.name || 'request_error' });
+    }
+    res.status(statusCode).json({ error: error.message, requestId: req.context?.requestId });
   });
 
   return app;

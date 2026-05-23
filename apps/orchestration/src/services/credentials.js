@@ -39,6 +39,8 @@ function publicCredential(row) {
     provider: row.provider,
     purpose: row.purpose,
     model: row.model,
+    baseUrl: row.baseUrl || null,
+    displayName: row.displayName || null,
     keyHint: row.keyHint,
     status: row.status,
     isPreferred: Boolean(row.isPreferred),
