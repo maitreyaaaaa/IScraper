@@ -257,12 +257,18 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         last_enrichment_requested_at: null,
       }));
       if (!items.length) return [];
-      const { data, error } = await insertSavedItemsWithSchemaFallback(client, items);
+      const { data, error } = await client.from('saved_items').insert(items).select('*');
       if (error) throw error;
       return data.map(mapItem);
     },
     async updateSavedItem(userId, id, patch = {}) {
-      const { data, error } = await updateSavedItemWithSchemaFallback({ client, userId, id, row: toSavedItemPatch(patch) });
+      const { data, error } = await client
+        .from('saved_items')
+        .update(toSavedItemPatch(patch))
+        .eq('user_id', userId)
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
       if (error) throw error;
       return data ? mapItem(data) : null;
     },
@@ -785,59 +791,6 @@ async function findExistingSavedItems({ client, userId, ids = [], urls = [] }) {
   }
 
   return results;
-}
-
-const STAGED_INDEXING_COLUMNS = new Set([
-  'indexing_stage',
-  'indexing_error',
-  'indexed_text_at',
-  'indexed_visual_at',
-  'last_enrichment_requested_at',
-]);
-
-function isMissingStagedIndexingColumnError(error) {
-  if (error?.code !== 'PGRST204') return false;
-  const message = String(error.message || '');
-  return [...STAGED_INDEXING_COLUMNS].some((column) => message.includes(`'${column}'`) || message.includes(column));
-}
-
-function withoutStagedIndexingColumns(row = {}) {
-  return Object.fromEntries(Object.entries(row).filter(([key]) => !STAGED_INDEXING_COLUMNS.has(key)));
-}
-
-async function insertSavedItemsWithSchemaFallback(client, rows) {
-  const result = await client.from('saved_items').insert(rows).select('*');
-  if (!isMissingStagedIndexingColumnError(result.error)) return result;
-
-  return client
-    .from('saved_items')
-    .insert(rows.map(withoutStagedIndexingColumns))
-    .select('*');
-}
-
-async function updateSavedItemWithSchemaFallback({ client, userId, id, row }) {
-  const applyUpdate = (nextRow) => client
-    .from('saved_items')
-    .update(nextRow)
-    .eq('user_id', userId)
-    .eq('id', id)
-    .select('*')
-    .maybeSingle();
-
-  const result = await applyUpdate(row);
-  if (!isMissingStagedIndexingColumnError(result.error)) return result;
-
-  const fallbackRow = withoutStagedIndexingColumns(row);
-  if (!Object.keys(fallbackRow).length) {
-    return client
-      .from('saved_items')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('id', id)
-      .maybeSingle();
-  }
-
-  return applyUpdate(fallbackRow);
 }
 
 async function countRows(client, table, apply = null) {
