@@ -3893,25 +3893,17 @@ function LibraryTab({
 
   return (
     <div className="mx-auto max-w-[1480px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
-      <div className="mb-7 flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-        <div className="max-w-2xl">
-          <p className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Saved board</p>
-          <h1 className="mt-3 font-display text-4xl font-bold tracking-tight md:text-6xl">Your saves, laid out like ideas.</h1>
-          <p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground">
-            Captions, hashtags, collections, and source metadata search instantly. Open a save when you want deeper visual or transcript context.
-          </p>
-        </div>
-
+      <div className="mb-7">
         <form
           onSubmit={(event) => {
             setVisibleCount(80);
             onSearch(event);
           }}
-          className="flex min-h-16 w-full items-center gap-3 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 shadow-2xl shadow-black/40 transition focus-within:border-primary xl:max-w-xl"
+          className="w-full rounded-2xl border border-white/10 bg-white/[0.035] p-5 shadow-2xl shadow-black/40 transition focus-within:border-primary focus-within:bg-white/[0.05] md:p-6"
         >
-          <Search className="h-5 w-5 shrink-0 text-primary" />
-          <input
+          <textarea
             autoFocus
+            rows={2}
             value={query}
             onChange={(event) => {
               const nextQuery = event.target.value;
@@ -3921,24 +3913,46 @@ function LibraryTab({
                 onClearSearch();
               }
             }}
-            placeholder="Search recipes, outfits, trips, products..."
-            className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground md:text-lg"
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || event.shiftKey) return;
+              event.preventDefault();
+              setVisibleCount(80);
+              onSearch(event);
+            }}
+            placeholder="Ask anything..."
+            className="min-h-16 w-full resize-none bg-transparent text-lg leading-7 outline-none placeholder:text-muted-foreground md:min-h-20 md:text-2xl"
           />
-          {query && (
-            <button
-              type="button"
-              onClick={() => {
-                setVisibleCount(80);
-                onClearSearch();
-              }}
-              className="rounded-full p-1 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-          <button type="submit" className="inline-flex h-10 items-center justify-center rounded-full bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Search'}
-          </button>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 px-4 text-sm font-medium text-foreground">
+                <Search className="h-4 w-4 text-primary" />
+                Search
+              </span>
+              {searchActive && (
+                <span className="hidden text-xs text-muted-foreground sm:inline">
+                  {searchResultCount} matching saves
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVisibleCount(80);
+                    onClearSearch();
+                  }}
+                  className="grid h-9 w-9 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+              <button type="submit" className="grid h-11 w-11 place-items-center rounded-full bg-primary text-primary-foreground transition hover:scale-[1.03] disabled:opacity-60" aria-label="Search saves" disabled={busy}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-5 w-5" />}
+              </button>
+            </div>
+          </div>
         </form>
       </div>
 
