@@ -43,9 +43,11 @@ import {
 } from 'lucide-react';
 import {
   approveReviewItem,
+  createExtensionToken,
   createImportUploadUrls,
   deleteProviderCredential,
   downloadObsidianGraph,
+  getExtensionTokens,
   getItem,
   getImports,
   getItems,
@@ -60,6 +62,7 @@ import {
   importStoredExport,
   restartQueue,
   revealProviderCredential,
+  revokeExtensionToken,
   saveLink,
   saveProfile,
   saveProviderCredential,
@@ -3482,6 +3485,9 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [imports, setImports] = useState([]);
   const [importsLoading, setImportsLoading] = useState(false);
+  const [extensionTokens, setExtensionTokens] = useState([]);
+  const [extensionLoading, setExtensionLoading] = useState(false);
+  const [newExtensionSecret, setNewExtensionSecret] = useState('');
   const [healthByGroup, setHealthByGroup] = useState({});
   const [revealedByGroup, setRevealedByGroup] = useState({});
   const [confirmRevealGroup, setConfirmRevealGroup] = useState(null);
@@ -3558,6 +3564,28 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
       })
       .finally(() => {
         if (!cancelled) setImportsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => {
+        if (!cancelled) setExtensionLoading(true);
+        return getExtensionTokens();
+      })
+      .then((body) => {
+        if (!cancelled) setExtensionTokens(body.tokens || []);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setExtensionLoading(false);
       });
     return () => {
       cancelled = true;
@@ -3688,6 +3716,43 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
     }
   };
 
+  const refreshExtensionTokens = async () => {
+    const body = await getExtensionTokens();
+    setExtensionTokens(body.tokens || []);
+  };
+
+  const handleCreateExtensionToken = async () => {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    setNewExtensionSecret('');
+    try {
+      const body = await createExtensionToken('Browser extension');
+      setNewExtensionSecret(body.secret || '');
+      await refreshExtensionTokens();
+      setMessage('Extension token created. Copy it now; it will only be shown once.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRevokeExtensionToken = async (id) => {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      await revokeExtensionToken(id);
+      await refreshExtensionTokens();
+      setMessage('Extension token revoked.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handlePrivacyExport = async (format) => {
     setExportBusy(format);
     setError('');
@@ -3751,6 +3816,8 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
   const retryableCount = enrichmentActivity.failed + enrichmentActivity.paused;
   const issueRows = indexingIssues.issues || [];
   const issueStats = indexingIssues.summary?.byStatus || {};
+  const activeExtensionTokens = extensionTokens.filter((token) => !token.revokedAt);
+  const revokedExtensionTokens = extensionTokens.filter((token) => token.revokedAt);
   const capabilityCards = [
     {
       key: 'text',
@@ -3808,6 +3875,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
               ['imports', Upload, 'Import History'],
               ['enrichment', Sparkles, 'Enrichment'],
               ['indexing-issues', AlertCircle, 'Indexing Issues'],
+              ['extension-access', Bot, 'Extension Access'],
               ['privacy-export', Download, 'Privacy Export'],
               ['search-preferences', Search, 'Search'],
               ['profile', Settings, 'Profile'],
@@ -4094,6 +4162,114 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved,
                               <a href={issue.item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary">
                                 Open save <ExternalLink className="h-3 w-3" />
                               </a>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'extension-access' && (
+              <div className="space-y-5">
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Extension Access</div>
+                    <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Browser tokens</h3>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      Use limited tokens for Lens search from the browser extension. Tokens can be revoked any time.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCreateExtensionToken}
+                    disabled={busy || extensionLoading}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+                  >
+                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+                    Create token
+                  </button>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {[
+                    ['Active', activeExtensionTokens.length],
+                    ['Revoked', revokedExtensionTokens.length],
+                    ['Total', extensionTokens.length],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">{label}</div>
+                      <div className="mt-2 font-display text-3xl font-bold text-primary">{value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {newExtensionSecret && (
+                  <div className="rounded-2xl border border-primary/40 bg-primary/10 p-4">
+                    <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Copy now</div>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      This token is shown once. Store it in the extension, not in screenshots or shared notes.
+                    </p>
+                    <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
+                      <div className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black px-4 py-3 font-mono text-xs">
+                        <span className="break-all">{newExtensionSecret}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleCopy(newExtensionSecret)}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground"
+                      >
+                        <Copy className="h-4 w-4" /> Copy
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {extensionLoading ? (
+                  <div className="grid min-h-36 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] text-sm text-muted-foreground">
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      Loading extension tokens...
+                    </span>
+                  </div>
+                ) : extensionTokens.length === 0 ? (
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-sm text-muted-foreground">
+                    No extension tokens yet.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {extensionTokens.map((token) => {
+                      const status = token.revokedAt ? 'Revoked' : 'Active';
+                      const statusClass = token.revokedAt ? 'border-white/10 text-muted-foreground' : 'border-primary/40 text-primary';
+                      return (
+                        <article key={token.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="font-display text-xl font-bold tracking-tight">{token.name || 'Browser extension'}</h4>
+                                <span className={`rounded-full border px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] ${statusClass}`}>
+                                  {status}
+                                </span>
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                                <span>Scopes: {(token.scopes || []).join(', ') || 'lens:search'}</span>
+                                <span>Created {formatImportDate(token.createdAt)}</span>
+                                <span>Expires {formatImportDate(token.expiresAt)}</span>
+                                <span>Last used {token.lastUsedAt ? formatImportDate(token.lastUsedAt) : 'Never'}</span>
+                              </div>
+                            </div>
+                            {!token.revokedAt && (
+                              <button
+                                type="button"
+                                onClick={() => handleRevokeExtensionToken(token.id)}
+                                disabled={busy}
+                                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-destructive/40 px-4 py-3 text-sm font-semibold text-destructive transition hover:bg-destructive/10 disabled:opacity-50"
+                              >
+                                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                                Revoke
+                              </button>
                             )}
                           </div>
                         </article>
