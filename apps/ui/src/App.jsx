@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } from 'd3-force';
@@ -345,6 +345,31 @@ function scrollToLandingSection(id) {
   window.history.replaceState(null, '', id);
 }
 
+function setManualScrollRestoration() {
+  if ('scrollRestoration' in window.history) {
+    window.history.scrollRestoration = 'manual';
+  }
+}
+
+function resetPageScroll() {
+  setManualScrollRestoration();
+  window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+  document.querySelector('.dash-panel')?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+}
+
+function replaceAppTabUrl(tab) {
+  const params = new URLSearchParams(window.location.search);
+  if (tab === 'library') {
+    params.delete('tab');
+  } else {
+    params.set('tab', tab);
+  }
+  const query = params.toString();
+  window.history.replaceState({}, ROUTE_TITLES.app, `/app${query ? `?${query}` : ''}`);
+}
+
 function RotatingPlatformLogo() {
   const [activeIndex, setActiveIndex] = useState(0);
   const logoRef = useRef(null);
@@ -594,8 +619,14 @@ export default function App() {
     setRoute(routeName);
     window.history.pushState({}, ROUTE_TITLES[routeName], ROUTE_PATHS[routeName]);
     document.title = ROUTE_TITLES[routeName];
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    resetPageScroll();
   }, []);
+
+  useLayoutEffect(() => {
+    resetPageScroll();
+    const frame = window.requestAnimationFrame(resetPageScroll);
+    return () => window.cancelAnimationFrame(frame);
+  }, [route]);
 
   useEffect(() => {
     document.title = ROUTE_TITLES[route] || 'IScraper';
@@ -976,8 +1007,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
   const landingInitial = initialForSession(landingSession, landingProfile);
 
   useEffect(() => {
-    window.history.scrollRestoration = 'manual';
-    window.scrollTo(0, 0);
+    resetPageScroll();
   }, []);
 
   useEffect(() => {
@@ -2709,6 +2739,19 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   }, []);
 
   useEffect(() => {
+    const onDashboardLocationChange = () => {
+      setTab(dashboardTabFromLocation());
+      resetPageScroll();
+    };
+    window.addEventListener('popstate', onDashboardLocationChange);
+    window.addEventListener('hashchange', onDashboardLocationChange);
+    return () => {
+      window.removeEventListener('popstate', onDashboardLocationChange);
+      window.removeEventListener('hashchange', onDashboardLocationChange);
+    };
+  }, []);
+
+  useEffect(() => {
     gsap.fromTo(
       '.dash-panel-inner',
       { opacity: 0.92, y: 6 },
@@ -2854,6 +2897,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       pendingSaveHandledRef.current = true;
       timer = window.setTimeout(() => {
         setTab('upload');
+        replaceAppTabUrl('upload');
+        resetPageScroll();
         setLinkForm({
           url: pending.url || '',
           title: pending.title || '',
@@ -2879,6 +2924,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     pendingItemHandledRef.current = true;
     const timer = window.setTimeout(() => {
       setTab('library');
+      replaceAppTabUrl('library');
+      resetPageScroll();
       getItem(itemId)
         .then((body) => setSelected(mapItem(body.item)))
         .catch((err) => setError(err.message));
@@ -3028,6 +3075,19 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     ['settings', 'Keys & privacy', Settings],
   ];
 
+  const selectTab = useCallback((nextTab) => {
+    if (!['library', 'graph', 'upload', 'settings'].includes(nextTab)) return;
+    setTab(nextTab);
+    replaceAppTabUrl(nextTab);
+    resetPageScroll();
+  }, []);
+
+  useLayoutEffect(() => {
+    resetPageScroll();
+    const frame = window.requestAnimationFrame(resetPageScroll);
+    return () => window.cancelAnimationFrame(frame);
+  }, [tab]);
+
   return (
     <div className="flex h-screen overflow-hidden bg-black text-foreground">
       <aside ref={sidebarRef} className="hidden h-screen w-60 shrink-0 flex-col overflow-hidden border-r border-white/5 bg-black md:flex">
@@ -3072,7 +3132,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           {navItems.map(([key, title, Icon]) => (
             <button
               key={key}
-              onClick={() => setTab(key)}
+              onClick={() => selectTab(key)}
               className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition ${
                 tab === key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
               }`}
@@ -3099,7 +3159,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             <MobileTopbar
               onBack={onBack}
               tab={tab}
-              setTab={setTab}
+              setTab={selectTab}
               onOpenHowTo={onOpenHowTo}
               session={session}
               profile={profile}
