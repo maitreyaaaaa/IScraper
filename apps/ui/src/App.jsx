@@ -89,6 +89,7 @@ const INDEXING_META = {
   index_failed: { label: 'Metadata', color: 'text-destructive', icon: AlertCircle },
 };
 const ENRICHED_STAGES = new Set(['visual_indexed', 'deep_indexed']);
+const DASHBOARD_ENRICHED_STAGES = new Set(['text_indexed', 'visual_indexing', 'visual_indexed', 'deep_indexed']);
 const STATUSES = ['all', 'needs_review', 'done', 'failed', 'paused'];
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 const HERO_PLATFORMS = [
@@ -2777,7 +2778,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const stats = useMemo(() => ({
     total: items.length,
     done: items.filter((item) => item.status === 'done').length,
-    enriched: items.filter((item) => ENRICHED_STAGES.has(item.indexingStage)).length,
+    enriched: items.filter((item) => DASHBOARD_ENRICHED_STAGES.has(item.indexingStage)).length,
     needsReview: items.filter((item) => item.sourceStatus === 'needs_review').length,
     paused: items.filter((item) => item.status === 'paused' || item.status === 'failed').length,
   }), [items]);
@@ -3781,6 +3782,14 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
 }
 
 function summarizeIndexing(items) {
+  const activeItems = items
+    .filter((item) => item.indexingStage === 'visual_indexing')
+    .map((item) => ({
+      id: item.id,
+      title: item.sourceTitle || item.title || firstLine(item.caption) || 'Untitled save',
+      source: item.sourceAuthor || item.user || item.platform || 'Saved source',
+    }))
+    .slice(0, 12);
   const metadata = items.filter((item) => item.indexingStage === 'metadata_ready').length;
   const text = items.filter((item) => item.indexingStage === 'text_indexed').length;
   const visual = items.filter((item) => item.indexingStage === 'visual_indexed').length;
@@ -3788,8 +3797,8 @@ function summarizeIndexing(items) {
   const indexing = items.filter((item) => item.indexingStage === 'visual_indexing').length;
   const failed = items.filter((item) => item.indexingStage === 'index_failed').length;
   const total = items.filter((item) => item.sourceStatus !== 'needs_review').length;
-  const enriched = visual + deep;
-  const progress = total > 0 ? Math.round(((text + enriched) / total) * 100) : 0;
+  const enriched = text + indexing + visual + deep;
+  const progress = total > 0 ? Math.round((enriched / total) * 100) : 0;
 
   return {
     metadata,
@@ -3800,6 +3809,7 @@ function summarizeIndexing(items) {
     failed,
     active: indexing,
     activeTotal: indexing,
+    activeItems,
     enriched,
     progress,
   };
@@ -3811,31 +3821,46 @@ function IndexingProgressCard({ activity }) {
   const progress = Math.min(99, Math.max(2, activity.progress));
 
   return (
-    <div className="mt-5 overflow-hidden rounded-2xl border border-primary/30 bg-primary/5 p-5">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Enrichment in progress</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">
-            {activity.activeTotal} saves are being enriched
-          </h2>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            Search stays available while opened items get visual, OCR, or transcript context when the model can access it.
-          </p>
+    <details className="group mt-5 w-full max-w-xl rounded-2xl border border-primary/30 bg-primary/5">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+          </span>
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Enrichment</div>
+            <div className="truncate text-sm font-semibold">{activity.activeTotal} active now</div>
+          </div>
         </div>
-        <div className="grid min-w-36 gap-1 rounded-xl border border-white/10 bg-black px-4 py-3 text-center">
-          <span className="font-display text-3xl font-bold text-primary">{activity.active}</span>
-          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">active now</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition group-open:rotate-180 group-open:text-primary" />
+      </summary>
+      <div className="space-y-3 border-t border-primary/20 px-4 pb-4 pt-3">
+        <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+          <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${progress}%` }} />
+        </div>
+        <div className="flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+          <span>{activity.indexing} indexing</span>
+          <span>{activity.visual} visual indexed</span>
+          <span>{activity.deep} transcript ready</span>
+        </div>
+        <div className="space-y-2">
+          {activity.activeItems.map((item) => (
+            <div key={item.id} className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/60 px-3 py-2 text-xs">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+              <div className="min-w-0">
+                <div className="truncate font-semibold">{item.title}</div>
+                <div className="truncate text-[11px] text-muted-foreground">{item.source}</div>
+              </div>
+            </div>
+          ))}
+          {activity.activeTotal > activity.activeItems.length && (
+            <div className="text-xs text-muted-foreground">
+              {activity.activeTotal - activity.activeItems.length} more saves are also being enriched.
+            </div>
+          )}
         </div>
       </div>
-      <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
-        <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${progress}%` }} />
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-        <span>{activity.indexing} indexing</span>
-        <span>{activity.visual} visual indexed</span>
-        <span>{activity.deep} transcript ready</span>
-      </div>
-    </div>
+    </details>
   );
 }
 
@@ -3865,7 +3890,7 @@ function LibraryTab({
   const activeFilters = (statusFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
   const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
   const searchableCount = items.filter((item) => item.sourceStatus !== 'needs_review').length;
-  const enrichedCount = items.filter((item) => ENRICHED_STAGES.has(item.indexingStage)).length;
+  const enrichedCount = items.filter((item) => DASHBOARD_ENRICHED_STAGES.has(item.indexingStage)).length;
   const boardStats = useMemo(() => ([
     ['All saves', totalCount],
     ['On this board', items.length],
