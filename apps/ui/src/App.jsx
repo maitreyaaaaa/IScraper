@@ -722,8 +722,8 @@ function RotatingOutcomeText() {
   }, []);
 
   return (
-    <span className="inline-grid min-w-[5.8em] overflow-hidden align-baseline text-left text-glow italic text-primary">
-      <span ref={wordRef} className="inline-block" aria-live="polite">
+    <span className="inline-grid min-w-[6.4em] justify-items-center overflow-visible px-[0.08em] py-[0.06em] align-baseline text-center text-glow italic text-primary">
+      <span ref={wordRef} className="inline-block whitespace-nowrap" aria-live="polite">
         {word}<span className="text-foreground">.</span>
       </span>
     </span>
@@ -1619,8 +1619,9 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
             <span className="shrink-0 rounded-full bg-black px-3 py-1 font-mono text-[11px] font-black uppercase tracking-[0.16em] text-orange-500">
               Launch offer
             </span>
-            <p className="min-w-0 flex-1 truncate text-base font-bold text-black">
-              <span>Your first 200 imported saves are on us.</span>
+            <p className="min-w-0 flex-1 text-sm font-bold leading-tight text-black sm:text-base">
+              <span className="sm:hidden">200 saves free to start.</span>
+              <span className="hidden sm:inline">Your first 200 imported saves are on us.</span>
               <span className="hidden font-semibold text-black/80 sm:inline"> Build your first searchable library before paying IScraper credits.</span>
             </p>
             <button
@@ -2305,13 +2306,13 @@ function HowToUsePage({ onBack, onOpenApp }) {
         </div>
       </header>
 
-      <main className="relative mx-auto max-w-7xl px-5 py-14 md:py-20">
-        <section className="howto-reveal mb-14 max-w-4xl">
+      <main className="relative mx-auto max-w-7xl px-5 py-10 md:py-20">
+        <section className="howto-reveal mb-10 max-w-4xl md:mb-14">
           <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">How to use IScraper</div>
-          <h1 className="font-display text-5xl font-bold tracking-tighter md:text-7xl">
+          <h1 className="font-display text-4xl font-bold leading-tight tracking-tighter sm:text-5xl md:text-7xl">
             Guides for imports, API keys, and upcoming features.
           </h1>
-          <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
+          <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground md:mt-6 md:text-lg md:leading-8">
             Start with Instagram or Pinterest exports, then add links manually when you want one-off saves. We will keep adding simple guides here for API keys, the browser extension, and other capture flows as they become available.
           </p>
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
@@ -2589,11 +2590,11 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
         </div>
       </header>
 
-      <main className="relative mx-auto max-w-6xl px-5 py-16 md:py-24">
+      <main className="relative mx-auto max-w-6xl px-5 py-10 md:py-24">
         <section className="max-w-4xl">
           <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">Help Center</div>
-          <h1 className="font-display text-5xl font-bold tracking-tighter md:text-7xl">Need help with IScraper?</h1>
-          <p className="mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">
+          <h1 className="font-display text-4xl font-bold leading-tight tracking-tighter sm:text-5xl md:text-7xl">Need help with IScraper?</h1>
+          <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground md:mt-6 md:text-lg md:leading-relaxed">
             If something breaks, you cannot import, or an upcoming feature feels confusing, email us and include what you were trying to do.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
@@ -2613,7 +2614,7 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
           </div>
         </section>
 
-        <section className="mt-16 grid gap-5 md:grid-cols-2">
+        <section className="mt-10 grid gap-5 md:mt-16 md:grid-cols-2">
           {helpTopics.map(([Icon, title, copy]) => (
             <article key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
               <Icon className="h-6 w-6 text-primary" />
@@ -3641,6 +3642,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 onOpenLogin();
                 return;
               }
+              if (!session) {
+                selectTab('settings');
+                return;
+              }
               setAccountSettingsOpen(true);
             }}
             title="Settings"
@@ -3932,6 +3937,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           onImport={handleImport}
           busy={busy}
           onOpenHowTo={onOpenHowTo}
+          onOpenFullAdd={() => {
+            setQuickAddOpen(false);
+            selectTab('upload');
+          }}
           onClose={() => setQuickAddOpen(false)}
           onError={setError}
         />
@@ -4724,10 +4733,15 @@ function QuickAddModal({
   onImport,
   busy,
   onOpenHowTo,
+  onOpenFullAdd,
   onClose,
   onError,
 }) {
+  const [mode, setMode] = useState('choose');
+  const [showLinkDetails, setShowLinkDetails] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const quickFileInputRef = useRef(null);
+  const quickNoteImageInputRef = useRef(null);
   const allFileInputRef = useRef(null);
   const folderInputRef = useRef(null);
   const noteImageInputRef = useRef(null);
@@ -4753,10 +4767,14 @@ function QuickAddModal({
 
   const handleAnyFiles = useCallback((fileList) => {
     const { images, exports, unsupported } = splitQuickAddFiles(fileList);
-    if (images.length) addImagesToNote(images);
+    if (images.length) {
+      addImagesToNote(images);
+      setMode('note');
+    }
     if (exports.length) {
       setFiles(exports);
       setImportSourceType('auto');
+      setMode('upload');
     }
     if (unsupported.length && !images.length && !exports.length) {
       onError('Upload images, links, or Instagram/Pinterest download files.');
@@ -4764,13 +4782,18 @@ function QuickAddModal({
   }, [addImagesToNote, onError, setFiles, setImportSourceType]);
 
   const selectedExportNames = importCandidateFiles(files, importSourceType).slice(0, 5);
+  const choices = [
+    { mode: 'link', title: 'Paste a link', copy: 'Save one post, product, article, or idea.', icon: ExternalLink },
+    { mode: 'note', title: 'Write a note', copy: 'Capture a thought, image, reminder, or useful context.', icon: FileText },
+    { mode: 'upload', title: 'Upload files', copy: 'Add Instagram or Pinterest exports from your device.', icon: Upload },
+  ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 backdrop-blur-md md:p-6" role="dialog" aria-modal="true" aria-label="Add to your library">
-      <div className="flex h-[90vh] w-[90vw] max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl shadow-black">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm md:items-end md:justify-end md:p-6" role="dialog" aria-modal="true" aria-label="Add to your library">
+      <div className="flex max-h-[78dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-black shadow-2xl shadow-black md:mb-20 md:w-[26rem] md:rounded-2xl">
         <div className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4">
           <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Add anything</div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Quick add</div>
             <h2 className="mt-1 font-display text-2xl font-bold tracking-tight">Add to your Library</h2>
           </div>
           <button
@@ -4783,7 +4806,234 @@ function QuickAddModal({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 md:p-6">
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {mode !== 'choose' && (
+            <button
+              type="button"
+              onClick={() => setMode('choose')}
+              className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground transition hover:text-foreground"
+            >
+              <ArrowLeft className="h-4 w-4" /> Back
+            </button>
+          )}
+
+          {mode === 'choose' && (
+            <div className="space-y-3">
+              <p className="text-sm leading-6 text-muted-foreground">Pick what you want to add. Open the full Add Saves page when you need folder upload or more options.</p>
+              {choices.map(({ mode: choiceMode, title, copy, icon: Icon }) => (
+                <button
+                  key={choiceMode}
+                  type="button"
+                  onClick={() => setMode(choiceMode)}
+                  className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/[0.025] p-4 text-left transition hover:border-primary/60 hover:bg-primary/5"
+                >
+                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
+                    <Icon className="h-5 w-5" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block font-display text-lg font-bold tracking-tight">{title}</span>
+                    <span className="mt-1 block text-sm leading-5 text-muted-foreground">{copy}</span>
+                  </span>
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={onOpenFullAdd}
+                className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
+              >
+                <Upload className="h-4 w-4" /> Open full Add Saves page
+              </button>
+            </div>
+          )}
+
+          {mode === 'link' && (
+            <form onSubmit={(event) => onSaveLink(event, null, { onSuccess: onClose })} className="space-y-4">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Paste a link</div>
+                <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Save one thing fast</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">Paste a post, product, article, video, or any page you want to find later.</p>
+              </div>
+              <input
+                type="url"
+                value={linkForm.url}
+                onChange={(event) => setLinkForm((current) => ({ ...current, url: event.target.value }))}
+                placeholder="https://..."
+                required
+                className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+              />
+              {showLinkDetails ? (
+                <>
+                  <input
+                    value={linkForm.title}
+                    onChange={(event) => setLinkForm((current) => ({ ...current, title: event.target.value }))}
+                    placeholder="Title optional"
+                    maxLength={160}
+                    className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+                  />
+                  <textarea
+                    value={linkForm.note}
+                    onChange={(event) => setLinkForm((current) => ({ ...current, note: event.target.value }))}
+                    placeholder="Why are you saving this? optional"
+                    maxLength={500}
+                    className="min-h-24 w-full resize-none rounded-xl border border-white/10 bg-black px-4 py-3 text-sm leading-6 outline-none focus:border-primary"
+                  />
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowLinkDetails(true)}
+                  className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
+                >
+                  <Plus className="h-4 w-4" /> Add title or note
+                </button>
+              )}
+              <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+                Save link
+              </button>
+            </form>
+          )}
+
+          {mode === 'note' && (
+            <form onSubmit={(event) => onCreateNote(event, { onSuccess: onClose })} className="space-y-4">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Write a note</div>
+                <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Save a quick thought</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">Add the context you want to remember. Images and links are optional.</p>
+              </div>
+              <textarea
+                value={noteForm.body}
+                onChange={(event) => setNoteForm((current) => ({ ...current, body: event.target.value }))}
+                placeholder="Write the note, reminder, or idea..."
+                className="min-h-32 w-full resize-y rounded-xl border border-white/10 bg-black px-4 py-3 text-sm leading-6 outline-none focus:border-primary"
+              />
+              <input
+                value={noteForm.title}
+                onChange={(event) => setNoteForm((current) => ({ ...current, title: event.target.value }))}
+                placeholder="Title optional"
+                maxLength={160}
+                className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+              />
+              <input
+                value={noteForm.links}
+                onChange={(event) => setNoteForm((current) => ({ ...current, links: event.target.value }))}
+                placeholder="Optional links"
+                className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+              />
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => quickNoteImageInputRef.current?.click()}
+                  className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold transition hover:bg-white/5"
+                >
+                  <Upload className="h-4 w-4" /> Add images
+                </button>
+                <span className="text-xs text-muted-foreground">{noteForm.images.length}/{MAX_NOTE_IMAGES} images selected</span>
+                <input
+                  ref={quickNoteImageInputRef}
+                  type="file"
+                  multiple
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={(event) => {
+                    addImagesToNote(Array.from(event.target.files || []));
+                    event.target.value = '';
+                  }}
+                  className="hidden"
+                />
+              </div>
+              {noteForm.images.length > 0 && (
+                <div className="space-y-2">
+                  {noteForm.images.map((file, index) => (
+                    <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black px-3 py-2 text-sm">
+                      <span className="min-w-0 truncate">{file.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => setNoteForm((current) => ({ ...current, images: current.images.filter((_, imageIndex) => imageIndex !== index) }))}
+                        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
+                        aria-label={`Remove ${file.name}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                Save note
+              </button>
+            </form>
+          )}
+
+          {mode === 'upload' && (
+            <section className="space-y-4">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Upload files</div>
+                <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose export files</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">Use this for Instagram or Pinterest downloads. For folders, open the full Add Saves page.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => quickFileInputRef.current?.click()}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground"
+              >
+                <Upload className="h-4 w-4" /> Choose files
+              </button>
+              <input
+                ref={quickFileInputRef}
+                type="file"
+                multiple
+                accept="image/png,image/jpeg,image/webp,image/gif,.html,.htm,.zip,.json,.csv"
+                onChange={(event) => {
+                  handleAnyFiles(event.target.files);
+                  event.target.value = '';
+                }}
+                className="hidden"
+              />
+              <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+                <div className="text-sm font-semibold">{importHealth.title}</div>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{importHealth.copy}</p>
+                {selectedExportNames.length > 0 && (
+                  <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                    {selectedExportNames.map((file) => (
+                      <div key={`${fileImportName(file)}-${file.size}`} className="truncate">{fileImportName(file) || file.name}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const ok = await onImport();
+                  if (ok) onClose();
+                }}
+                disabled={busy || !files.length}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+                Add uploaded files
+              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenFullAdd}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
+                >
+                  Full upload
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenHowTo}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
+                >
+                  <FileText className="h-4 w-4" /> Help
+                </button>
+              </div>
+            </section>
+          )}
+        </div>
+
+        <div className="hidden">
           <div
             onDragOver={(event) => {
               event.preventDefault();
@@ -5245,6 +5495,70 @@ function ImportHealthPanel({ health, pendingReviewCount, indexingActivity }) {
   );
 }
 
+function MobileFilterGroup({ label, value, options, onChange }) {
+  return (
+    <section className="space-y-3">
+      <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">{label}</div>
+      <div className="grid grid-cols-2 gap-2">
+        {options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onChange(option)}
+            className={`flex min-h-11 items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-sm transition ${
+              value === option
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-white/10 bg-white/[0.025] text-muted-foreground hover:border-primary/60 hover:text-foreground'
+            }`}
+          >
+            <span className="truncate">{filterLabel(option)}</span>
+            {value === option && <Check className="h-4 w-4 shrink-0" />}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MobileFiltersSheet({ open, onClose, groups, activeFilters }) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-black/60 backdrop-blur-sm md:hidden" role="dialog" aria-modal="true" aria-label="Library filters">
+      <div className="max-h-[82dvh] w-full overflow-hidden rounded-t-2xl border border-white/10 bg-black shadow-2xl shadow-black">
+        <div className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Library</div>
+            <h2 className="mt-1 font-display text-2xl font-bold tracking-tight">Filters</h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-10 w-10 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
+            aria-label="Close filters"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="max-h-[calc(82dvh-9.5rem)] space-y-6 overflow-y-auto p-5 pb-24">
+          {groups.map((group) => (
+            <MobileFilterGroup key={group.label} {...group} />
+          ))}
+        </div>
+        <div className="border-t border-white/10 p-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground"
+          >
+            Apply {activeFilters > 0 ? `(${activeFilters})` : ''}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LibraryTab({
   items,
   totalCount,
@@ -5277,8 +5591,20 @@ function LibraryTab({
 }) {
   const boardRef = useRef(null);
   const [visibleCount, setVisibleCount] = useState(80);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const activeFilters = (typeFilter !== 'all' ? 1 : 0) + (stateFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
   const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
+  const updateFilter = useCallback((setter) => (value) => {
+    setVisibleCount(80);
+    setter(value);
+  }, []);
+  const mobileFilterGroups = useMemo(() => [
+    { label: 'Type', value: typeFilter, options: TYPE_FILTERS, onChange: updateFilter(setTypeFilter) },
+    { label: 'Status', value: stateFilter, options: STATE_FILTERS, onChange: updateFilter(setStateFilter) },
+    { label: 'Platform', value: platformFilter, options: platforms, onChange: updateFilter(setPlatformFilter) },
+    { label: 'Collection', value: collectionFilter, options: collections, onChange: updateFilter(setCollectionFilter) },
+    { label: 'Sort', value: sortOrder, options: SORT_OPTIONS, onChange: updateFilter(setSortOrder) },
+  ], [collectionFilter, collections, platformFilter, platforms, sortOrder, stateFilter, typeFilter, updateFilter, setCollectionFilter, setPlatformFilter, setSortOrder, setStateFilter, setTypeFilter]);
 
   useEffect(() => {
     const cards = boardRef.current?.querySelectorAll('.pin-card');
@@ -5299,7 +5625,7 @@ function LibraryTab({
   }, [collectionFilter, items, platformFilter, sortOrder, stateFilter, typeFilter, visibleCount]);
 
   return (
-    <div className="mx-auto max-w-[1480px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
+    <div className="mx-auto max-w-[1480px] px-4 pb-28 pt-8 sm:px-6 md:px-10 md:py-12">
       <div className="mb-7">
         <form
           onSubmit={(event) => {
@@ -5375,7 +5701,15 @@ function LibraryTab({
             {visibleItems.length} shown from {items.length} saves
             {searchActive ? ` · ${searchResultCount} search results from ${totalCount} total saves` : ''}
           </span>
-          <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setFiltersOpen(true)}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-white/10 px-4 py-2 font-sans text-sm font-semibold text-foreground transition hover:border-primary md:hidden"
+          >
+            <Filter className="h-4 w-4 text-primary" />
+            Filters {activeFilters > 0 ? `(${activeFilters})` : ''}
+          </button>
+          <div className="hidden flex-wrap gap-2 md:flex">
             <DashboardFilterSelect
               label="Type"
               ariaLabel="Filter by content type"
@@ -5433,6 +5767,13 @@ function LibraryTab({
           </div>
         </div>
       </div>
+
+      <MobileFiltersSheet
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        groups={mobileFilterGroups}
+        activeFilters={activeFilters}
+      />
 
       <div className="mt-8">
         {items.length === 0 ? (
@@ -5723,9 +6064,15 @@ function UploadTab({
   onTrySearch,
 }) {
   const [dragging, setDragging] = useState(false);
+  const [activeAddMode, setActiveAddMode] = useState('link');
   const linkInputRef = useRef(null);
   const noteImageInputRef = useRef(null);
   const importHealth = useMemo(() => importHealthForFiles(files, importSourceType), [files, importSourceType]);
+  const addModeOptions = [
+    { value: 'link', label: 'Paste link', icon: ExternalLink },
+    { value: 'note', label: 'Write note', icon: FileText },
+    { value: 'upload', label: 'Upload files', icon: Upload },
+  ];
   const sourceOptions = [
     { value: 'auto', label: 'Choose for me', help: 'Best if you are not sure.' },
     { value: 'instagram', label: 'Instagram', help: 'For files downloaded from Instagram.' },
@@ -5747,6 +6094,24 @@ function UploadTab({
         </button>
       </div>
 
+      <div className="grid gap-2 rounded-2xl border border-white/10 bg-white/[0.025] p-2 md:grid-cols-3">
+        {addModeOptions.map(({ value, label, icon: Icon }) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setActiveAddMode(value)}
+            className={`inline-flex min-h-12 items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition ${
+              activeAddMode === value
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+            }`}
+          >
+            <Icon className="h-4 w-4" /> {label}
+          </button>
+        ))}
+      </div>
+
+      {activeAddMode === 'note' && (
       <form onSubmit={onCreateNote} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
@@ -5828,6 +6193,7 @@ function UploadTab({
           Save note to Library
         </button>
       </form>
+      )}
 
       <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -5844,8 +6210,13 @@ function UploadTab({
 
       <IndexingProgressCard activity={indexingActivity} />
 
-      <ImportHealthPanel health={importHealth} pendingReviewCount={pendingReviews.length} indexingActivity={indexingActivity} />
+      {activeAddMode === 'upload' && (
+      <>
+        <ImportHealthPanel health={importHealth} pendingReviewCount={pendingReviews.length} indexingActivity={indexingActivity} />
+      </>
+      )}
 
+      {activeAddMode === 'link' && (
       <form onSubmit={onSaveLink} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save a link</div>
@@ -5882,6 +6253,7 @@ function UploadTab({
           Save link
         </button>
       </form>
+      )}
 
       {pendingReviews.length > 0 && (
         <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
@@ -5920,6 +6292,8 @@ function UploadTab({
         </section>
       )}
 
+      {activeAddMode === 'upload' && (
+      <>
       <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
         <div className="mb-4">
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Upload files</div>
@@ -6004,6 +6378,8 @@ function UploadTab({
           </button>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }
