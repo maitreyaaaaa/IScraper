@@ -28,6 +28,16 @@ const {
   processAccountDeletionRequest,
   publicDeletionRequest,
 } = require('./services/accountDeletion');
+const {
+  MAX_NOTE_IMAGES,
+  MAX_NOTE_IMAGE_BYTES,
+  NOTE_ASSET_BUCKET,
+  NOTE_CONTENT_TYPE,
+  assertNoteImageFile,
+  buildNoteItem,
+  noteAssetStoragePath,
+  noteInputFromBody,
+} = require('./services/notes');
 
 const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv']);
 const EXPORT_UPLOAD_MIME_TYPES = new Set([
@@ -329,6 +339,15 @@ function uploadFileFilter(_req, file, callback) {
   return callback(null, true);
 }
 
+function noteImageFileFilter(_req, file, callback) {
+  try {
+    assertNoteImageFile({ ...file, buffer: Buffer.from('x'), size: 1 });
+    return callback(null, true);
+  } catch (error) {
+    return callback(error);
+  }
+}
+
 function assertImportFileAllowed(file, maxUploadFileSizeBytes) {
   const extension = path.extname(file.originalname || '').toLowerCase();
   if (!EXPORT_UPLOAD_EXTENSIONS.has(extension) || !EXPORT_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
@@ -394,6 +413,27 @@ async function ensureImportUploadBucket(store, config) {
   if (!error) return bucket;
 
   const created = await store.client.storage.createBucket(bucket, options);
+  if (created.error && !/already exists/i.test(created.error.message || '')) {
+    throw created.error;
+  }
+  return bucket;
+}
+
+async function ensureNoteAssetBucket(store, config) {
+  if (!store.client?.storage) {
+    const error = new Error('Note image storage is not configured.');
+    error.statusCode = 503;
+    throw error;
+  }
+  const bucket = config.noteAssetBucket || NOTE_ASSET_BUCKET;
+  const { error } = await store.client.storage.getBucket(bucket);
+  if (!error) return bucket;
+
+  const created = await store.client.storage.createBucket(bucket, {
+    public: false,
+    fileSizeLimit: MAX_NOTE_IMAGE_BYTES,
+    allowedMimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+  });
   if (created.error && !/already exists/i.test(created.error.message || '')) {
     throw created.error;
   }
@@ -610,6 +650,56 @@ function warnWorkflow(req, event, properties = {}) {
   req.app?.locals?.observability?.warn(event, contextForRequest(req, properties));
 }
 
+async function persistNoteImages({ store, config, userId, itemId, files = [] }) {
+  if (!files.length) return [];
+  if (files.length > MAX_NOTE_IMAGES) {
+    const error = new Error(`Notes support up to ${MAX_NOTE_IMAGES} images.`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const assets = [];
+  for (const file of files) assertNoteImageFile(file);
+
+  if (store.client?.storage) {
+    const bucket = await ensureNoteAssetBucket(store, config);
+    for (const file of files) {
+      const storagePath = noteAssetStoragePath({ userId, itemId, file });
+      const { error } = await store.client.storage.from(bucket).upload(storagePath, file.buffer, {
+        contentType: file.mimetype,
+        upsert: false,
+      });
+      if (error) throw error;
+      assets.push(await store.addItemAsset(userId, itemId, {
+        assetType: 'image',
+        storagePath,
+        mimeType: file.mimetype,
+      }));
+    }
+    return assets.filter(Boolean);
+  }
+
+  for (const file of files) {
+    assets.push(await store.addItemAsset(userId, itemId, {
+      assetType: 'image',
+      storagePath: `data:${file.mimetype};base64,${file.buffer.toString('base64')}`,
+      mimeType: file.mimetype,
+    }));
+  }
+  return assets.filter(Boolean);
+}
+
+async function removeNoteAssetObjects({ store, config, assets = [] }) {
+  const storagePaths = assets
+    .map((asset) => asset.storagePath)
+    .filter((storagePath) => storagePath && !String(storagePath).startsWith('data:'));
+  if (!storagePaths.length || !store.client?.storage) return;
+  const bucket = config.noteAssetBucket || NOTE_ASSET_BUCKET;
+  await store.client.storage.from(bucket).remove(storagePaths).catch((error) => {
+    console.warn(`Could not remove note image files: ${error.message}`);
+  });
+}
+
 function createApp({ store, config = {}, observability = createObservability(config) }) {
   const app = express();
   const upload = multer({
@@ -625,6 +715,14 @@ function createApp({ store, config = {}, observability = createObservability(con
     limits: {
       fileSize: config.importChunkSizeBytes || IMPORT_CHUNK_SIZE_BYTES,
       files: 1,
+    },
+  });
+  const noteUpload = multer({
+    storage: multer.memoryStorage(),
+    fileFilter: noteImageFileFilter,
+    limits: {
+      fileSize: config.maxNoteImageFileSizeBytes || MAX_NOTE_IMAGE_BYTES,
+      files: MAX_NOTE_IMAGES,
     },
   });
   const rateWindowMs = config.rateLimitWindowMs || 15 * 60 * 1000;
@@ -1098,6 +1196,100 @@ function createApp({ store, config = {}, observability = createObservability(con
   app.get('/api/items', asyncRoute(async (req, res) => {
     const items = await store.getItems(req.user.id);
     res.json({ items });
+  }));
+
+  app.post('/api/notes', noteUpload.array('images', MAX_NOTE_IMAGES), asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.createNoteItem !== 'function' || typeof store.addItemAsset !== 'function') {
+      return res.status(501).json({ error: 'Notes are not available.' });
+    }
+    const input = noteInputFromBody(req.body || {});
+    if (!input.body && !input.links.length && !req.files?.length) {
+      return res.status(400).json({ error: 'Write a note, add a link, or attach an image before saving.' });
+    }
+    let item = await store.createNoteItem(req.user.id, buildNoteItem({ userId: req.user.id, input }));
+    try {
+      if (req.files?.length) {
+        await persistNoteImages({ store, config, userId: req.user.id, itemId: item.id, files: req.files });
+        item = await store.getItem(req.user.id, item.id);
+      }
+    } catch (error) {
+      if (item?.id && typeof store.deleteSavedItem === 'function') {
+        await store.deleteSavedItem(req.user.id, item.id).catch(() => {});
+      }
+      throw error;
+    }
+    captureWorkflow(req, 'note created', {
+      itemId: item.id,
+      linkCount: input.links.length,
+      imageCount: item.assets?.length || 0,
+    });
+    return res.status(201).json({ item });
+  }));
+
+  app.patch('/api/notes/:id', noteUpload.array('images', MAX_NOTE_IMAGES), asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.updateSavedItem !== 'function') return res.status(501).json({ error: 'Notes are not available.' });
+    const existing = await store.getItem(req.user.id, req.params.id);
+    if (!existing || existing.contentType !== NOTE_CONTENT_TYPE) return res.status(404).json({ error: 'Note not found.' });
+    const input = noteInputFromBody(req.body || {});
+    const assetIds = typeof req.body?.removeAssetIds === 'string'
+      ? req.body.removeAssetIds.split(',').map((entry) => entry.trim()).filter(Boolean)
+      : Array.isArray(req.body?.removeAssetIds)
+        ? req.body.removeAssetIds
+        : [];
+    const existingAssets = typeof store.listItemAssets === 'function' ? await store.listItemAssets(req.user.id, existing.id) : existing.assets || [];
+    const remainingCount = existingAssets.filter((asset) => !assetIds.includes(asset.id)).length;
+    if (remainingCount + (req.files?.length || 0) > MAX_NOTE_IMAGES) {
+      return res.status(400).json({ error: `Notes support up to ${MAX_NOTE_IMAGES} images.` });
+    }
+    const nextItem = buildNoteItem({
+      userId: req.user.id,
+      id: existing.id,
+      input,
+      createdAt: existing.savedAt || existing.createdAt || new Date().toISOString(),
+    });
+    let removedAssets = [];
+    if (assetIds.length && typeof store.removeItemAssets === 'function') {
+      removedAssets = await store.removeItemAssets(req.user.id, existing.id, assetIds);
+      await removeNoteAssetObjects({ store, config, assets: removedAssets });
+    }
+    await store.updateSavedItem(req.user.id, existing.id, {
+      caption: nextItem.caption,
+      collections: nextItem.collections,
+      sourceTitle: nextItem.sourceTitle,
+      sourceAuthor: nextItem.sourceAuthor,
+      sourceDescription: nextItem.sourceDescription,
+      platform: nextItem.platform,
+      platformKey: nextItem.platformKey,
+      sourceId: nextItem.sourceId,
+      status: 'done',
+      error: null,
+      note: nextItem.note,
+    });
+    if (req.files?.length) {
+      await persistNoteImages({ store, config, userId: req.user.id, itemId: existing.id, files: req.files });
+    }
+    const item = await store.getItem(req.user.id, existing.id);
+    captureWorkflow(req, 'note updated', {
+      itemId: item.id,
+      linkCount: input.links.length,
+      imageCount: item.assets?.length || 0,
+      removedImageCount: removedAssets.length,
+    });
+    return res.json({ item });
+  }));
+
+  app.delete('/api/notes/:id', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.deleteSavedItem !== 'function') return res.status(501).json({ error: 'Notes are not available.' });
+    const existing = await store.getItem(req.user.id, req.params.id);
+    if (!existing || existing.contentType !== NOTE_CONTENT_TYPE) return res.status(404).json({ error: 'Note not found.' });
+    const assets = typeof store.listItemAssets === 'function' ? await store.listItemAssets(req.user.id, existing.id) : existing.assets || [];
+    const deleted = await store.deleteSavedItem(req.user.id, existing.id);
+    await removeNoteAssetObjects({ store, config, assets });
+    captureWorkflow(req, 'note deleted', { itemId: existing.id, imageCount: assets.length });
+    return res.json({ deleted: Boolean(deleted), itemId: existing.id });
   }));
 
   app.get('/api/items/:id', asyncRoute(async (req, res) => {

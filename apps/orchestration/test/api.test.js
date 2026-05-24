@@ -803,6 +803,115 @@ test('POST /api/saves/link stores one deduped web save', async () => {
   }
 });
 
+test('POST /api/notes creates a searchable note without queueing enrichment jobs', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}/api`;
+    const form = new FormData();
+    form.append('title', 'Investor follow-up');
+    form.append('body', 'Remember the alpha deck note and https://example.com/deck');
+    form.append('images', new Blob([Buffer.from('png-data')], { type: 'image/png' }), 'deck.png');
+
+    const response = await fetch(`${base}/notes`, {
+      method: 'POST',
+      headers: { 'x-user-id': 'notes-user' },
+      body: form,
+    });
+    const body = await response.json();
+    assert.equal(response.status, 201);
+    assert.equal(body.item.contentType, 'note');
+    assert.equal(body.item.platformKey, 'iscraper-note');
+    assert.equal(body.item.status, 'done');
+    assert.match(body.item.url, /^iscraper:\/\/note\/note-/);
+    assert.equal(body.item.assets.length, 1);
+    assert.match(body.item.assets[0].storagePath, /^data:image\/png;base64,/);
+
+    const jobs = store.getJobs('notes-user');
+    assert.equal(jobs.length, 0);
+
+    const search = await fetch(`${base}/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': 'notes-user' },
+      body: JSON.stringify({ query: 'alpha deck note' }),
+    });
+    const searchBody = await search.json();
+    assert.equal(search.status, 200);
+    assert.equal(searchBody.results.some((item) => item.id === body.item.id), true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('note image upload rejects videos', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const form = new FormData();
+    form.append('title', 'Video note');
+    form.append('body', 'This should not upload video.');
+    form.append('images', new Blob([Buffer.from('video-data')], { type: 'video/mp4' }), 'clip.mp4');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/notes`, {
+      method: 'POST',
+      headers: { 'x-user-id': 'notes-user' },
+      body: form,
+    });
+    const body = await response.json();
+    assert.equal(response.status, 400);
+    assert.match(body.error, /Video notes are not supported yet/i);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('notes can be updated and deleted with local asset cleanup', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}/api`;
+    const createForm = new FormData();
+    createForm.append('title', 'Draft note');
+    createForm.append('body', 'Original note body.');
+    createForm.append('images', new Blob([Buffer.from('image-data')], { type: 'image/png' }), 'note.png');
+    const createdResponse = await fetch(`${base}/notes`, { method: 'POST', headers: { 'x-user-id': 'notes-user' }, body: createForm });
+    const created = await createdResponse.json();
+    assert.equal(createdResponse.status, 201);
+
+    const updateForm = new FormData();
+    updateForm.append('title', 'Updated note');
+    updateForm.append('body', 'Updated body has launch checklist.');
+    updateForm.append('removeAssetIds', created.item.assets[0].id);
+    const updatedResponse = await fetch(`${base}/notes/${created.item.id}`, { method: 'PATCH', headers: { 'x-user-id': 'notes-user' }, body: updateForm });
+    const updated = await updatedResponse.json();
+    assert.equal(updatedResponse.status, 200);
+    assert.equal(updated.item.sourceTitle, 'Updated note');
+    assert.equal(updated.item.assets.length, 0);
+
+    const deleteResponse = await fetch(`${base}/notes/${created.item.id}`, { method: 'DELETE', headers: { 'x-user-id': 'notes-user' } });
+    assert.equal(deleteResponse.status, 200);
+    assert.equal(store.getItem('notes-user', created.item.id), null);
+    assert.equal(store.listItemAssets('notes-user', created.item.id).length, 0);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/items/:id/approve queues a reviewed web save', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

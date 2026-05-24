@@ -18,6 +18,7 @@ const {
   PAUSED_JOB_STATUSES,
 } = require('../services/queue');
 const { ACTIVE_DELETION_STATUSES, hashDeletionValue } = require('../services/accountDeletion');
+const { NOTE_ASSET_BUCKET, publicNoteAsset } = require('../services/notes');
 
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
 const IMPORT_INSERT_BATCH_SIZE = 500;
@@ -270,7 +271,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async deleteUserStorageObjects(userId) {
       if (!client.storage) return { deletedObjects: 0, buckets: [], skipped: true };
-      const buckets = ['import-uploads', 'instagram-assets'];
+      const buckets = ['import-uploads', 'instagram-assets', NOTE_ASSET_BUCKET];
       let deletedObjects = 0;
       const bucketResults = [];
       for (const bucket of buckets) {
@@ -699,17 +700,93 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async getItems(userId) {
       const rows = await selectAllUserSavedItems(client, userId);
-      return rows.map(mapItemWithAnalysis);
+      return Promise.all(rows.map((row) => mapItemWithAnalysis(row, client)));
     },
     async getItem(userId, id) {
       const { data, error } = await client
         .from('saved_items')
-        .select('*, item_analysis(*)')
+        .select('*, item_analysis(*), item_assets(*)')
         .eq('user_id', userId)
         .eq('id', id)
         .maybeSingle();
       if (error) throw error;
-      return data ? mapItemWithAnalysis(data) : null;
+      return data ? mapItemWithAnalysis(data, client) : null;
+    },
+    async createNoteItem(userId, item) {
+      const { data, error } = await client
+        .from('saved_items')
+        .insert({
+          id: cleanDbText(item.id),
+          user_id: userId,
+          import_id: null,
+          url: cleanDbText(item.url),
+          content_type: cleanDbText(item.contentType),
+          caption: cleanDbText(item.caption),
+          hashtags: cleanTextArray(item.hashtags),
+          owner_name: cleanDbText(item.ownerName),
+          owner_username: cleanDbText(item.ownerUsername),
+          saved_at_text: cleanDbText(item.savedAt),
+          collections: cleanTextArray(item.collections),
+          platform: cleanDbText(item.platform),
+          platform_key: cleanDbText(item.platformKey),
+          source_id: cleanDbText(item.sourceId),
+          source_title: cleanDbText(item.sourceTitle),
+          source_author: cleanDbText(item.sourceAuthor),
+          source_description: cleanDbText(item.sourceDescription),
+          thumbnail_url: cleanDbText(item.thumbnailUrl || ''),
+          status: 'done',
+        })
+        .select('*, item_analysis(*), item_assets(*)')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapItemWithAnalysis(data, client) : null;
+    },
+    async addItemAsset(userId, itemId, asset) {
+      const { data, error } = await client
+        .from('item_assets')
+        .insert({
+          user_id: userId,
+          item_id: itemId,
+          asset_type: cleanDbText(asset.assetType || 'image'),
+          storage_path: cleanDbText(asset.storagePath),
+          mime_type: cleanDbText(asset.mimeType || ''),
+        })
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapAsset(data, client) : null;
+    },
+    async listItemAssets(userId, itemId) {
+      const { data, error } = await client
+        .from('item_assets')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('item_id', itemId)
+        .order('created_at');
+      if (error) throw error;
+      return Promise.all((data || []).map((row) => mapAsset(row, client)));
+    },
+    async removeItemAssets(userId, itemId, assetIds = []) {
+      let query = client
+        .from('item_assets')
+        .delete()
+        .eq('user_id', userId)
+        .eq('item_id', itemId);
+      if (assetIds.length) query = query.in('id', assetIds);
+      const { data, error } = await query.select('*');
+      if (error) throw error;
+      return Promise.all((data || []).map((row) => mapAsset(row, client)));
+    },
+    async deleteSavedItem(userId, id) {
+      const existing = await this.getItem(userId, id);
+      if (!existing) return null;
+      const { error } = await client
+        .from('saved_items')
+        .delete()
+        .eq('user_id', userId)
+        .eq('id', id);
+      if (error) throw error;
+      return existing;
     },
     async getJobs(userId, importId = null) {
       let query = client.from('processing_jobs').select('*').eq('user_id', userId);
@@ -1427,7 +1504,7 @@ async function selectAllUserSavedItems(client, userId) {
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await client
       .from('saved_items')
-      .select('*, item_analysis(*)')
+      .select('*, item_analysis(*), item_assets(*)')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .range(from, from + pageSize - 1);
@@ -1586,12 +1663,35 @@ function mapItem(row) {
     thumbnailUrl: row.thumbnail_url || '',
     status: row.status,
     error: row.error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
-function mapItemWithAnalysis(row) {
+async function mapAsset(row, client = null) {
+  let url = '';
+  if (row.storage_path?.startsWith('data:')) {
+    url = row.storage_path;
+  } else if (client?.storage && row.storage_path) {
+    const { data } = await client.storage.from(NOTE_ASSET_BUCKET).createSignedUrl(row.storage_path, 60 * 60);
+    url = data?.signedUrl || '';
+  }
+  return publicNoteAsset({
+    id: row.id,
+    userId: row.user_id,
+    itemId: row.item_id,
+    assetType: row.asset_type,
+    storagePath: row.storage_path,
+    mimeType: row.mime_type,
+    url,
+    createdAt: row.created_at,
+  });
+}
+
+async function mapItemWithAnalysis(row, client = null) {
   const item = mapItem(row);
   const analysis = Array.isArray(row.item_analysis) ? row.item_analysis[0] : row.item_analysis;
+  const assets = Array.isArray(row.item_assets) ? row.item_assets : [];
   item.analysis = analysis ? {
     title: analysis.title,
     summary: analysis.summary,
@@ -1606,6 +1706,7 @@ function mapItemWithAnalysis(row) {
     tags: analysis.tags || [],
     whyUseful: analysis.why_useful,
   } : null;
+  item.assets = await Promise.all(assets.map((asset) => mapAsset(asset, client)));
   return item;
 }
 
@@ -1646,7 +1747,7 @@ function toJobRow(patch) {
 }
 
 function toSavedItemPatch(patch = {}) {
-  const row = {};
+  const row = { updated_at: new Date().toISOString() };
   if (Object.prototype.hasOwnProperty.call(patch, 'importId')) row.import_id = patch.importId;
   if (Object.prototype.hasOwnProperty.call(patch, 'caption')) row.caption = patch.caption;
   if (Object.prototype.hasOwnProperty.call(patch, 'collections')) row.collections = patch.collections;

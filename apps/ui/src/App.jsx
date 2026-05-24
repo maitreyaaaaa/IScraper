@@ -46,6 +46,7 @@ import {
 import {
   approveReviewItem,
   cancelAccountDeletion,
+  createNote,
   deleteProviderCredential,
   downloadObsidianGraph,
   getAccountDeletion,
@@ -99,7 +100,12 @@ const INDEXING_META = {
 const ENRICHED_STAGES = new Set(['visual_indexed', 'deep_indexed']);
 const DASHBOARD_ENRICHED_STAGES = new Set(['text_indexed', 'visual_indexing', 'visual_indexed', 'deep_indexed']);
 const STALE_ENRICHMENT_UI_MS = 15 * 60 * 1000;
-const STATUSES = ['all', 'needs_review', 'done', 'failed', 'paused'];
+const TYPE_FILTERS = ['all', 'uploaded', 'links', 'notes'];
+const STATE_FILTERS = ['all', 'needs_review', 'searchable', 'enriched', 'failed'];
+const SORT_OPTIONS = ['newest', 'oldest', 'updated', 'title'];
+const NOTE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const MAX_NOTE_IMAGES = 5;
+const MAX_NOTE_IMAGE_BYTES = 5 * 1024 * 1024;
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 const HERO_PLATFORMS = [
   { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
@@ -410,6 +416,7 @@ function mapItem(item) {
   return {
     raw: item,
     id: item.id,
+    contentType: item.contentType || '',
     user: item.ownerUsername ? `@${item.ownerUsername}` : item.ownerName || 'unknown',
     title: analysis.title || firstLine(item.caption) || 'Untitled saved item',
     caption: item.caption || '',
@@ -431,6 +438,8 @@ function mapItem(item) {
     sourceAuthor: item.sourceAuthor || '',
     sourceDescription: item.sourceDescription || '',
     thumbnailUrl: item.thumbnailUrl || '',
+    assets: item.assets || [],
+    note: item.note || null,
     saved: item.savedAt || '',
     status: normalizeStatus(item.status || 'queued'),
     sourceStatus: item.status || 'queued',
@@ -447,6 +456,66 @@ function mapItem(item) {
 
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function isNoteItem(item) {
+  return item?.contentType === 'note' || item?.platformKey === 'iscraper-note';
+}
+
+function itemTypeMatches(item, typeFilter) {
+  if (typeFilter === 'all') return true;
+  if (typeFilter === 'notes') return isNoteItem(item);
+  if (typeFilter === 'links') return item.platformKey === 'web' || String(item.id || '').startsWith('web-');
+  if (typeFilter === 'uploaded') return !isNoteItem(item) && item.platformKey !== 'web' && !String(item.id || '').startsWith('web-');
+  return true;
+}
+
+function itemStateMatches(item, stateFilter) {
+  if (stateFilter === 'all') return true;
+  if (stateFilter === 'needs_review') return item.sourceStatus === 'needs_review';
+  if (stateFilter === 'searchable') return item.sourceStatus !== 'needs_review';
+  if (stateFilter === 'enriched') return DASHBOARD_ENRICHED_STAGES.has(item.indexingStage);
+  if (stateFilter === 'failed') return item.indexingStage === 'index_failed' || item.status === 'failed' || item.status === 'paused';
+  return true;
+}
+
+function sortedItems(items, sortOrder) {
+  const copy = [...items];
+  if (sortOrder === 'oldest') {
+    return copy.sort((a, b) => String(a.raw?.createdAt || a.saved || '').localeCompare(String(b.raw?.createdAt || b.saved || '')));
+  }
+  if (sortOrder === 'updated') {
+    return copy.sort((a, b) => String(b.raw?.updatedAt || b.raw?.createdAt || b.saved || '').localeCompare(String(a.raw?.updatedAt || a.raw?.createdAt || a.saved || '')));
+  }
+  if (sortOrder === 'title') {
+    return copy.sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+  }
+  return copy.sort((a, b) => String(b.raw?.createdAt || b.saved || '').localeCompare(String(a.raw?.createdAt || a.saved || '')));
+}
+
+function noteImageError(file, existingCount = 0) {
+  if (!NOTE_IMAGE_TYPES.has(file.type)) return 'Notes support PNG, JPEG, WebP, or GIF images only. Video notes are not supported yet.';
+  if (file.size > MAX_NOTE_IMAGE_BYTES) return 'Note images must be 5 MB or smaller.';
+  if (existingCount >= MAX_NOTE_IMAGES) return `Notes support up to ${MAX_NOTE_IMAGES} images.`;
+  return '';
+}
+
+function filterLabel(value) {
+  const labels = {
+    all: 'All',
+    uploaded: 'Uploaded',
+    links: 'Links',
+    notes: 'My Notes',
+    needs_review: 'Needs approval',
+    searchable: 'Searchable',
+    enriched: 'Enriched',
+    failed: 'Failed',
+    newest: 'Newest',
+    oldest: 'Oldest',
+    updated: 'Recently updated',
+    title: 'Title',
+  };
+  return labels[value] || String(value || '').replace(/_/g, ' ');
 }
 
 function firstLine(value = '') {
@@ -2753,7 +2822,7 @@ function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, ico
       >
         {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover:text-primary" />}
         <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{label}</span>
-        <span className="min-w-0 flex-1 truncate text-xs text-foreground">{value}</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-foreground">{filterLabel(value)}</span>
         <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition duration-200 ${open ? 'rotate-180 text-primary' : 'group-hover:text-primary'}`} />
       </button>
 
@@ -2779,7 +2848,7 @@ function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, ico
                 selected ? 'bg-orange-500 text-black' : 'text-foreground hover:bg-orange-500/15 hover:text-orange-300'
               }`}
             >
-              <span>{option}</span>
+              <span>{filterLabel(option)}</span>
               {selected && <Check className="h-4 w-4" />}
             </button>
           );
@@ -2792,7 +2861,9 @@ function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, ico
 function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [tab, setTab] = useState(() => dashboardTabFromLocation());
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [stateFilter, setStateFilter] = useState('all');
+  const [sortOrder, setSortOrder] = useState('newest');
   const [collectionFilter, setCollectionFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
   const [items, setItems] = useState([]);
@@ -2802,6 +2873,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [files, setFiles] = useState([]);
   const [importSourceType, setImportSourceType] = useState('auto');
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
+  const [noteForm, setNoteForm] = useState({ title: '', body: '', links: '', images: [] });
   const [credentials, setCredentials] = useState([]);
   const [credentialOptions, setCredentialOptions] = useState(null);
   const [credentialForm, setCredentialForm] = useState({
@@ -2983,13 +3055,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const pendingReviews = useMemo(() => items.filter((item) => item.sourceStatus === 'needs_review'), [items]);
 
   const filtered = useMemo(() => {
-    return boardItems.filter((item) => {
-      if (statusFilter !== 'all' && item.status !== statusFilter) return false;
+    return sortedItems(boardItems.filter((item) => {
+      if (!itemTypeMatches(item, typeFilter)) return false;
+      if (!itemStateMatches(item, stateFilter)) return false;
       if (collectionFilter !== 'all' && item.collection !== collectionFilter) return false;
       if (platformFilter !== 'all' && item.platform !== platformFilter) return false;
       return true;
-    });
-  }, [boardItems, collectionFilter, platformFilter, statusFilter]);
+    }), sortOrder);
+  }, [boardItems, collectionFilter, platformFilter, sortOrder, stateFilter, typeFilter]);
 
   const stats = useMemo(() => ({
     total: items.length,
@@ -3131,6 +3204,37 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setBusy(false);
     }
   }, [linkForm, loadItems, requireProfile, requireSignIn]);
+
+  const handleCreateNote = useCallback(async (event) => {
+    event.preventDefault();
+    if (!requireSignIn('create notes')) return;
+    if (!requireProfile('create notes')) return;
+    const body = noteForm.body.trim();
+    const title = noteForm.title.trim();
+    const links = noteForm.links.split(/\s+/).map((link) => link.trim()).filter(Boolean);
+    if (!body && !links.length && !noteForm.images.length) {
+      setError('Write a note, add a link, or attach an image before saving.');
+      setNotice('');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const result = await createNote({ title, body, links, images: noteForm.images });
+      const nextItem = mapItem(result.item);
+      setItems((current) => [nextItem, ...current.filter((entry) => entry.id !== nextItem.id)]);
+      setNoteForm({ title: '', body: '', links: '', images: [] });
+      setTab('library');
+      replaceAppTabUrl('library');
+      setTypeFilter('notes');
+      setNotice('Note saved to Library. It is searchable now.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [noteForm, requireProfile, requireSignIn]);
 
   useEffect(() => {
     if (pendingSaveHandledRef.current || loading || (authEnabled && (!session || profileRequired))) return;
@@ -3465,8 +3569,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     }}
                     onSearch={handleSearch}
                     busy={busy}
-                    statusFilter={statusFilter}
-                    setStatusFilter={setStatusFilter}
+                    typeFilter={typeFilter}
+                    setTypeFilter={setTypeFilter}
+                    stateFilter={stateFilter}
+                    setStateFilter={setStateFilter}
+                    sortOrder={sortOrder}
+                    setSortOrder={setSortOrder}
                     collectionFilter={collectionFilter}
                     setCollectionFilter={setCollectionFilter}
                     collections={collections}
@@ -3538,7 +3646,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     setImportSourceType={setImportSourceType}
                     linkForm={linkForm}
                     setLinkForm={setLinkForm}
+                    noteForm={noteForm}
+                    setNoteForm={setNoteForm}
                     onSaveLink={handleSaveLink}
+                    onCreateNote={handleCreateNote}
                     onImport={handleImport}
                     pendingReviews={pendingReviews}
                     onApproveReview={handleApproveReview}
@@ -4707,8 +4818,12 @@ function LibraryTab({
   onClearSearch,
   onSearch,
   busy,
-  statusFilter,
-  setStatusFilter,
+  typeFilter,
+  setTypeFilter,
+  stateFilter,
+  setStateFilter,
+  sortOrder,
+  setSortOrder,
   collectionFilter,
   setCollectionFilter,
   collections,
@@ -4724,7 +4839,7 @@ function LibraryTab({
 }) {
   const boardRef = useRef(null);
   const [visibleCount, setVisibleCount] = useState(80);
-  const activeFilters = (statusFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
+  const activeFilters = (typeFilter !== 'all' ? 1 : 0) + (stateFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
   const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
   const searchableCount = items.filter((item) => item.sourceStatus !== 'needs_review').length;
   const enrichedCount = items.filter((item) => DASHBOARD_ENRICHED_STAGES.has(item.indexingStage)).length;
@@ -4751,7 +4866,7 @@ function LibraryTab({
       { autoAlpha: 1, y: 0, scale: 1, duration: 0.5, ease: 'power3.out', stagger: 0.035, clearProps: 'transform,opacity,visibility' },
     );
     return undefined;
-  }, [collectionFilter, items, platformFilter, statusFilter, visibleCount]);
+  }, [collectionFilter, items, platformFilter, sortOrder, stateFilter, typeFilter, visibleCount]);
 
   return (
     <div className="mx-auto max-w-[1480px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
@@ -4847,14 +4962,25 @@ function LibraryTab({
           </span>
           <div className="flex flex-wrap gap-2">
             <DashboardFilterSelect
-              label="Status"
-              ariaLabel="Filter by status"
+              label="Type"
+              ariaLabel="Filter by content type"
               icon={Filter}
-              value={statusFilter}
-              options={STATUSES}
-              onChange={(nextStatus) => {
+              value={typeFilter}
+              options={TYPE_FILTERS}
+              onChange={(nextType) => {
                   setVisibleCount(80);
-                  setStatusFilter(nextStatus);
+                  setTypeFilter(nextType);
+                }}
+            />
+            <DashboardFilterSelect
+              label="State"
+              ariaLabel="Filter by state"
+              icon={CheckCircle2}
+              value={stateFilter}
+              options={STATE_FILTERS}
+              onChange={(nextState) => {
+                  setVisibleCount(80);
+                  setStateFilter(nextState);
                 }}
             />
             <DashboardFilterSelect
@@ -4877,6 +5003,17 @@ function LibraryTab({
                   setCollectionFilter(nextCollection);
                 }}
             />
+            <DashboardFilterSelect
+              label="Sort"
+              ariaLabel="Sort library"
+              icon={ChevronDown}
+              value={sortOrder}
+              options={SORT_OPTIONS}
+              onChange={(nextSort) => {
+                  setVisibleCount(80);
+                  setSortOrder(nextSort);
+                }}
+            />
             {activeFilters > 0 && <span className="rounded-full bg-primary px-3 py-2 text-primary-foreground">{activeFilters} active</span>}
           </div>
         </div>
@@ -4889,7 +5026,9 @@ function LibraryTab({
               {searchActive && searchResultCount === 0 ? <Search className="h-5 w-5" /> : <Upload className="h-5 w-5" />}
             </div>
             <h3 className="mt-4 font-display text-2xl font-bold tracking-tight">
-              {searchActive && searchResultCount === 0
+              {typeFilter === 'notes' && !searchActive
+                ? 'No notes yet'
+                : searchActive && searchResultCount === 0
                 ? 'No matching saves yet'
                 : activeFilters > 0
                   ? 'No saves match these filters'
@@ -4902,6 +5041,8 @@ function LibraryTab({
                 ? activationState.searchable
                   ? `${formatUsageNumber(activationState.searchable)} saves are searchable now. Try another title, creator, tag, or collection.`
                   : 'Nothing has been approved for search yet. Approve a save first, then search again.'
+                : typeFilter === 'notes'
+                  ? 'Create a note from the Add tab and it will appear here immediately.'
                 : activeFilters > 0
                   ? 'Clear the active filters or switch back to All to see your saved library.'
                   : activationState.needsReview
@@ -4914,7 +5055,7 @@ function LibraryTab({
                 onClick={onOpenAdd}
                 className="mt-5 inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
               >
-                <Upload className="h-4 w-4" /> Add saves
+                <Upload className="h-4 w-4" /> {typeFilter === 'notes' ? 'Create note' : 'Add saves'}
               </button>
             )}
           </div>
@@ -5057,17 +5198,20 @@ function SearchResultFeedback({ itemId, value, onVote }) {
 }
 
 function PinCard({ item, index, onClick, searchActive = false, feedback = null, onSearchFeedback = null }) {
+  const note = isNoteItem(item);
   const meta = item.sourceStatus === 'needs_review'
     ? STATUS_META.needs_review
     : INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
   const Icon = meta.icon;
-  const chip = firstUsefulCardChip(item);
-  const preview = shortCardText(item.sourceDescription || item.visual || item.summary || item.caption || 'Open this save to see what was captured.');
+  const chip = note ? 'My Note' : firstUsefulCardChip(item);
+  const preview = shortCardText(item.sourceDescription || item.visual || item.summary || item.caption || (note ? 'Open this note to see the full text.' : 'Open this save to see what was captured.'));
   const backdrop = PIN_BACKDROPS[index % PIN_BACKDROPS.length];
-  const height = PIN_HEIGHTS[index % PIN_HEIGHTS.length];
-  const cardTitle = shortCardText(item.sourceTitle || item.title || 'Saved post');
-  const source = shortCardText(item.sourceAuthor || item.user || item.platform || 'Saved source');
+  const height = note ? 'min-h-56' : PIN_HEIGHTS[index % PIN_HEIGHTS.length];
+  const cardTitle = shortCardText(item.sourceTitle || item.title || (note ? 'Untitled note' : 'Saved post'));
+  const source = note ? 'Saved by you' : shortCardText(item.sourceAuthor || item.user || item.platform || 'Saved source');
   const searchReason = searchActive ? firstSearchReason(item) : '';
+  const imageCount = item.assets?.filter((asset) => asset.assetType === 'image').length || 0;
+  const linkCount = item.note?.links?.length || (note ? [...String(item.caption || '').matchAll(/https?:\/\/[^\s<>"')\]]+/gi)].length : 0);
 
   return (
     <div
@@ -5082,14 +5226,14 @@ function PinCard({ item, index, onClick, searchActive = false, feedback = null, 
       }}
       className="pin-card group mb-5 block w-full break-inside-avoid overflow-hidden rounded-[1.75rem] border border-white/10 bg-white/[0.035] text-left shadow-2xl shadow-black/30 transition duration-300 hover:-translate-y-1 hover:border-primary/60 hover:bg-white/[0.055]"
     >
-      <div className={`relative flex ${height} flex-col justify-between overflow-hidden p-5 text-black`} style={{ background: backdrop }}>
+      <div className={`relative flex ${height} flex-col justify-between overflow-hidden p-5 text-black`} style={{ background: note ? 'linear-gradient(135deg, #f7f2df 0%, #d8f99d 100%)' : backdrop }}>
         {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-50 mix-blend-multiply" loading="lazy" /> : null}
         <div className="absolute inset-0 opacity-25 grid-bg" />
         <div className="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-white/45 blur-2xl" />
         <div className="relative flex items-center justify-between gap-3">
-          <span className="rounded-full bg-black/75 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-white">{item.platform}</span>
+          <span className="rounded-full bg-black/75 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-white">{note ? 'My Note' : item.platform}</span>
           <span className="rounded-full bg-white/70 p-2 text-black">
-            <Eye className="h-4 w-4" />
+            {note ? <FileText className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </span>
         </div>
         <div className="relative">
@@ -5106,10 +5250,16 @@ function PinCard({ item, index, onClick, searchActive = false, feedback = null, 
           <span className="truncate font-mono text-xs text-primary">{source}</span>
           <span className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider ${meta.color}`}>
             <Icon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
-            {item.sourceStatus === 'needs_review' ? 'Review' : meta.label}
+            {note ? 'Searchable' : item.sourceStatus === 'needs_review' ? 'Review' : meta.label}
           </span>
         </div>
         <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">{preview}</p>
+        {note && (imageCount > 0 || linkCount > 0) && (
+          <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {linkCount > 0 && <span className="rounded-full border border-white/10 px-2.5 py-1">{linkCount} links</span>}
+            {imageCount > 0 && <span className="rounded-full border border-white/10 px-2.5 py-1">{imageCount} images</span>}
+          </div>
+        )}
         {searchReason && (
           <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs leading-5 text-muted-foreground">
             {searchReason}
@@ -5133,7 +5283,10 @@ function UploadTab({
   setImportSourceType,
   linkForm,
   setLinkForm,
+  noteForm,
+  setNoteForm,
   onSaveLink,
+  onCreateNote,
   onImport,
   pendingReviews,
   onApproveReview,
@@ -5147,6 +5300,7 @@ function UploadTab({
 }) {
   const [dragging, setDragging] = useState(false);
   const linkInputRef = useRef(null);
+  const noteImageInputRef = useRef(null);
   const importHealth = useMemo(() => importHealthForFiles(files, importSourceType), [files, importSourceType]);
   const sourceOptions = [
     { value: 'auto', label: 'Auto-detect', help: 'Best for full export ZIPs.' },
@@ -5170,6 +5324,88 @@ function UploadTab({
       </div>
 
       <FirstRunActivationCard activation={activationState} onOpenAdd={() => linkInputRef.current?.focus()} onTrySearch={onTrySearch} />
+
+      <form onSubmit={onCreateNote} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Create note</div>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Write a note for your library</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Notes save directly to Library and are searchable right away. Video notes are not supported yet.
+            </p>
+          </div>
+          <span className="rounded-full border border-white/10 px-3 py-2 text-xs text-muted-foreground">Images: PNG, JPEG, WebP, GIF · 5 MB</span>
+        </div>
+        <input
+          value={noteForm.title}
+          onChange={(event) => setNoteForm((current) => ({ ...current, title: event.target.value }))}
+          placeholder="Title optional"
+          maxLength={160}
+          className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+        />
+        <textarea
+          value={noteForm.body}
+          onChange={(event) => setNoteForm((current) => ({ ...current, body: event.target.value }))}
+          placeholder="Write the note, context, reminder, or idea..."
+          className="min-h-36 w-full resize-y rounded-xl border border-white/10 bg-black px-4 py-3 text-sm leading-6 outline-none focus:border-primary"
+        />
+        <input
+          value={noteForm.links}
+          onChange={(event) => setNoteForm((current) => ({ ...current, links: event.target.value }))}
+          placeholder="Optional links, separated by spaces"
+          className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+        />
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => noteImageInputRef.current?.click()}
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-white/5"
+          >
+            <Upload className="h-4 w-4" /> Add images
+          </button>
+          <input
+            ref={noteImageInputRef}
+            type="file"
+            multiple
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            onChange={(event) => {
+              const selectedImages = Array.from(event.target.files || []);
+              setNoteForm((current) => {
+                const nextImages = [...current.images];
+                for (const file of selectedImages) {
+                  const message = noteImageError(file, nextImages.length);
+                  if (!message) nextImages.push(file);
+                }
+                return { ...current, images: nextImages.slice(0, MAX_NOTE_IMAGES) };
+              });
+              event.target.value = '';
+            }}
+            className="hidden"
+          />
+          <span className="text-xs text-muted-foreground">{noteForm.images.length}/{MAX_NOTE_IMAGES} images selected</span>
+        </div>
+        {noteForm.images.length > 0 && (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {noteForm.images.map((file, index) => (
+              <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black px-3 py-2 text-sm">
+                <span className="min-w-0 truncate">{file.name}</span>
+                <button
+                  type="button"
+                  onClick={() => setNoteForm((current) => ({ ...current, images: current.images.filter((_, imageIndex) => imageIndex !== index) }))}
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
+                  aria-label={`Remove ${file.name}`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+          Save note to Library
+        </button>
+      </form>
 
       <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -6285,6 +6521,11 @@ function buildOriginalDetailRows(item, insightRows = []) {
     rows.push({ label, text, icon, mono });
   };
 
+  if (isNoteItem(item)) {
+    addRow('Note', item.caption, FileText, true);
+    return rows;
+  }
+
   addRow('Source', [item.platform, item.sourceId].filter(Boolean).join(' / '), ExternalLink);
   addRow('Source description', item.sourceDescription, FileText);
   addRow('Caption', item.caption, FileText, true);
@@ -6333,6 +6574,7 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
   const ref = useRef(null);
   const indexingMeta = INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
   const IndexingIcon = indexingMeta.icon;
+  const note = isNoteItem(item);
   const insight = useMemo(() => buildDetailInsight(item), [item]);
   useEffect(() => {
     gsap.fromTo(ref.current, { x: '100%' }, { x: 0, duration: 0.5, ease: 'power3.out' });
@@ -6350,18 +6592,20 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
         <div className="space-y-8 p-8">
           <div>
             <div className="mb-2 flex flex-wrap gap-2 font-mono text-xs text-primary">
-              <span>{item.platform}</span>
+              <span>{note ? 'My Note' : item.platform}</span>
               {item.sourceAuthor ? <span className="text-muted-foreground">/ {item.sourceAuthor}</span> : null}
               <span className={`inline-flex items-center gap-1 ${indexingMeta.color}`}>
                 <IndexingIcon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
-                {indexingMeta.label}
+                {note ? 'Searchable' : indexingMeta.label}
               </span>
             </div>
             {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="mb-5 max-h-64 w-full rounded-2xl object-cover" /> : null}
             <h2 className="mb-3 font-display text-3xl font-bold tracking-tight">{item.sourceTitle || item.title}</h2>
-            <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-primary">
-              Open original save <ExternalLink className="h-3 w-3" />
-            </a>
+            {!note && (
+              <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-primary">
+                Open original save <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
             {item.sourceStatus === 'needs_review' && (
               <button
                 type="button"
@@ -6376,9 +6620,17 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
           </div>
 
           {item.error && <Section icon={AlertCircle} label="Error">{item.error}</Section>}
+          {note && <Section icon={FileText} label="Note" mono>{item.caption}</Section>}
+          {note && item.assets?.length > 0 && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {item.assets.map((asset) => (
+                <img key={asset.id} src={asset.url} alt="" className="max-h-64 w-full rounded-2xl border border-white/10 object-cover" loading="lazy" />
+              ))}
+            </div>
+          )}
           {item.indexingError && <Section icon={AlertCircle} label="Enrichment note">{item.indexingError}</Section>}
-          {item.indexingStage === 'visual_indexing' && <Section icon={Loader2} label="Enrichment">Understanding this save now. Metadata search stays available.</Section>}
-          <InsightPanel insight={insight} />
+          {!note && item.indexingStage === 'visual_indexing' && <Section icon={Loader2} label="Enrichment">Understanding this save now. Metadata search stays available.</Section>}
+          {!note && <InsightPanel insight={insight} />}
           {insight.verify && (
             <Section icon={AlertCircle} label="Check before using">
               This save may mention dates, prices, funding, availability, or terms that can change. Verify the original source before acting on it.
@@ -6386,7 +6638,7 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
           )}
           <ChipGroup icon={Bot} label="Mentioned" items={insight.mentions} />
           <ChipGroup icon={Hash} label="Topics" items={insight.topics} />
-          <OriginalDetails rows={insight.originalRows} />
+          {!note && <OriginalDetails rows={insight.originalRows} />}
         </div>
       </div>
     </div>

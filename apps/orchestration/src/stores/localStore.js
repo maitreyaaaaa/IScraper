@@ -25,6 +25,7 @@ const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require(
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
 const { ACTIVE_DELETION_STATUSES, hashDeletionValue } = require('../services/accountDeletion');
+const { publicNoteAsset } = require('../services/notes');
 
 const DEFAULT_USER_ID = 'local-dev-user';
 
@@ -68,6 +69,7 @@ function seedFromLegacyIndex(dataPath) {
     profiles: [],
     extensionTokens: [],
     lensSearchEvents: [],
+    itemAssets: [],
     accountDeletionRequests: [],
     accountDeletionSteps: [],
     accountDeletionAudit: [],
@@ -126,6 +128,7 @@ function emptyState() {
     profiles: [],
     extensionTokens: [],
     lensSearchEvents: [],
+    itemAssets: [],
     accountDeletionRequests: [],
     accountDeletionSteps: [],
     accountDeletionAudit: [],
@@ -152,6 +155,7 @@ function normalizeState(state) {
     profiles: state.profiles || [],
     extensionTokens: state.extensionTokens || [],
     lensSearchEvents: state.lensSearchEvents || [],
+    itemAssets: state.itemAssets || [],
     accountDeletionRequests: state.accountDeletionRequests || [],
     accountDeletionSteps: state.accountDeletionSteps || [],
     accountDeletionAudit: state.accountDeletionAudit || [],
@@ -205,6 +209,18 @@ function adminUserSummary(state, user, credits) {
     },
     usageStats,
   };
+}
+
+function localItemAssets(state, userId, itemId) {
+  return (state.itemAssets || [])
+    .filter((asset) => asset.userId === userId && asset.itemId === itemId)
+    .map(publicNoteAsset);
+}
+
+function hydrateLocalItem(state, item) {
+  if (!item) return null;
+  item.assets = localItemAssets(state, item.userId, item.id);
+  return item;
 }
 
 function createLocalStore({ dataPath }) {
@@ -823,6 +839,7 @@ function createLocalStore({ dataPath }) {
     updateSavedItem(userId, id, patch = {}) {
       const item = this.getItem(userId, id);
       if (!item) return null;
+      const rawItem = state.items.find((entry) => entry.userId === userId && entry.id === id);
       const allowed = [
         'importId',
         'caption',
@@ -838,11 +855,70 @@ function createLocalStore({ dataPath }) {
         'error',
       ];
       for (const key of allowed) {
-        if (Object.prototype.hasOwnProperty.call(patch, key)) item[key] = patch[key];
+        if (Object.prototype.hasOwnProperty.call(patch, key)) rawItem[key] = patch[key];
       }
-      item.updatedAt = now();
+      if (Object.prototype.hasOwnProperty.call(patch, 'note')) rawItem.note = patch.note;
+      rawItem.updatedAt = now();
       save();
-      return item;
+      return hydrateLocalItem(state, rawItem);
+    },
+
+    createNoteItem(userId, item) {
+      const created = {
+        ...item,
+        userId,
+        createdAt: item.createdAt || now(),
+        updatedAt: item.updatedAt || now(),
+        analysis: null,
+      };
+      state.items.push(created);
+      save();
+      return hydrateLocalItem(state, created);
+    },
+
+    addItemAsset(userId, itemId, asset) {
+      const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
+      if (!item) return null;
+      const created = {
+        id: asset.id || `asset-${crypto.randomUUID()}`,
+        userId,
+        itemId,
+        assetType: asset.assetType || 'image',
+        storagePath: asset.storagePath,
+        mimeType: asset.mimeType || '',
+        url: asset.url || asset.storagePath || '',
+        createdAt: asset.createdAt || now(),
+      };
+      state.itemAssets.push(created);
+      save();
+      return publicNoteAsset(created);
+    },
+
+    listItemAssets(userId, itemId) {
+      return localItemAssets(state, userId, itemId);
+    },
+
+    removeItemAssets(userId, itemId, assetIds = []) {
+      const ids = new Set(assetIds);
+      const removed = [];
+      state.itemAssets = state.itemAssets.filter((asset) => {
+        const match = asset.userId === userId && asset.itemId === itemId && (!ids.size || ids.has(asset.id));
+        if (match) removed.push(publicNoteAsset(asset));
+        return !match;
+      });
+      if (removed.length) save();
+      return removed;
+    },
+
+    deleteSavedItem(userId, id) {
+      const index = state.items.findIndex((entry) => entry.userId === userId && entry.id === id);
+      if (index === -1) return null;
+      const [removed] = state.items.splice(index, 1);
+      state.jobs = state.jobs.filter((job) => !(job.userId === userId && job.itemId === id));
+      state.searchFeedback = state.searchFeedback.filter((entry) => !(entry.userId === userId && entry.itemId === id));
+      state.itemAssets = state.itemAssets.filter((asset) => !(asset.userId === userId && asset.itemId === id));
+      save();
+      return hydrateLocalItem(state, removed);
     },
 
     createJobs({ userId, importId, items }) {
@@ -854,11 +930,11 @@ function createLocalStore({ dataPath }) {
     },
 
     getItems(userId) {
-      return state.items.filter((item) => item.userId === userId);
+      return state.items.filter((item) => item.userId === userId).map((item) => hydrateLocalItem(state, item));
     },
 
     getItem(userId, id) {
-      return state.items.find((item) => item.userId === userId && item.id === id) || null;
+      return hydrateLocalItem(state, state.items.find((item) => item.userId === userId && item.id === id) || null);
     },
 
     getJobs(userId, importId = null) {

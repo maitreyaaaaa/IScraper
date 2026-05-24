@@ -57,6 +57,8 @@ function getConfig() {
     maxUploadFileSizeBytes: Number(process.env.MAX_UPLOAD_FILE_SIZE_BYTES || 25 * 1024 * 1024),
     importChunkSizeBytes: Number(process.env.IMPORT_CHUNK_SIZE_BYTES || 4 * 1024 * 1024),
     importUploadBucket: process.env.IMPORT_UPLOAD_BUCKET || 'import-uploads',
+    noteAssetBucket: process.env.NOTE_ASSET_BUCKET || 'note-assets',
+    maxNoteImageFileSizeBytes: Number(process.env.MAX_NOTE_IMAGE_FILE_SIZE_BYTES || 5 * 1024 * 1024),
     jsonBodyLimit: process.env.JSON_BODY_LIMIT || '1mb',
     rateLimitWindowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
     rateLimitMax: Number(process.env.RATE_LIMIT_MAX || 600),

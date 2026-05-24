@@ -308,6 +308,38 @@ export function saveLink(payload) {
   });
 }
 
+function noteFormData(payload = {}) {
+  const formData = new FormData();
+  formData.append('title', payload.title || '');
+  formData.append('body', payload.body || '');
+  formData.append('links', JSON.stringify(payload.links || []));
+  if (payload.removeAssetIds?.length) formData.append('removeAssetIds', payload.removeAssetIds.join(','));
+  for (const image of payload.images || []) {
+    formData.append('images', image);
+  }
+  return formData;
+}
+
+export function createNote(payload) {
+  return request('/notes', {
+    method: 'POST',
+    body: noteFormData(payload),
+  });
+}
+
+export function updateNote(id, payload) {
+  return request(`/notes/${id}`, {
+    method: 'PATCH',
+    body: noteFormData(payload),
+  });
+}
+
+export function deleteNote(id) {
+  return request(`/notes/${id}`, {
+    method: 'DELETE',
+  });
+}
+
 export function enrichItem(id, payload = {}) {
   return request(`/items/${id}/enrich`, {
     method: 'POST',
