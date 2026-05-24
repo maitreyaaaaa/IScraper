@@ -1,6 +1,6 @@
 # Save to IScraper Extension
 
-Browser extension for saving the current tab and running IScraper Lens search.
+Browser extension for saving the current tab and running IScraper Lens search against a private saved library.
 
 Status: coming soon for normal users. This folder is for development and browser-store submission work only.
 
@@ -32,11 +32,22 @@ For developer testing only:
 
 The extension does not store Supabase auth tokens.
 
-When the user clicks Save to brain, it opens IScraper with the current tab URL, title, platform, Open Graph description, thumbnail, author, and optional note. The logged-in web app then saves the link using the normal user session.
+When the user clicks Save to library, it opens IScraper with the current tab URL, title, platform, Open Graph description, thumbnail, author, and optional note. The logged-in web app then saves the link using the normal user session.
 
-For Lens search, create a Lens token in IScraper Settings, paste it into the extension, then click Lens search this page. If text is selected, IScraper searches that text across the user's brain. If no text is selected, the user can drag around an object or text inside an image.
+For Lens search, create a Lens token in IScraper Settings, paste it into the extension, then click Lens search this page. If text is selected, IScraper searches that text across the user's saved library. If no text is selected, the user can drag around an object or text inside an image.
 
 Full IScraper pages always open in a new tab. Lens stores only a limited extension token, not the user's main login session.
+
+## Capture Roadmap
+
+The current development build saves page metadata and runs Lens search. After browser-store approval, planned capture modes include one-click saving for:
+
+- Screenshots.
+- Selected text.
+- Images.
+- Videos.
+
+Do not describe those capture modes as available to normal users until they are implemented, reviewed, and released.
 
 ## Chrome Web Store Review Notes
 

@@ -37,9 +37,9 @@
     const container = ensureRoot();
     const shade = document.createElement('div');
     shade.className = 'iscraper-lens-shade';
-    shade.title = 'Drag around text or an object to search your IScraper brain.';
+    shade.title = 'Drag around text or an object to search your IScraper library.';
     container.appendChild(shade);
-    showPanel('Drag around text or an object. Release to search your brain.', 'Crop Lens', false);
+    showPanel('Drag around text or an object. Release to search your library.', 'Crop Lens', false);
 
     shade.addEventListener('pointerdown', (event) => {
       startPoint = { x: event.clientX, y: event.clientY };

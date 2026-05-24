@@ -18,3 +18,5 @@ It does not:
 - Execute remotely hosted JavaScript.
 
 Lens requests are sent to the configured IScraper app URL. Image Lens uses the user's own connected media AI key on the backend.
+
+Planned one-click saving for screenshots, selected text, images, and videos must keep the same user-initiated model: no background scraping, no automatic browsing-history collection, and no storage of the user's main login token.

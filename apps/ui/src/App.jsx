@@ -106,8 +106,11 @@ const HERO_PLATFORMS = [
   { name: 'X', src: '/platforms/x.svg', bg: '#fff' },
   { name: 'Facebook', src: '/platforms/facebook.svg', bg: '#1877f2' },
   { name: 'Pinterest', src: '/platforms/pinterest.svg', bg: '#e60023' },
+  { name: 'Reddit', src: '/platforms/reddit.svg', bg: '#ff4500' },
+  { name: 'LinkedIn', src: '/platforms/linkedin.svg', bg: '#0a66c2' },
   { name: 'TikTok', src: '/platforms/tiktok.svg', bg: '#000' },
   { name: 'YouTube', src: '/platforms/youtube.svg', bg: '#ff0033' },
+  { name: 'Substack', src: '/platforms/substack.svg', bg: '#ff6719', scale: 0.92 },
 ];
 const IMPORT_STORAGE_BUCKET = import.meta.env.VITE_SUPABASE_IMPORT_BUCKET || 'instagram-assets';
 const VERCEL_SAFE_UPLOAD_BYTES = 4 * 1024 * 1024;
@@ -1612,7 +1615,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
 
           <div className="mt-12 flex flex-col items-start justify-between gap-8 md:flex-row md:items-end">
             <p className="hero-fade max-w-xl text-lg leading-relaxed text-muted-foreground">
-              Recipes, outfits, workouts, trips, products, creators, ideas. Save links from any platform and turn the posts you already saved into a private library you can actually search.
+              Import exports, save links, approve what matters, and turn the posts, products, creators, research, and ideas you already saved into a private library you can actually search.
             </p>
             <div className="hero-fade flex flex-wrap items-center gap-4">
               <button
@@ -1674,18 +1677,20 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
                 Your saves finally <span className="italic text-primary">work for you</span>.
               </h2>
             </div>
-            <p className="max-w-md text-muted-foreground">Stop relying on Instagram's endless saved folder. Find the exact thing when you need it.</p>
+            <p className="max-w-md text-muted-foreground">Stop losing useful saves inside platform folders, screenshots, and browser tabs. Find the exact thing when you need it.</p>
           </div>
 
           <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
             {[
-              [Zap, 'Save from any platform', 'Paste a link from Pinterest, X, TikTok, YouTube, Instagram, or any site and keep it in the same searchable brain.'],
-              [Brain, 'Know why you saved it', 'Each save can get a plain-English summary, so old posts become useful again instead of forgotten.'],
+              [Zap, 'Save from any platform', 'Paste a link from Pinterest, X, TikTok, YouTube, Instagram, or any site and keep it in the same searchable library.'],
+              [Brain, 'Know why you saved it', 'Each save can get a plain-English summary, so old posts, links, and references become useful again instead of forgotten.'],
               [CheckCircle2, 'First 200 saves included', 'Start with 200 imported saves covered by IScraper before paid credits matter. No API key needed for that first allowance.'],
               [Tag, 'Organized without the cleanup', 'Group saves by themes like travel, food, fitness, shopping, home, business, or inspiration.'],
-              [Lock, 'Private by default', 'Your saved export starts on your machine, so your personal taste and plans stay yours.'],
-              [ShieldCheck, 'Built around official export', 'Use Instagram export files to build your library without handing over your Instagram login.'],
-              [KeyRound, 'Browser extension coming soon', 'The extension will let you send the current tab into IScraper after the browser store release.'],
+              [Lock, 'Private by default', 'Your library belongs to your account, with review before new saves become searchable.'],
+              [ShieldCheck, 'Built around official exports', 'Use Instagram and Pinterest exports without handing over social-platform passwords.'],
+              [Search, 'Lens and AI search', 'Search by words, selected text, or a screenshot crop, then see why results matched and which saves support an AI answer.'],
+              [GitBranch, 'Export your graph', 'Turn indexed saves into an Obsidian-ready graph when you want an AI agent or vault to work with your library.'],
+              [KeyRound, 'Browser capture coming soon', 'The extension roadmap adds one-click saving for screenshots, selected text, images, and videos after browser-store release.'],
             ].map(([Icon, title, description], index) => (
               <div
                 key={title}
@@ -1711,10 +1716,10 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           <div data-reveal>
             <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension - coming soon</div>
             <h2 className="max-w-4xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
-              Extension support is coming soon.
+              One-click capture is the next step.
             </h2>
             <p className="mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-              The IScraper extension is not available for users yet. When the browser-store listing is approved, it will let you save pages and run Lens search from your browser.
+              The extension exists for development and browser-store submission work today. When the public listing is approved, it will let users save pages, run Lens search, and later capture screenshots, selected text, images, and videos into their library.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <button
@@ -1739,9 +1744,9 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
 
           <div data-reveal className="grid gap-4 sm:grid-cols-2">
             {[
-              [KeyRound, 'Limited token - coming soon', 'The planned extension will use a revokable Lens token, not your main login.'],
-              [Search, 'Selected text search - coming soon', 'You will be able to highlight text on a page and search it across your saved library.'],
-              [Eye, 'Image crop Lens - coming soon', 'You will be able to drag over text or an object in an image and search matching saves.'],
+              [KeyRound, 'Limited token', 'Lens uses a revokable extension token, not your main login session.'],
+              [Search, 'Selected text Lens', 'Highlight text on a page and search it across your saved library.'],
+              [Eye, 'Screenshot crop Lens', 'Drag over text or an object in the page and search matching saves.'],
               [ShieldCheck, 'Store review - coming soon', 'The extension needs browser-store approval before normal users can install it.'],
             ].map(([Icon, title, description]) => (
               <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
@@ -1759,7 +1764,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           <div className="index-heading mb-16">
             <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 03 - What becomes searchable</div>
             <h2 className="max-w-4xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
-              Turn every save into a <span className="italic text-accent">useful memory</span>.
+              Turn every save into a <span className="italic text-accent">usable reference</span>.
             </h2>
           </div>
           <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-white/10 bg-white/10 md:grid-cols-3 lg:grid-cols-4">
@@ -1851,9 +1856,9 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         <div className="cta-bg radial-fade grid-bg absolute inset-0 opacity-50" />
         <div className="relative mx-auto max-w-5xl text-center">
           <h2 data-reveal className="text-balance font-display text-6xl font-bold tracking-tighter md:text-8xl">
-            Your best saves are already there. <br />Make them <span className="text-glow italic text-primary">useful</span>.
+            Your best references are already saved. <br />Make them <span className="text-glow italic text-primary">usable</span>.
           </h2>
-          <p data-reveal className="mx-auto mt-8 max-w-xl text-lg text-muted-foreground">Paste one link or upload an export, then turn saved posts into a library you can come back to.</p>
+          <p data-reveal className="mx-auto mt-8 max-w-xl text-lg text-muted-foreground">Paste one link or upload an export, then turn saved posts, products, creators, research, and ideas into a library you can come back to.</p>
           <div data-reveal className="mt-12 flex flex-wrap items-center justify-center gap-4">
             <button
               type="button"
@@ -2083,7 +2088,7 @@ const HOW_TO_GUIDES = [
   { key: 'instagram', icon: Upload, title: 'Instagram export', copy: 'Get your saved posts file from Instagram and upload it into IScraper.', status: 'Guide ready' },
   { key: 'api-keys', icon: KeyRound, title: 'API keys', copy: 'Method 1: use OpenRouter for summaries, tags, and semantic search.', status: 'Guide ready' },
   { key: 'pinterest', icon: ExternalLink, title: 'Pinterest export', copy: 'Request and download your Pinterest data export.', status: 'Guide ready' },
-  { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Coming soon: save pages, use Lens search, and open results from your browser.', status: 'Coming soon' },
+  { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Coming soon for normal users: save pages, use Lens, and later capture screenshots, text, images, and videos.', status: 'Coming soon' },
 ];
 
 function HowToUsePage({ onBack, onOpenApp }) {
@@ -2181,7 +2186,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
             Guides for imports, API keys, and upcoming features.
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
-            Start with Instagram export today. We will keep adding simple guides here for API keys, Pinterest, the browser extension, and other import flows as they become available.
+            Start with Instagram or Pinterest exports, then add links manually when you want one-off saves. We will keep adding simple guides here for API keys, the browser extension, and other capture flows as they become available.
           </p>
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
             {HOW_TO_GUIDES.map(({ key, icon: Icon, title, copy, status }) => (
@@ -2353,7 +2358,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
             <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Browser extension - coming soon</div>
             <h2 className="mt-3 font-display text-3xl font-bold tracking-tight md:text-5xl">The extension guide is coming soon.</h2>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground">
-              The extension is not available for users yet. Once the browser-store listing is approved, this page will show the install and setup steps.
+              The extension is not available for normal users yet. Once the browser-store listing is approved, this page will show install steps for saving pages and using Lens. One-click screenshot, selected-text, image, and video capture will follow as extension capture modes mature.
             </p>
             <span className="mt-8 inline-flex rounded-full bg-white/10 px-5 py-3 text-sm font-semibold text-muted-foreground">
               Coming soon
@@ -2426,9 +2431,9 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
     message: '',
   });
   const helpTopics = [
-    [Upload, 'Import help', 'Use the Instagram export guide if you are stuck getting your saved posts file.'],
+    [Upload, 'Import and save help', 'Use the Instagram or Pinterest guides for exports, or paste a single link from the Add saves tab.'],
     [KeyRound, 'AI keys', 'IScraper is BYOK right now. Add your own text, media, and embedding keys in Keys & privacy.'],
-    [Search, 'Search problems', 'If results feel wrong, make sure the saves were indexed. Search improves after summaries, OCR, and tags exist.'],
+    [Search, 'Search and Lens problems', 'If results feel wrong, make sure saves were approved and indexed. Search improves after summaries, OCR, tags, and Lens analysis exist.'],
     [LifeBuoy, 'Account support', 'Email us if login, usernames, profile setup, or imports are not working.'],
   ];
 
@@ -2477,7 +2482,7 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
               onClick={onOpenHowTo}
               className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5"
             >
-              <FileText className="h-4 w-4" /> Instagram export guide
+              <FileText className="h-4 w-4" /> Import guides
             </button>
           </div>
         </section>
@@ -2543,9 +2548,9 @@ const LEGAL_CONTENT = {
     title: 'Terms of Service',
     intro: 'These terms explain the rules for using IScraper. They are a practical starting point, not a substitute for advice from your lawyer.',
     sections: [
-      ['Using IScraper', 'IScraper helps you upload your official Instagram export, save links from other platforms, and turn saved posts into a private searchable library. You are responsible for using the app lawfully and only uploading or saving content you have the right to use.'],
+      ['Using IScraper', 'IScraper helps you upload official exports, save links from other platforms, and turn saved posts and references into a private searchable library. You are responsible for using the app lawfully and only uploading or saving content you have the right to use.'],
       ['Accounts', 'You must sign in before importing saved posts. You are responsible for activity on your account and for keeping your login secure. Usernames must be unique and may be changed if they impersonate someone, violate rights, or create abuse.'],
-      ['Your content', 'Your Instagram export, saved links, captions, notes, summaries, graph data, username, and optional profile picture remain your content. You give IScraper permission to process that content only to provide the app features.'],
+      ['Your content', 'Your exports, saved links, captions, notes, summaries, graph data, username, and optional profile picture remain your content. You give IScraper permission to process that content only to provide the app features.'],
       ['Emails and updates', 'We may send account, security, product, billing, import, and support emails to the email address on your account. We may also send product updates or marketing emails where you have opted in or where the law allows it, and those marketing emails must include a way to unsubscribe.'],
       ['AI processing', 'When indexing is enabled, content may be sent to configured AI providers to create summaries, OCR, transcripts, tags, and search data. AI output can be wrong, incomplete, or outdated, so you should verify important information yourself.'],
       ['Browser extension coming soon', 'The IScraper browser extension is not available for users yet. When released, it will be optional and must be used only on pages and content you are allowed to process.'],
@@ -2559,11 +2564,11 @@ const LEGAL_CONTENT = {
   privacy: {
     eyebrow: 'Privacy Policy',
     title: 'Privacy Policy',
-    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Supabase login with Google or email, Instagram export upload, saved links, AI indexing, private saved libraries, and the browser extension that is coming soon.',
+    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Supabase login with Google or email, Instagram and Pinterest export uploads, saved links, AI indexing, private saved libraries, and the browser extension that is coming soon.',
     sections: [
-      ['Information we collect', 'We collect login details from Supabase and the login method you choose, such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded Instagram export files, saved post metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs. Extension token records may be added when the extension launches.'],
+      ['Information we collect', 'We collect login details from Supabase and the login method you choose, such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded export files, saved link metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs. Extension token records may be added when the extension launches.'],
       ['Login data', 'Google or email login is used to authenticate you and create your IScraper account. From Supabase and Google, when used, we may receive basic account details such as your user ID, email address, name, and profile image if Google provides them. IScraper does not ask for Gmail, Drive, Calendar, contacts, or other Google account content.'],
-      ['Instagram data', 'IScraper uses official Instagram export files that you upload. We do not ask for your Instagram password and we removed Instagram login scraping. Your export is used to build your searchable library.'],
+      ['Export and saved-link data', 'IScraper uses official export files and saved links that you upload or submit. We do not ask for your social-platform passwords and we removed Instagram login scraping. Your exports and links are used to build your searchable library.'],
       ['AI providers', 'If indexing is enabled, parts of your uploaded content may be sent to configured AI providers such as OpenRouter, Gemini, or your own connected provider key. This is done to generate summaries, transcripts, OCR, tags, and embeddings.'],
       ['Browser extension data - coming soon', 'The browser extension is not available for users yet. When released, it is planned to run only after you click it and use limited data such as the current page URL, selected text, or a user-selected screenshot crop.'],
       ['How we use data', 'We use your data to authenticate your account, keep your library separate from other users, process imports, search your saves, build your graph, show anonymous public feedback, prevent abuse, enforce limits, improve reliability, send service messages, respond to support requests, and send product updates or marketing emails only where you have opted in or where legally permitted.'],
@@ -3116,7 +3121,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     try {
       const result = await saveLink({ ...payload, startProcessing: false });
       const duplicate = result.skippedDuplicateCount > 0;
-      setNotice(duplicate ? 'That link was already in your brain.' : 'Link saved. Review it below, then approve it to make it searchable.');
+      setNotice(duplicate ? 'That link was already in your library.' : 'Link saved. Review it below, then approve it to make it searchable.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
       await loadItems();
@@ -5876,7 +5881,7 @@ function GraphTab({ onSelectItem }) {
     <div className="mx-auto max-w-[1480px] space-y-6 px-4 py-8 sm:px-6 md:px-10 md:py-12">
       <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div className="max-w-3xl">
-          <p className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Graph brain</p>
+          <p className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Knowledge graph</p>
           <h1 className="mt-3 font-display text-4xl font-bold tracking-tight md:text-6xl">Your indexed saves as a knowledge map.</h1>
           <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground">
             Nodes are built from indexed titles, topics, tags, brands, people, and collections. Export it when you want Obsidian or an AI agent to work with your saved-library graph.
