@@ -17,9 +17,9 @@ main {
 .brand {
   display: inline-flex;
   border-radius: 999px;
-  background: #ff6a00;
+  background: #16a34a;
   padding: 5px 10px;
-  color: #000;
+  color: #fff;
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -59,8 +59,8 @@ button {
   border: 0;
   border-radius: 8px;
   margin-top: 10px;
-  background: #ff6a00;
-  color: #000;
+  background: #16a34a;
+  color: #fff;
   cursor: pointer;
   font-weight: 800;
   min-height: 44px;
@@ -73,8 +73,8 @@ button:disabled {
 }
 
 button.secondary {
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: transparent;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(22, 163, 74, 0.16);
   color: #fff;
 }
 
@@ -103,13 +103,14 @@ footer {
   width: auto;
   min-height: 32px;
   margin: 0;
-  border: 0;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.72);
-  padding: 4px 0;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(22, 163, 74, 0.16);
+  color: #86efac;
+  padding: 5px 10px;
   font-size: 12px;
 }
 
 .text-button:hover {
+  background: #16a34a;
   color: #fff;
 }

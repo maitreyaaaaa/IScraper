@@ -17,9 +17,9 @@
 
 .iscraper-capture-box {
   position: absolute;
-  border: 2px solid #ff6a00;
+  border: 2px solid #16a34a;
   border-radius: 6px;
-  background: rgba(255, 106, 0, 0.12);
+  background: rgba(22, 163, 74, 0.14);
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.18);
   pointer-events: none;
 }
@@ -49,7 +49,7 @@
 }
 
 .iscraper-capture-brand {
-  color: #ff6a00;
+  color: #22c55e;
   font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.2em;
@@ -60,8 +60,8 @@
 .iscraper-capture-toast button {
   border: 0;
   border-radius: 8px;
-  background: #ff6a00;
-  color: #000;
+  background: #16a34a;
+  color: #fff;
   cursor: pointer;
   font-weight: 800;
   min-height: 36px;
@@ -69,8 +69,8 @@
 }
 
 .iscraper-capture-close {
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(22, 163, 74, 0.16);
   color: #fff;
 }
 

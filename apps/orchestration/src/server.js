@@ -9,7 +9,7 @@ const { parseImportExport } = require('./services/exportParser');
 const { processImportJobs } = require('./services/worker');
 const { createOpenRouterEmbedding } = require('./services/embeddings');
 const { credentialOptions } = require('./services/providers');
-const { testProviderCredential } = require('./services/providerClients');
+const { analyzeImageBufferWithCredential, testProviderCredential } = require('./services/providerClients');
 const { formatPrice } = require('./services/credits');
 const { buildKnowledgeGraph, buildObsidianFiles } = require('./services/graph');
 const { createDeepSeekSearchAnswer } = require('./services/aiSearch');
@@ -56,6 +56,7 @@ const IMPORT_CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
 const rateBuckets = new Map();
 const aiSearchCache = new Map();
 const aiUsageBuckets = new Map();
+const SCREENSHOT_ANALYSIS_TIMEOUT_MS = 60 * 1000;
 
 async function getUser(req, store) {
   const auth = req.header('authorization') || '';
@@ -689,6 +690,70 @@ async function persistNoteImages({ store, config, userId, itemId, files = [] }) 
   return assets.filter(Boolean);
 }
 
+async function analyzeExtensionScreenshot({ store, config, userId, item, file }) {
+  if (typeof store.saveAnalysis !== 'function' || !file?.buffer?.length) return null;
+  const plan = await chooseScreenshotAnalysisPlan({ store, config, userId });
+  if (!plan?.credential) return null;
+
+  const analysis = await withTimeout(
+    analyzeImageBufferWithCredential({
+      credential: plan.credential,
+      imageBuffer: file.buffer,
+      mimeType: file.mimetype || 'image/png',
+      item,
+    }),
+    SCREENSHOT_ANALYSIS_TIMEOUT_MS,
+    'Screenshot image analysis timed out.',
+  );
+  if (!analysis) return null;
+
+  const updatedMetadata = await store.updateSavedItem?.(userId, item.id, {
+    sourceDescription: analysis.summary || analysis.visualDescription || item.sourceDescription,
+  });
+  const saved = await store.saveAnalysis(userId, item.id, analysis);
+  if (['free', 'paid'].includes(plan.source) && typeof store.recordUsage === 'function') {
+    await store.recordUsage({
+      userId,
+      itemId: item.id,
+      source: plan.source,
+      provider: plan.credential.provider,
+      model: plan.credential.model,
+    }).catch(() => {});
+  }
+  return saved || updatedMetadata || await store.getItem(userId, item.id);
+}
+
+async function chooseScreenshotAnalysisPlan({ store, config, userId }) {
+  if (config.openRouterApiKey) {
+    const appCredential = {
+      id: 'app-openrouter-screenshot-media',
+      provider: 'openrouter',
+      purpose: 'media',
+      model: config.openRouterMediaModel,
+      apiKey: config.openRouterApiKey,
+    };
+
+    if (typeof store.getCredits !== 'function') return { credential: appCredential, source: null };
+    const credits = await store.getCredits(userId);
+    if (credits.freeItemsRemaining > 0) return { credential: appCredential, source: 'free' };
+    if (credits.paidCredits > 0) return { credential: appCredential, source: 'paid' };
+  }
+
+  const userCredential =
+    config.credentialEncryptionKey && typeof store.getPreferredProviderCredential === 'function'
+      ? await store.getPreferredProviderCredential(userId, 'media', config.credentialEncryptionKey)
+      : null;
+  return userCredential ? { credential: userCredential, source: 'byok' } : null;
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
 async function removeNoteAssetObjects({ store, config, assets = [] }) {
   const storagePaths = assets
     .map((asset) => asset.storagePath)
@@ -1242,6 +1307,15 @@ function createApp({ store, config = {}, observability = createObservability(con
         status: 'done',
       }) || await store.getItem(user.id, item.id);
       item = await store.getItem(user.id, item.id);
+      try {
+        item = await analyzeExtensionScreenshot({ store, config, userId: user.id, item, file: req.file }) || item;
+      } catch (analysisError) {
+        warnWorkflow(req, 'extension screenshot analysis failed', {
+          userId: user.id,
+          itemId: item.id,
+          error: analysisError.message,
+        });
+      }
     } catch (error) {
       if (item?.id && typeof store.deleteSavedItem === 'function') {
         await store.deleteSavedItem(user.id, item.id).catch(() => {});
@@ -1253,6 +1327,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       userId: user.id,
       itemId: item.id,
       imageCount: item.assets?.length || 0,
+      hasImageAnalysis: Boolean(item.analysis),
     });
     return res.status(201).json({ item });
   }));

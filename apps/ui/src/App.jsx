@@ -417,10 +417,12 @@ function shouldEnrichItem(item) {
 
 function mapItem(item) {
   const analysis = item.analysis || {};
+  const firstImageAsset = (item.assets || []).find((asset) => asset.assetType === 'image' && asset.url);
   const indexingStage = normalizeIndexingStage(item.indexingStage || indexingStageFromStatus(item.status, analysis));
   return {
     raw: item,
     id: item.id,
+    hasAnalysis: Boolean(item.analysis),
     contentType: item.contentType || '',
     user: item.ownerUsername ? `@${item.ownerUsername}` : item.ownerName || 'unknown',
     title: analysis.title || firstLine(item.caption) || 'Untitled saved item',
@@ -442,7 +444,7 @@ function mapItem(item) {
     sourceTitle: item.sourceTitle || '',
     sourceAuthor: item.sourceAuthor || '',
     sourceDescription: item.sourceDescription || '',
-    thumbnailUrl: item.thumbnailUrl || '',
+    thumbnailUrl: item.thumbnailUrl || firstImageAsset?.url || '',
     assets: item.assets || [],
     note: item.note || null,
     saved: item.savedAt || '',
@@ -465,6 +467,10 @@ function unique(values) {
 
 function isNoteItem(item) {
   return item?.contentType === 'note' || item?.platformKey === 'iscraper-note';
+}
+
+function isExtensionCaptureItem(item) {
+  return item?.platformKey === 'iscraper-extension-capture';
 }
 
 function itemTypeMatches(item, typeFilter) {
@@ -6076,7 +6082,8 @@ function SearchResultFeedback({ itemId, value, onVote }) {
 }
 
 function PinCard({ item, index, onClick, searchActive = false, feedback = null, onSearchFeedback = null }) {
-  const note = isNoteItem(item);
+  const capture = isExtensionCaptureItem(item);
+  const note = isNoteItem(item) && !capture;
   const meta = item.sourceStatus === 'needs_review'
     ? STATUS_META.needs_review
     : INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
@@ -6088,12 +6095,12 @@ function PinCard({ item, index, onClick, searchActive = false, feedback = null, 
       : item.indexingStage === 'index_failed' || item.status === 'failed'
         ? 'Issue'
         : '';
-  const chip = note ? 'My Note' : firstUsefulCardChip(item);
-  const preview = shortCardText(item.sourceDescription || item.visual || item.summary || item.caption || (note ? 'Open this note to see the full text.' : 'Open this save to see what was captured.'));
+  const chip = capture ? 'Screen Capture' : note ? 'My Note' : firstUsefulCardChip(item);
+  const preview = shortCardText(item.summary || item.visual || item.sourceDescription || item.caption || (note ? 'Open this note to see the full text.' : 'Open this save to see what was captured.'));
   const backdrop = PIN_BACKDROPS[index % PIN_BACKDROPS.length];
-  const height = note ? 'min-h-56' : PIN_HEIGHTS[index % PIN_HEIGHTS.length];
+  const height = note || capture ? 'min-h-56' : PIN_HEIGHTS[index % PIN_HEIGHTS.length];
   const cardTitle = shortCardText(item.sourceTitle || item.title || (note ? 'Untitled note' : 'Saved post'));
-  const source = note ? 'Saved by you' : shortCardText(item.sourceAuthor || item.user || item.platform || 'Saved source');
+  const source = note ? 'Saved by you' : capture ? 'Chrome extension' : shortCardText(item.sourceAuthor || item.user || item.platform || 'Saved source');
   const searchReason = searchActive ? firstSearchReason(item) : '';
   const imageCount = item.assets?.filter((asset) => asset.assetType === 'image').length || 0;
   const linkCount = item.note?.links?.length || (note ? [...String(item.caption || '').matchAll(/https?:\/\/[^\s<>"')\]]+/gi)].length : 0);
@@ -6111,19 +6118,26 @@ function PinCard({ item, index, onClick, searchActive = false, feedback = null, 
       }}
       className="pin-card group mb-5 block w-full break-inside-avoid overflow-hidden rounded-[1.75rem] border border-white/10 bg-white/[0.035] text-left shadow-2xl shadow-black/30 transition duration-300 hover:-translate-y-1 hover:border-primary/60 hover:bg-white/[0.055]"
     >
-      <div className={`relative flex ${height} flex-col justify-between overflow-hidden p-5 text-black`} style={{ background: note ? 'linear-gradient(135deg, #f7f2df 0%, #d8f99d 100%)' : backdrop }}>
-        {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-50 mix-blend-multiply" loading="lazy" /> : null}
-        <div className="absolute inset-0 opacity-25 grid-bg" />
-        <div className="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-white/45 blur-2xl" />
+      <div className={`relative flex ${height} flex-col justify-between overflow-hidden p-5 text-black`} style={{ background: capture ? '#070707' : note ? 'linear-gradient(135deg, #f7f2df 0%, #d8f99d 100%)' : backdrop }}>
+        {item.thumbnailUrl ? (
+          <img
+            src={item.thumbnailUrl}
+            alt=""
+            className={`absolute inset-0 h-full w-full object-cover ${capture ? 'opacity-85' : 'opacity-50 mix-blend-multiply'}`}
+            loading="lazy"
+          />
+        ) : null}
+        {!capture && <div className="absolute inset-0 opacity-25 grid-bg" />}
+        {!capture && <div className="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-white/45 blur-2xl" />}
         <div className="relative flex items-center justify-between gap-3">
-          <span className="rounded-full bg-black/75 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-white">{note ? 'My Note' : item.platform}</span>
-          <span className="rounded-full bg-white/70 p-2 text-black">
+          <span className="rounded-full bg-black/75 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-white">{capture ? 'Screen Capture' : note ? 'My Note' : item.platform}</span>
+          <span className="rounded-full bg-white/80 p-2 text-black">
             {note ? <FileText className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </span>
         </div>
-        <div className="relative">
+        <div className={`relative ${capture ? 'text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.75)]' : ''}`}>
           {chip && (
-            <span className="mb-3 inline-flex max-w-full rounded-full bg-black/15 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-black">
+            <span className={`mb-3 inline-flex max-w-full rounded-full px-3 py-1 font-mono text-[10px] uppercase tracking-widest ${capture ? 'bg-black/70 text-white' : 'bg-black/15 text-black'}`}>
               <span className="truncate">{chip}</span>
             </span>
           )}
@@ -7441,7 +7455,7 @@ function buildOriginalDetailRows(item, insightRows = []) {
     rows.push({ label, text, icon, mono });
   };
 
-  if (isNoteItem(item)) {
+  if (isNoteItem(item) && !isExtensionCaptureItem(item)) {
     addRow('Note', item.caption, FileText, true);
     return rows;
   }
@@ -7492,9 +7506,12 @@ function buildDetailInsight(item) {
 
 function DetailDrawer({ item, onClose, onApprove, busy }) {
   const ref = useRef(null);
+  const [assetPreview, setAssetPreview] = useState(null);
   const indexingMeta = INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
   const IndexingIcon = indexingMeta.icon;
-  const note = isNoteItem(item);
+  const capture = isExtensionCaptureItem(item);
+  const note = isNoteItem(item) && !capture;
+  const imageAssets = (item.assets || []).filter((asset) => asset.assetType === 'image' && asset.url);
   const detailStatusLabel = item.sourceStatus === 'needs_review'
     ? 'Needs check'
     : item.indexingStage === 'visual_indexing'
@@ -7519,7 +7536,7 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
         <div className="space-y-8 p-8">
           <div>
             <div className="mb-2 flex flex-wrap gap-2 font-mono text-xs text-primary">
-              <span>{note ? 'My Note' : item.platform}</span>
+              <span>{capture ? 'Screen Capture' : note ? 'My Note' : item.platform}</span>
               {item.sourceAuthor ? <span className="text-muted-foreground">/ {item.sourceAuthor}</span> : null}
               {!note && detailStatusLabel && (
                 <span className={`inline-flex items-center gap-1 ${indexingMeta.color}`}>
@@ -7528,7 +7545,15 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
                 </span>
               )}
             </div>
-            {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="mb-5 max-h-64 w-full rounded-2xl object-cover" /> : null}
+            {item.thumbnailUrl ? (
+              <button
+                type="button"
+                onClick={() => setAssetPreview({ url: item.thumbnailUrl, label: item.sourceTitle || item.title || 'Screen capture' })}
+                className="mb-5 block w-full overflow-hidden rounded-2xl border border-white/10"
+              >
+                <img src={item.thumbnailUrl} alt="" className="max-h-64 w-full object-cover transition hover:scale-[1.01]" />
+              </button>
+            ) : null}
             <h2 className="mb-3 font-display text-3xl font-bold tracking-tight">{item.sourceTitle || item.title}</h2>
             {!note && (
               <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-primary">
@@ -7550,15 +7575,27 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
 
           {item.error && <Section icon={AlertCircle} label="Error">{item.error}</Section>}
           {note && <Section icon={FileText} label="Note" mono>{item.caption}</Section>}
-          {note && item.assets?.length > 0 && (
+          {(note || (capture && !item.thumbnailUrl)) && imageAssets.length > 0 && (
             <div className="grid gap-3 sm:grid-cols-2">
-              {item.assets.map((asset) => (
-                <img key={asset.id} src={asset.url} alt="" className="max-h-64 w-full rounded-2xl border border-white/10 object-cover" loading="lazy" />
+              {imageAssets.map((asset) => (
+                <button
+                  key={asset.id}
+                  type="button"
+                  onClick={() => setAssetPreview({ url: asset.url, label: item.sourceTitle || item.title || 'Saved image' })}
+                  className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025] text-left transition hover:border-primary"
+                >
+                  <img src={asset.url} alt="" className="max-h-64 w-full object-cover" loading="lazy" />
+                </button>
               ))}
             </div>
           )}
           {item.indexingError && <Section icon={AlertCircle} label="Update note">{item.indexingError}</Section>}
           {!note && item.indexingStage === 'visual_indexing' && <Section icon={Loader2} label="Updating">We are adding more details for this save now.</Section>}
+          {capture && (
+            <Section icon={Brain} label="AI image analysis">
+              {item.hasAnalysis ? (item.summary || item.visual || item.ocr) : 'Image analysis will appear here when processing finishes.'}
+            </Section>
+          )}
           {!note && <InsightPanel insight={insight} />}
           {insight.verify && (
             <Section icon={AlertCircle} label="Check before using">
@@ -7570,6 +7607,14 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
           {!note && <OriginalDetails rows={insight.originalRows} />}
         </div>
       </div>
+      {assetPreview && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/85 p-6 backdrop-blur-sm" onClick={(event) => event.stopPropagation()}>
+          <button type="button" className="absolute right-5 top-5 rounded-lg border border-white/10 bg-black/70 p-3 text-white hover:bg-white/10" onClick={() => setAssetPreview(null)} aria-label="Close image preview">
+            <X className="h-5 w-5" />
+          </button>
+          <img src={assetPreview.url} alt={assetPreview.label} className="max-h-[88vh] max-w-[92vw] rounded-2xl border border-white/10 object-contain shadow-2xl shadow-black" />
+        </div>
+      )}
     </div>
   );
 }

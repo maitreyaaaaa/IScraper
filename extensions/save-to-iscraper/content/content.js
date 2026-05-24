@@ -53,7 +53,7 @@
       updateBox(event.clientX, event.clientY);
     });
 
-    shade.addEventListener('pointerup', async (event) => {
+    shade.addEventListener('pointerup', (event) => {
       if (!startPoint || !box) return;
       const rect = normalizeRect(startPoint.x, startPoint.y, event.clientX, event.clientY);
       startPoint = null;
@@ -61,30 +61,38 @@
         showPanel('Select a larger area to save.', 'Screen Capture');
         return;
       }
-      showPanel('Saving selected area...', 'Screen Capture');
-      try {
-        const crop = await captureCrop(rect);
-        const response = await sendRuntimeMessage({
-          type: 'ISCRAPER_SAVE_SCREENSHOT',
-          payload: {
-            appUrl: session.appUrl,
-            token: session.token,
-            imageDataUrl: crop,
-            title: `Screen capture - ${session.page.title || document.title || 'Current page'}`,
-            sourceTitle: session.page.title || document.title || '',
-            sourceUrl: session.page.url || window.location.href,
-            requestId: createRequestId(),
-          },
-        });
-        if (!response?.ok) throw new Error(response?.error || 'Could not save screenshot.');
-        const itemId = response.body?.item?.id || '';
-        root?.remove();
-        root = null;
-        showUndoToast({ itemId });
-      } catch (error) {
-        showPanel(error.message || 'Could not save screenshot.', 'Capture error');
-      }
+      const captureSession = {
+        appUrl: session.appUrl,
+        token: session.token,
+        page: { ...session.page },
+      };
+      closeCapture();
+      window.setTimeout(() => saveSelectedArea(rect, captureSession), 0);
     });
+  }
+
+  async function saveSelectedArea(rect, captureSession) {
+    try {
+      await waitForOverlayRemoval();
+      const crop = await captureCrop(rect);
+      const response = await sendRuntimeMessage({
+        type: 'ISCRAPER_SAVE_SCREENSHOT',
+        payload: {
+          appUrl: captureSession.appUrl,
+          token: captureSession.token,
+          imageDataUrl: crop,
+          title: `Screen capture - ${captureSession.page.title || document.title || 'Current page'}`,
+          sourceTitle: captureSession.page.title || document.title || '',
+          sourceUrl: captureSession.page.url || window.location.href,
+          requestId: createRequestId(),
+        },
+      });
+      if (!response?.ok) throw new Error(response?.error || 'Could not save screenshot.');
+      const itemId = response.body?.item?.id || '';
+      showUndoToast({ itemId, captureSession });
+    } catch (error) {
+      showStatusToast(error.message || 'Could not save screenshot.');
+    }
   }
 
   function updateBox(x, y) {
@@ -174,7 +182,8 @@
     container.appendChild(panel);
   }
 
-  function showUndoToast({ itemId }) {
+  function showUndoToast({ itemId, captureSession }) {
+    document.getElementById('iscraper-capture-toast-root')?.remove();
     const toastRoot = document.createElement('div');
     toastRoot.id = 'iscraper-capture-toast-root';
     const toast = document.createElement('section');
@@ -197,8 +206,8 @@
       const response = await sendRuntimeMessage({
         type: 'ISCRAPER_DELETE_CAPTURE',
         payload: {
-          appUrl: session.appUrl,
-          token: session.token,
+          appUrl: captureSession.appUrl,
+          token: captureSession.token,
           itemId,
           requestId: createRequestId(),
         },
@@ -222,6 +231,20 @@
     }
   }
 
+  function showStatusToast(message) {
+    document.getElementById('iscraper-capture-toast-root')?.remove();
+    const toastRoot = document.createElement('div');
+    toastRoot.id = 'iscraper-capture-toast-root';
+    const toast = document.createElement('section');
+    toast.className = 'iscraper-capture-toast';
+    const text = document.createElement('p');
+    text.textContent = message;
+    toast.appendChild(text);
+    toastRoot.appendChild(toast);
+    document.documentElement.appendChild(toastRoot);
+    window.setTimeout(() => toastRoot.remove(), 4000);
+  }
+
   function closeCapture() {
     root?.remove();
     root = null;
@@ -242,6 +265,16 @@
           return;
         }
         resolve(response);
+      });
+    });
+  }
+
+  function waitForOverlayRemoval() {
+    return new Promise((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          window.setTimeout(resolve, 80);
+        });
       });
     });
   }

@@ -239,6 +239,30 @@ async function analyzeMediaWithCredential({ credential, mediaPaths, item, fetchI
   return null;
 }
 
+async function analyzeImageBufferWithCredential({ credential, imageBuffer, mimeType = 'image/png', item, fetchImpl = fetch }) {
+  if (!credential?.apiKey || !imageBuffer?.length) return null;
+  if (credential.provider === 'gemini') {
+    return analyzeImageBufferWithGemini({
+      apiKey: credential.apiKey,
+      model: credential.model,
+      imageBuffer,
+      mimeType,
+      item,
+    });
+  }
+  if (credential.provider === 'openrouter') {
+    return analyzeImageBufferWithOpenRouter({
+      apiKey: credential.apiKey,
+      model: credential.model,
+      imageBuffer,
+      mimeType,
+      item,
+      fetchImpl,
+    });
+  }
+  return null;
+}
+
 async function analyzeMediaWithOpenRouter({ apiKey, model, mediaPaths, item, fetchImpl = fetch }) {
   assertMediaModelAllowed(model);
   const content = [
@@ -292,6 +316,99 @@ function mediaContentPart(mediaPath) {
   };
 }
 
+async function analyzeImageBufferWithOpenRouter({ apiKey, model, imageBuffer, mimeType, item, fetchImpl = fetch }) {
+  assertMediaModelAllowed(model);
+  const response = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': appReferer(),
+      'X-Title': 'IScraper',
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.1,
+      max_tokens: 900,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: screenshotAnalysisPrompt(item) },
+          imageContentPart(imageBuffer, mimeType),
+        ],
+      }],
+    }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body?.error?.message || `OpenRouter image analysis failed with ${response.status}`);
+  return normalizeScreenshotAnalysis(parseOpenRouterAnalysisResponse(body));
+}
+
+async function analyzeImageBufferWithGemini({ apiKey, model, imageBuffer, mimeType, item }) {
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const geminiModel = genAI.getGenerativeModel({ model });
+  const result = await geminiModel.generateContent([
+    {
+      inlineData: {
+        mimeType,
+        data: Buffer.from(imageBuffer).toString('base64'),
+      },
+    },
+    { text: screenshotAnalysisPrompt(item) },
+  ]);
+  return normalizeScreenshotAnalysis(parseJsonContent(result.response.text()));
+}
+
+function imageContentPart(imageBuffer, mimeType) {
+  return {
+    type: 'image_url',
+    image_url: {
+      url: `data:${mimeType};base64,${Buffer.from(imageBuffer).toString('base64')}`,
+    },
+  };
+}
+
+function screenshotAnalysisPrompt(item = {}) {
+  return [
+    'Analyze this browser screenshot for a private searchable library.',
+    'Write a useful medium-length analysis, not a long essay.',
+    'OCR visible text exactly where useful. Do not invent facts outside the screenshot.',
+    'Return strict JSON only with these keys: title, summary, transcript, ocrText, visualDescription, brandsMentioned, toolsMentioned, reposMentioned, peopleMentioned, topics, tags, whyUseful.',
+    'Use an empty string for transcript unless there is spoken/audio content.',
+    'Keep summary to 2-4 sentences, visualDescription to 2-4 sentences, whyUseful to 1-2 sentences, and arrays short.',
+    `Source page title: ${item.sourceTitle || item.title || ''}`,
+    `Source page URL: ${item.url || ''}`,
+  ].join('\n');
+}
+
+function normalizeScreenshotAnalysis(analysis = {}) {
+  const summary = compactAnalysisText(analysis.summary, 700);
+  const visualDescription = compactAnalysisText(analysis.visualDescription, 700);
+  const ocrText = compactAnalysisText(analysis.ocrText, 1400);
+  return {
+    title: compactAnalysisText(analysis.title, 120) || 'Screen capture',
+    summary,
+    transcript: compactAnalysisText(analysis.transcript, 500),
+    ocrText,
+    visualDescription,
+    brandsMentioned: shortList(analysis.brandsMentioned, 10),
+    toolsMentioned: shortList(analysis.toolsMentioned, 10),
+    reposMentioned: shortList(analysis.reposMentioned, 8),
+    peopleMentioned: shortList(analysis.peopleMentioned, 8),
+    topics: shortList(analysis.topics, 10),
+    tags: shortList(analysis.tags, 12),
+    whyUseful: compactAnalysisText(analysis.whyUseful, 360) || 'Useful browser screenshot reference.',
+  };
+}
+
+function compactAnalysisText(value, maxLength) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function shortList(values, maxLength) {
+  return [...new Set((Array.isArray(values) ? values : []).map((value) => compactAnalysisText(value, 80)).filter(Boolean))].slice(0, maxLength);
+}
+
 function videoMimeType(lowerPath) {
   if (lowerPath.endsWith('.webm')) return 'video/webm';
   if (lowerPath.endsWith('.mov')) return 'video/quicktime';
@@ -311,6 +428,7 @@ function buildTextBaseAnalysis(item, mediaAnalysis = null) {
 }
 
 module.exports = {
+  analyzeImageBufferWithCredential,
   analyzeMediaWithCredential,
   analyzeMediaWithOpenRouter,
   analyzeTextWithCredential,
