@@ -49,6 +49,7 @@ import {
 import {
   approveReviewItem,
   cancelAccountDeletion,
+  createExtensionToken,
   createNote,
   deleteProviderCredential,
   downloadObsidianGraph,
@@ -812,6 +813,10 @@ function pendingSaveFromLocation() {
     description: params.get('description') || '',
     platform: params.get('platform') || '',
     note: params.get('note') || '',
+    author: params.get('author') || '',
+    thumbnailUrl: params.get('thumbnailUrl') || '',
+    source: params.get('source') || '',
+    clientActionId: params.get('clientActionId') || '',
     autoSave: params.get('autoSave') === '1',
   };
 }
@@ -841,6 +846,20 @@ function cleanAuthCallbackUrl() {
   }
   if (changed) {
     window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
+  }
+}
+
+function clearAppQueryParams(keys = []) {
+  const url = new URL(window.location.href);
+  let changed = false;
+  for (const key of keys) {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      changed = true;
+    }
+  }
+  if (changed) {
+    window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
   }
 }
 
@@ -931,9 +950,72 @@ function rememberPendingSave() {
   window.localStorage.setItem('iscraper.pendingSaveLink', JSON.stringify(pending));
 }
 
+const EXTENSION_CONNECT_STORAGE_KEY = 'iscraper.pendingExtensionConnect';
+
+function extensionConnectFromLocation() {
+  const params = appParamsFromLocation();
+  if (params.get('connectExtension') !== '1') return null;
+  const extensionId = String(params.get('extensionId') || '').trim();
+  if (!/^[a-z]{32}$/.test(extensionId)) return null;
+  return {
+    extensionId,
+    requestedAt: new Date().toISOString(),
+  };
+}
+
+function rememberPendingExtensionConnect() {
+  const pending = extensionConnectFromLocation();
+  if (!pending) return;
+  window.localStorage.setItem(EXTENSION_CONNECT_STORAGE_KEY, JSON.stringify(pending));
+}
+
+function pendingExtensionConnectFromStorage() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(EXTENSION_CONNECT_STORAGE_KEY) || 'null');
+    if (!parsed?.extensionId || !/^[a-z]{32}$/.test(parsed.extensionId)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function forgetPendingExtensionConnect() {
+  window.localStorage.removeItem(EXTENSION_CONNECT_STORAGE_KEY);
+}
+
+function sendExtensionConnection({ extensionId, secret, token, session }) {
+  return new Promise((resolve, reject) => {
+    if (!globalThis.chrome?.runtime?.sendMessage) {
+      reject(new Error('Open this page in Chrome with the IScraper extension installed.'));
+      return;
+    }
+    globalThis.chrome.runtime.sendMessage(extensionId, {
+      type: 'ISCRAPER_EXTENSION_CONNECTED',
+      payload: {
+        token: secret,
+        tokenId: token?.id || '',
+        appUrl: window.location.origin,
+        email: session?.user?.email || '',
+      },
+    }, (response) => {
+      const runtimeError = globalThis.chrome.runtime.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || 'Chrome could not connect to the extension.'));
+        return;
+      }
+      if (!response?.ok) {
+        reject(new Error(response?.error || 'The extension did not accept the connection.'));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
 export default function App() {
   const [route, setRoute] = useState(() => {
     rememberPendingSave();
+    rememberPendingExtensionConnect();
     return getRouteFromLocation();
   });
 
@@ -958,6 +1040,7 @@ export default function App() {
   useEffect(() => {
     const onRouteChange = () => {
       rememberPendingSave();
+      rememberPendingExtensionConnect();
       const nextRoute = getRouteFromLocation();
       setRoute(nextRoute);
       canonicalizeLegacyHashRoute();
@@ -1813,7 +1896,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
               [Brain, 'Know why you saved it', 'Each save can get a plain-English summary, so old posts, links, and references become useful again instead of forgotten.'],
               [CheckCircle2, 'First 200 saves included', 'Start with 200 imported saves covered by IScraper before paid credits matter. No API key needed for that first allowance.'],
               [Tag, 'Organized without the cleanup', 'Group saves by themes like travel, food, fitness, shopping, home, business, or inspiration.'],
-              [Lock, 'Private by default', 'Your library belongs to your account, with review before new saves become searchable.'],
+              [Lock, 'Private by default', 'Your library belongs to your account. Saves happen only after you explicitly authorize them.'],
               [ShieldCheck, 'Built around official exports', 'Use Instagram and Pinterest exports without handing over social-platform passwords.'],
               [Search, 'Lens and AI search', 'Search by words, selected text, or a screenshot crop, then see why results matched and which saves support an AI answer.'],
               [GitBranch, 'Export your graph', 'Turn indexed saves into an Obsidian-ready graph when you want an AI agent or vault to work with your library.'],
@@ -1841,12 +1924,12 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
       <section id="extension" className="relative border-y border-white/10 bg-black px-6 py-24 md:py-32">
         <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
           <div data-reveal>
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension - coming soon</div>
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension</div>
             <h2 className="max-w-4xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
-              One-click capture is the next step.
+              Capture from Chrome without opening IScraper.
             </h2>
             <p className="mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-              The extension exists for development and browser-store submission work today. When the public listing is approved, it will let users save pages, run Lens search, and later capture screenshots, selected text, images, and videos into their library.
+              The extension is built around two actions: Capture URL and Screen Capture. Users connect their IScraper account once, then saves run in the background from the browser.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <button
@@ -1854,7 +1937,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
                 disabled
                 className="inline-flex cursor-not-allowed items-center gap-2 rounded-full bg-primary px-6 py-4 text-sm font-semibold text-primary-foreground opacity-70"
               >
-                Coming soon
+                Store review next
               </button>
               <button
                 type="button"
@@ -1871,9 +1954,9 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
 
           <div data-reveal className="grid gap-4 sm:grid-cols-2">
             {[
-              [KeyRound, 'Limited token', 'Lens uses a revokable extension token, not your main login session.'],
-              [Search, 'Selected text Lens', 'Highlight text on a page and search it across your saved library.'],
-              [Eye, 'Screenshot crop Lens', 'Drag over text or an object in the page and search matching saves.'],
+              [KeyRound, 'Email account sign-in', 'Connect once with the same email account used for IScraper.'],
+              [Search, 'Capture URL', 'Save the current tab URL and metadata directly to your library.'],
+              [Eye, 'Screen Capture', 'Drag a crop area and save the image with a 5-second Undo action.'],
               [ShieldCheck, 'Store review - coming soon', 'The extension needs browser-store approval before normal users can install it.'],
             ].map(([Icon, title, description]) => (
               <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
@@ -2715,7 +2798,7 @@ const LEGAL_CONTENT = {
       ['Account protection', 'IScraper uses Supabase Auth with Google or email sign-in for account access. Users must complete profile setup before importing saved content. Keep your login method secure because it controls access to your IScraper account.'],
       ['Data separation', 'Production data is stored in Supabase with user ownership checks and row-level security policies. The backend uses the service role only on server-side routes, never in browser code.'],
       ['API keys', 'User AI provider keys are encrypted before storage. The first included indexing allowance can use IScraper provider keys; users can still add their own keys when they want provider control.'],
-      ['Extension security - coming soon', 'The browser extension is planned to use a limited, revokable Lens token instead of your main login token. It will not be available to users until browser-store release.'],
+      ['Extension security - coming soon', 'The browser extension uses a scoped extension session created after account sign-in. It does not store your main web-app login token and will not be available to users until browser-store release.'],
       ['Abuse prevention', 'IScraper uses upload limits, rate limits, URL safety checks, CORS restrictions, and security headers to reduce common abuse and accidental exposure.'],
       ['Report a security issue', `Email ${SUPPORT_EMAIL} with the subject "IScraper security report". Include the affected page, steps to reproduce, and impact. Do not publicly disclose an issue until we have had a chance to fix it.`],
     ],
@@ -2957,6 +3040,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const sidebarRef = useRef(null);
   const pendingSaveHandledRef = useRef(false);
   const pendingItemHandledRef = useRef(false);
+  const pendingExtensionConnectHandledRef = useRef(false);
   const activeSearchRef = useRef(0);
   const authEnabled = Boolean(supabase);
   const signedIn = !authEnabled || Boolean(session);
@@ -3111,6 +3195,34 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   }, []);
 
   useEffect(() => {
+    if (!canUsePrivateActions || pendingExtensionConnectHandledRef.current) return;
+    const pendingConnect = pendingExtensionConnectFromStorage();
+    if (!pendingConnect) return;
+
+    pendingExtensionConnectHandledRef.current = true;
+    setError('');
+    setNotice('Connecting the Chrome extension to this IScraper account...');
+
+    createExtensionToken('Chrome extension')
+      .then((body) => sendExtensionConnection({
+        extensionId: pendingConnect.extensionId,
+        secret: body.secret,
+        token: body.token,
+        session,
+      }))
+      .then(() => {
+        forgetPendingExtensionConnect();
+        clearAppQueryParams(['connectExtension', 'extensionId']);
+        setNotice('Chrome extension connected. You can close this tab and capture from the extension.');
+      })
+      .catch((err) => {
+        pendingExtensionConnectHandledRef.current = false;
+        setError(err.message || 'Could not connect the Chrome extension.');
+        setNotice('');
+      });
+  }, [canUsePrivateActions, session]);
+
+  useEffect(() => {
     gsap.fromTo(
       '.dash-panel-inner',
       { opacity: 0.92, y: 6 },
@@ -3262,9 +3374,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setError('');
     setNotice('');
     try {
-      const result = await saveLink({ ...payload, startProcessing: false });
+      const result = await saveLink({ ...payload, review: options.review === true, startProcessing: false });
       const duplicate = result.skippedDuplicateCount > 0;
-      setNotice(duplicate ? 'That link was already in your library.' : 'Link saved. Check it below, then add it to your Library.');
+      const queued = result.item?.status === 'queued' || result.queuedJobCount > 0;
+      setNotice(duplicate ? 'That link was already in your library.' : queued ? 'Link saved to your Library and queued for indexing.' : 'Link saved to your Library.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
       await loadItems();
@@ -3331,7 +3444,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           note: pending.note || '',
         });
         if (pending.autoSave) {
-          handleSaveLink(null, pending);
+          handleSaveLink(null, pending, { review: false });
         }
       }, 0);
     } catch {
@@ -6546,9 +6659,9 @@ function SettingsTab({
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Browser extension</div>
-            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Coming soon</h2>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Capture extension</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              Extension tokens and Lens search from the browser will be available after the extension is published in the browser stores.
+              The extension connects through your IScraper account and supports Capture URL plus Screen Capture after browser-store release.
             </p>
           </div>
           <span className="inline-flex shrink-0 items-center justify-center rounded-full bg-white/10 px-5 py-3 text-sm font-semibold text-muted-foreground">

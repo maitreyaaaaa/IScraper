@@ -1210,6 +1210,142 @@ test('extension token can search Lens text and stops after revoke', async () => 
   }
 });
 
+test('extension session can capture URL without opening the web app', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const tokenResponse = await fetch(`http://127.0.0.1:${port}/api/extension-tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Chrome extension' }),
+    });
+    const tokenBody = await tokenResponse.json();
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/extension/saves/link`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+      body: JSON.stringify({
+        url: 'https://example.com/background-save',
+        title: 'Background extension save',
+        description: 'Saved without opening IScraper',
+      }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 201);
+    assert.equal(body.item.sourceTitle, 'Background extension save');
+    assert.equal(body.queuedJobCount, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('extension session can undo a URL capture it created', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const tokenResponse = await fetch(`http://127.0.0.1:${port}/api/extension-tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Chrome extension' }),
+    });
+    const tokenBody = await tokenResponse.json();
+
+    const capture = await fetch(`http://127.0.0.1:${port}/api/extension/saves/link`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+      body: JSON.stringify({
+        url: 'https://example.com/undoable-extension-save',
+        title: 'Undoable extension save',
+      }),
+    });
+    const captureBody = await capture.json();
+
+    const undo = await fetch(`http://127.0.0.1:${port}/api/extension/saves/${captureBody.item.id}`, {
+      method: 'DELETE',
+      headers: {
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+    });
+    const undoBody = await undo.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(capture.status, 201);
+    assert.equal(undo.status, 200);
+    assert.equal(undoBody.itemId, captureBody.item.id);
+    assert.equal(items.find((item) => item.id === captureBody.item.id), undefined);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('extension session can save screenshot capture and undo it', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const tokenResponse = await fetch(`http://127.0.0.1:${port}/api/extension-tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Chrome extension' }),
+    });
+    const tokenBody = await tokenResponse.json();
+    const form = new FormData();
+    form.append('title', 'Screen capture - Example');
+    form.append('sourceTitle', 'Example Page');
+    form.append('sourceUrl', 'https://example.com/capture');
+    form.append('image', new Blob([Buffer.from('89504e470d0a1a0a', 'hex')], { type: 'image/png' }), 'capture.png');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/extension/captures/screenshot`, {
+      method: 'POST',
+      headers: {
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+      body: form,
+    });
+    const body = await response.json();
+    const itemId = body.item?.id;
+
+    const undo = await fetch(`http://127.0.0.1:${port}/api/extension/captures/${itemId}`, {
+      method: 'DELETE',
+      headers: {
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+    });
+    const undoBody = await undo.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(response.status, 201);
+    assert.equal(body.item.platformKey, 'iscraper-extension-capture');
+    assert.equal(body.item.assets.length, 1);
+    assert.equal(undo.status, 200);
+    assert.equal(undoBody.itemId, itemId);
+    assert.equal(items.find((item) => item.id === itemId), undefined);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Lens image search rejects invalid crop payloads', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

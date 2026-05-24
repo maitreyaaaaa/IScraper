@@ -77,7 +77,7 @@ async function getUser(req, store) {
 async function getExtensionUser(req, store, requiredScope = 'lens:search') {
   const token = String(req.header('x-iscraper-extension-token') || '').trim();
   if (!token || typeof store.getUserForExtensionToken !== 'function') {
-    const error = new Error('Connect the IScraper extension before using Lens search.');
+    const error = new Error('Connect the IScraper extension before saving from Chrome.');
     error.statusCode = 401;
     throw error;
   }
@@ -1134,6 +1134,145 @@ function createApp({ store, config = {}, observability = createObservability(con
         visualDescription: imageAnalysis.visualDescription || '',
       } : null,
     });
+  }));
+
+  async function getExtensionRequestUser(req, scope) {
+    const user = await getExtensionUser(req, store, scope);
+    req.user = user;
+    if (typeof store.getActiveDeletionRequest === 'function') {
+      const deletion = await store.getActiveDeletionRequest(user.id);
+      if (deletion && isDeletionBlockingStatus(deletion.status)) {
+        const error = new Error('Account deletion is pending. Extension saves are disabled for this account.');
+        error.statusCode = 423;
+        error.deletion = publicDeletionRequest(deletion);
+        throw error;
+      }
+    }
+    await requireCompletedProfile(req, store);
+    return user;
+  }
+
+  app.post('/api/extension/saves/link', importRateLimit, asyncRoute(async (req, res) => {
+    const user = await getExtensionRequestUser(req, 'saves:create');
+    const parsed = parseManualLinkPayload(req.body || {});
+    const importEntry = await store.createImport({
+      userId: user.id,
+      source: 'browser-extension',
+      mode: 'export',
+      fileNames: [parsed.items[0].url],
+    });
+    const items = await store.upsertImportData({ userId: user.id, importId: importEntry.id, parsed, initialStatus: 'queued' });
+    const jobs = await store.createJobs({ userId: user.id, importId: importEntry.id, items });
+
+    let indexing = null;
+    if (jobs.length) {
+      indexing = await queueIndexingWork({
+        reason: 'extension-link',
+        userId: user.id,
+        importId: importEntry.id,
+        shouldDownload: false,
+      });
+    }
+    captureWorkflow(req, 'extension link saved', {
+      userId: user.id,
+      importId: importEntry.id,
+      newItemCount: items.length,
+    });
+
+    res.status(201).json({
+      import: importEntry,
+      item: items[0] || parsed.items[0],
+      newItemCount: items.length,
+      skippedDuplicateCount: items.length ? 0 : 1,
+      queuedJobCount: jobs.length,
+      indexing,
+    });
+  }));
+
+  app.delete('/api/extension/saves/:id', asyncRoute(async (req, res) => {
+    const user = await getExtensionRequestUser(req, 'saves:delete');
+    if (typeof store.deleteSavedItem !== 'function') return res.status(501).json({ error: 'URL undo is not available.' });
+    const existing = await store.getItem(user.id, req.params.id);
+    if (!existing?.importId || typeof store.getImport !== 'function') {
+      return res.status(404).json({ error: 'Extension URL capture not found.' });
+    }
+    const importEntry = await store.getImport(user.id, existing.importId);
+    if (!importEntry || importEntry.source !== 'browser-extension') {
+      return res.status(404).json({ error: 'Extension URL capture not found.' });
+    }
+    const deleted = await store.deleteSavedItem(user.id, existing.id);
+    captureWorkflow(req, 'extension link undone', {
+      userId: user.id,
+      itemId: existing.id,
+      importId: existing.importId,
+    });
+    return res.json({ deleted: Boolean(deleted), itemId: existing.id });
+  }));
+
+  app.post('/api/extension/captures/screenshot', noteUpload.single('image'), asyncRoute(async (req, res) => {
+    const user = await getExtensionRequestUser(req, 'captures:create');
+    if (!req.file) return res.status(400).json({ error: 'Add a screenshot image before saving.' });
+    if (typeof store.createNoteItem !== 'function' || typeof store.addItemAsset !== 'function') {
+      return res.status(501).json({ error: 'Screenshot captures are not available.' });
+    }
+
+    const sourceUrl = cleanText(req.body?.sourceUrl || '', 1000);
+    const sourceTitle = cleanText(req.body?.sourceTitle || req.body?.title || 'Screen capture', 160);
+    const noteBody = [
+      'Saved from the IScraper Chrome extension.',
+      sourceTitle ? `Page: ${sourceTitle}` : '',
+      sourceUrl ? `URL: ${sourceUrl}` : '',
+    ].filter(Boolean).join('\n');
+    const input = noteInputFromBody({
+      title: cleanText(req.body?.title || `Screen capture - ${sourceTitle}`, 160),
+      body: noteBody,
+      links: sourceUrl ? [sourceUrl] : [],
+    });
+
+    let item = await store.createNoteItem(user.id, buildNoteItem({ userId: user.id, input }));
+    try {
+      await persistNoteImages({ store, config, userId: user.id, itemId: item.id, files: [req.file] });
+      item = await store.updateSavedItem(user.id, item.id, {
+        collections: ['Browser captures'],
+        platform: 'IScraper Extension',
+        platformKey: 'iscraper-extension-capture',
+        sourceAuthor: 'Chrome extension',
+        sourceTitle,
+        sourceDescription: 'Cropped screenshot captured from the browser.',
+        status: 'done',
+      }) || await store.getItem(user.id, item.id);
+      item = await store.getItem(user.id, item.id);
+    } catch (error) {
+      if (item?.id && typeof store.deleteSavedItem === 'function') {
+        await store.deleteSavedItem(user.id, item.id).catch(() => {});
+      }
+      throw error;
+    }
+
+    captureWorkflow(req, 'extension screenshot saved', {
+      userId: user.id,
+      itemId: item.id,
+      imageCount: item.assets?.length || 0,
+    });
+    return res.status(201).json({ item });
+  }));
+
+  app.delete('/api/extension/captures/:id', asyncRoute(async (req, res) => {
+    const user = await getExtensionRequestUser(req, 'captures:delete');
+    if (typeof store.deleteSavedItem !== 'function') return res.status(501).json({ error: 'Screenshot undo is not available.' });
+    const existing = await store.getItem(user.id, req.params.id);
+    if (!existing || existing.platformKey !== 'iscraper-extension-capture') {
+      return res.status(404).json({ error: 'Extension capture not found.' });
+    }
+    const assets = typeof store.listItemAssets === 'function' ? await store.listItemAssets(user.id, existing.id) : existing.assets || [];
+    const deleted = await store.deleteSavedItem(user.id, existing.id);
+    await removeNoteAssetObjects({ store, config, assets });
+    captureWorkflow(req, 'extension screenshot undone', {
+      userId: user.id,
+      itemId: existing.id,
+      imageCount: assets.length,
+    });
+    return res.json({ deleted: Boolean(deleted), itemId: existing.id });
   }));
 
   app.use(asyncRoute(async (req, _res, next) => {

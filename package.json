@@ -1,0 +1,28 @@
+{
+  "name": "iscraper-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "IScraper web app, API, and browser extension workspace.",
+  "workspaces": [
+    "apps/ui",
+    "apps/orchestration",
+    "extensions/save-to-iscraper"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @iscraper/ui",
+    "dev:api": "npm run dev --workspace @iscraper/orchestration",
+    "dev:worker": "npm run worker --workspace @iscraper/orchestration",
+    "build": "npm run build --workspaces --if-present",
+    "build:web": "npm run build --workspace @iscraper/ui",
+    "build:extension": "npm run build --workspace @iscraper/save-to-iscraper",
+    "lint": "npm run lint --workspaces --if-present",
+    "lint:web": "npm run lint --workspace @iscraper/ui",
+    "lint:extension": "npm run lint --workspace @iscraper/save-to-iscraper",
+    "test": "npm test --workspaces --if-present",
+    "test:api": "npm test --workspace @iscraper/orchestration",
+    "check": "npm run lint && npm run test && npm run build"
+  },
+  "engines": {
+    "node": "22.x"
+  }
+}

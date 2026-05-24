@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm install --prefix apps/orchestration && npm install --prefix apps/ui",
-  "buildCommand": "npm run build --prefix apps/ui",
+  "installCommand": "npm install",
+  "buildCommand": "npm run build:web",
   "outputDirectory": "apps/ui/dist",
   "functions": {
     "api/index.js": {

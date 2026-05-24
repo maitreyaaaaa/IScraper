@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Save to IScraper</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <div class="brand">IScraper</div>
+      <h1>Capture to library</h1>
+      <p id="tab-title" class="muted">Reading current tab...</p>
+
+      <section id="signed-out" class="auth-panel" hidden>
+        <p class="muted">Sign in with the email account you use for IScraper before capturing.</p>
+        <button id="connect" type="button">Sign in to IScraper</button>
+      </section>
+
+      <section id="actions" hidden>
+        <button id="capture-url" type="button">Capture URL</button>
+        <button id="screen-capture" type="button" class="secondary">Screen Capture</button>
+      </section>
+
+      <footer>
+        <span id="account" class="muted"></span>
+        <button id="settings" type="button" class="text-button">Settings</button>
+      </footer>
+
+      <div class="status-row">
+        <p id="status" class="muted"></p>
+        <button id="undo-url" type="button" class="text-button" hidden>Undo</button>
+      </div>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

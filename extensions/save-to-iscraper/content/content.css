@@ -1,4 +1,5 @@
-#iscraper-lens-root {
+#iscraper-capture-root,
+#iscraper-capture-toast-root {
   position: fixed;
   inset: 0;
   z-index: 2147483647;
@@ -6,7 +7,7 @@
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.iscraper-lens-shade {
+.iscraper-capture-shade {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.14);
@@ -14,7 +15,7 @@
   pointer-events: auto;
 }
 
-.iscraper-lens-box {
+.iscraper-capture-box {
   position: absolute;
   border: 2px solid #ff6a00;
   border-radius: 6px;
@@ -23,22 +24,22 @@
   pointer-events: none;
 }
 
-.iscraper-lens-panel {
+.iscraper-capture-panel {
   position: absolute;
   right: 18px;
   top: 18px;
-  width: min(380px, calc(100vw - 36px));
+  width: min(360px, calc(100vw - 36px));
   max-height: calc(100vh - 36px);
   overflow: auto;
   border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 16px;
+  border-radius: 8px;
   background: #050505;
   color: #fff;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
   pointer-events: auto;
 }
 
-.iscraper-lens-panel header {
+.iscraper-capture-panel header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -47,7 +48,7 @@
   padding: 14px;
 }
 
-.iscraper-lens-brand {
+.iscraper-capture-brand {
   color: #ff6a00;
   font-size: 11px;
   font-weight: 900;
@@ -55,69 +56,61 @@
   text-transform: uppercase;
 }
 
-.iscraper-lens-close,
-.iscraper-lens-open {
+.iscraper-capture-close,
+.iscraper-capture-toast button {
   border: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #ff6a00;
   color: #000;
   cursor: pointer;
   font-weight: 800;
-  padding: 8px 10px;
+  min-height: 36px;
+  padding: 8px 12px;
 }
 
-.iscraper-lens-close {
+.iscraper-capture-close {
+  border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
 }
 
-.iscraper-lens-body {
+.iscraper-capture-body {
   padding: 14px;
 }
 
-.iscraper-lens-muted {
-  color: rgba(255, 255, 255, 0.62);
+.iscraper-capture-muted {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.68);
   font-size: 12px;
   line-height: 1.5;
 }
 
-.iscraper-lens-result {
-  display: grid;
-  grid-template-columns: 58px 1fr;
-  gap: 10px;
-  margin-top: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  padding: 10px;
-}
-
-.iscraper-lens-thumb {
-  width: 58px;
-  height: 58px;
-  border-radius: 10px;
-  background: #ff6a00;
-  object-fit: cover;
-}
-
-.iscraper-lens-title {
-  margin: 0 0 4px;
+.iscraper-capture-toast {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: min(340px, calc(100vw - 36px));
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: #050505;
   color: #fff;
-  font-size: 14px;
-  font-weight: 850;
-  line-height: 1.2;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  padding: 12px;
+  pointer-events: auto;
 }
 
-.iscraper-lens-meta {
-  color: #ff6a00;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+.iscraper-capture-toast p {
+  flex: 1;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
-.iscraper-lens-summary {
-  margin: 6px 0 0;
-  color: rgba(255, 255, 255, 0.68);
-  font-size: 12px;
-  line-height: 1.45;
+.iscraper-capture-toast button:disabled {
+  cursor: wait;
+  opacity: 0.66;
 }

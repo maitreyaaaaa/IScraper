@@ -601,6 +601,16 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       });
       return mapImport(data);
     },
+    async getImport(userId, id) {
+      const { data, error } = await client
+        .from('imports')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapImport(data) : null;
+    },
     async getPendingStorageImports({ limit = 1 } = {}) {
       const { data, error } = await client
         .from('imports')

@@ -1,6 +1,12 @@
 const crypto = require('crypto');
 
-const DEFAULT_EXTENSION_SCOPES = ['lens:search'];
+const DEFAULT_EXTENSION_SCOPES = [
+  'lens:search',
+  'saves:create',
+  'saves:delete',
+  'captures:create',
+  'captures:delete',
+];
 
 function generateExtensionToken() {
   return `isx_${crypto.randomBytes(32).toString('base64url')}`;

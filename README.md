@@ -9,7 +9,7 @@ IScraper helps creators and builders stop losing useful internet material. Impor
 - Import official Instagram saved-post and saved-collection exports.
 - Import Pinterest export ZIP, JSON, CSV, or HTML files.
 - Save manual links from Pinterest, X, TikTok, YouTube, Instagram, articles, products, or any normal web page.
-- Review new saves before they become searchable.
+- Send user-triggered saves directly into the private library and indexing queue.
 - Search approved saves from metadata immediately.
 - Enrich saves with summaries, OCR, transcripts, topics, tags, people, brands, tools, and repositories.
 - Show why a search result matched and collect result feedback.
@@ -24,30 +24,50 @@ IScraper helps creators and builders stop losing useful internet material. Impor
 - One-click extension capture for screenshots, selected text, images, and videos.
 - Broader extension install support after browser-store review and QA.
 
-## Apps
+## Monorepo
 
-- `apps/orchestration`: Express API, import parsers, search, Lens, queue worker, stores, and Supabase migrations.
-- `apps/ui`: React/Vite frontend, landing page, saved library, upload flow, graph, account settings, and help pages.
-- `extensions/save-to-iscraper`: Manifest V3 Chromium extension for saving pages and running Lens search during development/store-submission work.
+This repository is an npm workspace monorepo. The website, backend, and browser extension are separate packages with separate build/release paths.
+
+- `apps/orchestration` (`@iscraper/orchestration`): Express API, import parsers, search, Lens, queue worker, stores, and Supabase migrations.
+- `apps/ui` (`@iscraper/ui`): React/Vite frontend, landing page, saved library, upload flow, graph, account settings, and help pages.
+- `extensions/save-to-iscraper` (`@iscraper/save-to-iscraper`): Manifest V3 Chromium extension for saving pages and running Lens search during development/store-submission work.
 
 ## Local Run
 
 ```bash
-cd apps/orchestration
 npm install
-copy .env.example .env
-npm run dev
+npm run dev:api
 ```
 
 ```bash
-cd apps/ui
-npm install
-npm run dev
+npm run dev:web
 ```
 
 Frontend: `http://127.0.0.1:5173`
 
 Backend: `http://127.0.0.1:3001`
+
+Create `apps/orchestration/.env` from `apps/orchestration/.env.example` before running the API locally.
+
+## Workspace Commands
+
+```bash
+npm run lint
+npm run test
+npm run build
+npm run check
+```
+
+Focused commands:
+
+```bash
+npm run build:web
+npm run test:api
+npm run lint:extension
+npm run build:extension
+```
+
+The extension build writes an unpacked browser extension to `extensions/save-to-iscraper/dist`. Load that folder in Chrome or Edge during development.
 
 ## Privacy
 

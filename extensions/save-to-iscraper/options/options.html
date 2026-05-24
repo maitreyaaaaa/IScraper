@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Save to IScraper Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <div class="brand">IScraper</div>
+      <h1>Extension settings</h1>
+      <p class="muted">Manage the IScraper account connection used for background captures.</p>
+
+      <section>
+        <label for="app-url">IScraper app URL</label>
+        <input id="app-url" type="url" value="https://iscraper.vercel.app" autocomplete="off" />
+        <p class="hint">HTTPS only. Production should stay on the official IScraper domain.</p>
+      </section>
+
+      <section>
+        <label>Connected account</label>
+        <p id="account" class="connection-state">Not connected</p>
+        <p class="hint">The extension stores a scoped session created after you sign in to IScraper.</p>
+      </section>
+
+      <div class="actions">
+        <button id="save" type="button">Save settings</button>
+        <button id="connect" type="button" class="secondary">Sign in to IScraper</button>
+        <button id="disconnect" type="button" class="secondary">Disconnect this browser</button>
+      </div>
+
+      <p id="status" class="muted" role="status"></p>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

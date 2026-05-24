@@ -770,6 +770,10 @@ function createLocalStore({ dataPath }) {
       return entry;
     },
 
+    getImport(userId, id) {
+      return state.imports.find((entry) => entry.userId === userId && entry.id === id) || null;
+    },
+
     getPendingStorageImports({ limit = 1 } = {}) {
       return state.imports
         .filter((entry) => entry.status === 'queued_storage')
