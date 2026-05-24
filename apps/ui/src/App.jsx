@@ -28,6 +28,9 @@ import {
   Lock,
   Mail,
   Pause,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
   Search,
   Settings,
   ShieldCheck,
@@ -192,7 +195,7 @@ function importHealthForFiles(files = [], sourceType = 'auto') {
       title: `${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'} ready`,
       copy: largeUpload
         ? 'Large imports will upload first, then parse in the background.'
-        : 'This import can be parsed now and made searchable from metadata.',
+        : 'These files look ready to add.',
       selectedCount: selectedFiles.length,
       totalBytes,
       largeUpload,
@@ -500,15 +503,24 @@ function noteImageError(file, existingCount = 0) {
   return '';
 }
 
+function splitQuickAddFiles(fileList = []) {
+  const files = Array.from(fileList || []);
+  return {
+    images: files.filter((file) => NOTE_IMAGE_TYPES.has(file.type)),
+    exports: files.filter((file) => EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(fileImportName(file) || file.name))),
+    unsupported: files.filter((file) => !NOTE_IMAGE_TYPES.has(file.type) && !EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(fileImportName(file) || file.name))),
+  };
+}
+
 function filterLabel(value) {
   const labels = {
     all: 'All',
     uploaded: 'Uploaded',
     links: 'Links',
     notes: 'My Notes',
-    needs_review: 'Needs approval',
-    searchable: 'Searchable',
-    enriched: 'Enriched',
+    needs_review: 'Needs check',
+    searchable: 'In Library',
+    enriched: 'More details',
     failed: 'Failed',
     newest: 'Newest',
     oldest: 'Oldest',
@@ -2054,7 +2066,7 @@ const OPENROUTER_STEPS = [
   {
     image: '/how-to/openrouter-09.png',
     title: 'Save it in IScraper',
-    copy: 'Go back to IScraper, open Keys & privacy, choose OpenRouter, paste the key once, and save it. IScraper chooses the right models automatically.',
+    copy: 'Go back to IScraper, open Settings, choose OpenRouter, paste the key once, and save it. IScraper chooses the right models automatically.',
   },
   {
     image: '/how-to/openrouter-10.png',
@@ -2147,7 +2159,7 @@ const PINTEREST_STEPS = [
   },
   {
     image: '/how-to/pinterest-14.png',
-    title: 'Upload your files here',
+    title: 'Upload your files',
     copy: 'Open IScraper, go to Add saves, and upload your Pinterest ZIP file there.',
     wide: true,
   },
@@ -2350,7 +2362,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
                 keys. They follow a similar process: create an account, create an API key, add credits or billing if needed, then paste the key in IScraper.
               </p>
               <button type="button" onClick={openKeysPrivacy} className="mt-6 inline-flex items-center gap-3 rounded-full bg-black px-6 py-4 font-semibold text-white transition hover:scale-[1.02]">
-                Open Keys & privacy <ArrowRight className="h-5 w-5" />
+                Open Settings <ArrowRight className="h-5 w-5" />
               </button>
             </section>
           </>
@@ -2414,7 +2426,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
                   <img src="/platforms/pinterest.svg" alt="" className="h-5 w-5" />
                 </span>
               </div>
-              <h2 className="font-display text-4xl font-bold tracking-tight">Upload your files here</h2>
+              <h2 className="font-display text-4xl font-bold tracking-tight">Upload your files</h2>
               <p className="mt-3 max-w-2xl text-base leading-7">
                 When Pinterest sends your download, upload the ZIP in Add saves. IScraper accepts Pinterest export files and Instagram export files.
               </p>
@@ -2501,7 +2513,7 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
   });
   const helpTopics = [
     [Upload, 'Import and save help', 'Use the Instagram or Pinterest guides for exports, or paste a single link from the Add saves tab.'],
-    [KeyRound, 'AI keys', 'IScraper is BYOK right now. Add your own text, media, and embedding keys in Keys & privacy.'],
+    [KeyRound, 'AI keys', 'IScraper is BYOK right now. Add your own text, media, and embedding keys in Settings.'],
     [Search, 'Search and Lens problems', 'If results feel wrong, make sure saves were approved and indexed. Search improves after summaries, OCR, tags, and Lens analysis exist.'],
     [LifeBuoy, 'Account support', 'Email us if login, usernames, profile setup, or imports are not working.'],
   ];
@@ -2893,6 +2905,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
   const sidebarRef = useRef(null);
   const pendingSaveHandledRef = useRef(false);
   const pendingItemHandledRef = useRef(false);
@@ -3179,14 +3194,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   };
 
-  const handleSaveLink = useCallback(async (event, override = null) => {
+  const handleSaveLink = useCallback(async (event, override = null, options = {}) => {
     event?.preventDefault();
-    if (!requireSignIn('save links')) return;
-    if (!requireProfile('save links')) return;
+    if (!requireSignIn('save links')) return false;
+    if (!requireProfile('save links')) return false;
     const payload = override || linkForm;
     if (!String(payload.url || '').trim()) {
       setError('Paste a link first.');
-      return;
+      return false;
     }
     setBusy(true);
     setError('');
@@ -3194,28 +3209,31 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     try {
       const result = await saveLink({ ...payload, startProcessing: false });
       const duplicate = result.skippedDuplicateCount > 0;
-      setNotice(duplicate ? 'That link was already in your library.' : 'Link saved. Review it below, then approve it to make it searchable.');
+      setNotice(duplicate ? 'That link was already in your library.' : 'Link saved. Check it below, then add it to your Library.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
       await loadItems();
+      options.onSuccess?.();
+      return true;
     } catch (err) {
       setError(err.message);
+      return false;
     } finally {
       setBusy(false);
     }
   }, [linkForm, loadItems, requireProfile, requireSignIn]);
 
-  const handleCreateNote = useCallback(async (event) => {
+  const handleCreateNote = useCallback(async (event, options = {}) => {
     event.preventDefault();
-    if (!requireSignIn('create notes')) return;
-    if (!requireProfile('create notes')) return;
+    if (!requireSignIn('create notes')) return false;
+    if (!requireProfile('create notes')) return false;
     const body = noteForm.body.trim();
     const title = noteForm.title.trim();
     const links = noteForm.links.split(/\s+/).map((link) => link.trim()).filter(Boolean);
     if (!body && !links.length && !noteForm.images.length) {
       setError('Write a note, add a link, or attach an image before saving.');
       setNotice('');
-      return;
+      return false;
     }
     setBusy(true);
     setError('');
@@ -3228,9 +3246,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setTab('library');
       replaceAppTabUrl('library');
       setTypeFilter('notes');
-      setNotice('Note saved to Library. It is searchable now.');
+      setNotice('Note saved to Library.');
+      options.onSuccess?.();
+      return true;
     } catch (err) {
       setError(err.message);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -3283,11 +3304,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   }, [authEnabled, loading, profileRequired, session]);
 
   const handleImport = async () => {
-    if (!requireSignIn('import saves')) return;
-    if (!requireProfile('import saves')) return;
+    if (!requireSignIn('import saves')) return false;
+    if (!requireProfile('import saves')) return false;
     if (!files.length) {
       setError('Upload an Instagram ZIP/HTML/JSON file or your Pinterest export ZIP/JSON/CSV.');
-      return;
+      return false;
     }
     setBusy(true);
     setError('');
@@ -3309,11 +3330,13 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       } else {
         const newCount = result.newItemCount ?? result.itemCount ?? 0;
         const skippedCount = result.skippedDuplicateCount ?? 0;
-        setNotice(`Added ${newCount} new saves. ${skippedCount} already existed. They are searchable from metadata.`);
+        setNotice(`Added ${newCount} new saves. ${skippedCount} already existed.`);
       }
       await loadItems();
+      return true;
     } catch (err) {
       setError(err.message);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -3351,7 +3374,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
       setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
       setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
-      setNotice('Approved. Go to Library and search for it by title, caption, tag, or note.');
+      setNotice('Added to Library.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -3423,10 +3446,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
 
   const navItems = [
     ['library', 'Saved library', Brain],
-    ['graph', 'Graph', GitBranch],
     ['upload', 'Add saves', Upload],
-    ['settings', 'Keys & privacy', Settings],
   ];
+  const advancedNavItems = [
+    ['graph', 'Graph view', GitBranch],
+    ['settings', 'Settings', Settings],
+  ];
+  const SidebarToggleIcon = sidebarExpanded ? PanelLeftClose : PanelLeftOpen;
+  const advancedActive = advancedNavItems.some(([key]) => key === tab);
 
   const selectTab = useCallback((nextTab) => {
     if (!['library', 'graph', 'upload', 'settings'].includes(nextTab)) return;
@@ -3449,72 +3476,185 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     return () => window.cancelAnimationFrame(frame);
   }, [tab]);
 
+  useEffect(() => {
+    if (advancedActive) setAdvancedOpen(true);
+  }, [advancedActive]);
+
   return (
     <div className="flex h-screen overflow-hidden bg-black text-foreground">
-      <aside ref={sidebarRef} className="hidden h-screen w-60 shrink-0 flex-col overflow-hidden border-r border-white/5 bg-black md:flex">
-        <button onClick={onBack} className="flex items-center gap-3 border-b border-white/5 px-5 py-4 transition hover:opacity-80">
-          <ArrowLeft className="h-4 w-4 text-muted-foreground" />
-          <BrandLogo className="h-14 w-40" />
-        </button>
+      <aside
+        ref={sidebarRef}
+        className={`hidden h-screen shrink-0 flex-col overflow-hidden border-r border-white/5 bg-black transition-[width] duration-200 md:flex ${
+          sidebarExpanded ? 'w-60' : 'w-[76px]'
+        }`}
+      >
+        <div className={`flex border-b border-white/5 p-3 ${sidebarExpanded ? 'items-center gap-2' : 'flex-col items-center gap-2'}`}>
+          <button
+            type="button"
+            onClick={onBack}
+            title="Back to home"
+            aria-label="Back to home"
+            className={`flex min-h-11 items-center rounded-lg transition hover:bg-white/5 hover:text-foreground ${
+              sidebarExpanded ? 'min-w-0 flex-1 gap-3 px-2' : 'h-11 w-11 justify-center'
+            }`}
+          >
+            <ArrowLeft className="h-4 w-4 shrink-0 text-muted-foreground" />
+            {sidebarExpanded && <BrandLogo className="h-14 w-40 min-w-0" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSidebarExpanded((current) => !current)}
+            aria-label={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+            aria-expanded={sidebarExpanded}
+            title={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-muted-foreground transition hover:bg-white/5 hover:text-primary"
+          >
+            <SidebarToggleIcon className="h-5 w-5" />
+          </button>
+        </div>
         {profile?.username && (
           <button
             type="button"
             onClick={() => setAccountSettingsOpen(true)}
-            className="flex w-full items-center gap-3 border-b border-white/5 px-5 py-3 text-left text-xs text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
+            title={`Signed in as @${profile.username}`}
+            aria-label={`Open account settings for @${profile.username}`}
+            className={`flex w-full items-center border-b border-white/5 text-left text-xs text-muted-foreground transition hover:bg-white/5 hover:text-foreground ${
+              sidebarExpanded ? 'gap-3 px-5 py-3' : 'justify-center px-3 py-3'
+            }`}
           >
             <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-primary text-sm font-bold text-primary-foreground">
               {dashboardAvatarUrl ? <img src={dashboardAvatarUrl} alt="" className="h-full w-full object-cover" /> : dashboardInitial}
             </span>
-            <span className="min-w-0">
-              <span className="block">Signed in as</span>
-              <span className="block truncate font-semibold text-foreground">@{profile.username}</span>
-            </span>
+            {sidebarExpanded && (
+              <span className="min-w-0">
+                <span className="block">Signed in as</span>
+                <span className="block truncate font-semibold text-foreground">@{profile.username}</span>
+              </span>
+            )}
           </button>
         )}
         {authEnabled && !session && (
-          <div className="border-b border-white/5 px-5 py-3">
+          <div className={`border-b border-white/5 py-3 ${sidebarExpanded ? 'px-5' : 'px-3'}`}>
             <button
               type="button"
               onClick={onOpenLogin}
               disabled={busy}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+              title="Sign in"
+              aria-label="Sign in"
+              className={`inline-flex w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-60 ${
+                sidebarExpanded ? 'gap-2 px-4 py-2.5' : 'h-11 px-0'
+              }`}
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
-              Sign in
+              {sidebarExpanded && 'Sign in'}
             </button>
           </div>
         )}
         {authEnabled && session && profileRequired && (
-          <div className="border-b border-white/5 px-5 py-3 text-xs leading-5 text-muted-foreground">
-            Choose a username before importing or saving.
+          <div
+            title="Choose a username before importing or saving."
+            className={`border-b border-white/5 text-xs leading-5 text-muted-foreground ${sidebarExpanded ? 'px-5 py-3' : 'grid place-items-center px-3 py-3'}`}
+          >
+            {sidebarExpanded ? 'Choose a username before importing or saving.' : <AlertCircle className="h-4 w-4" />}
           </div>
         )}
-        <nav className="flex-1 space-y-1 p-3">
+        <nav className={`flex-1 space-y-1 p-3 ${sidebarExpanded ? '' : 'flex flex-col items-center'}`}>
           {navItems.map(([key, title, Icon]) => (
             <button
               key={key}
               onClick={() => selectTab(key)}
-              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition ${
+              title={title}
+              aria-label={title}
+              aria-current={tab === key ? 'page' : undefined}
+              className={`flex items-center rounded-lg text-sm transition ${
                 tab === key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+              } ${
+                sidebarExpanded ? 'w-full gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
               }`}
             >
-              <Icon className="h-4 w-4" /> {title}
+              <Icon className="h-4 w-4 shrink-0" />
+              {sidebarExpanded && <span className="truncate">{title}</span>}
             </button>
           ))}
           <button
             type="button"
             onClick={onOpenHowTo}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
+            title="How to Use"
+            aria-label="How to Use"
+            className={`flex items-center rounded-lg text-sm text-muted-foreground transition hover:bg-white/5 hover:text-foreground ${
+              sidebarExpanded ? 'w-full gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
+            }`}
           >
-            <FileText className="h-4 w-4" /> How to Use
+            <FileText className="h-4 w-4 shrink-0" />
+            {sidebarExpanded && <span className="truncate">How to Use</span>}
           </button>
         </nav>
-        <div className="border-t border-white/5 p-4 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-          {stats.total} saves · {stats.done} searchable
+        <div className={`border-t border-white/5 p-3 ${sidebarExpanded ? '' : 'flex flex-col items-center'}`}>
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((current) => !current)}
+            title="Advanced Options"
+            aria-label="Advanced Options"
+            aria-expanded={advancedOpen || advancedActive}
+            className={`flex items-center rounded-lg text-sm transition ${
+              advancedActive ? 'text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+            } ${
+              sidebarExpanded ? 'w-full justify-between gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
+            }`}
+          >
+            <span className={`flex items-center ${sidebarExpanded ? 'gap-3' : ''}`}>
+              <Settings className="h-4 w-4 shrink-0" />
+              {sidebarExpanded && <span className="truncate">Advanced Options</span>}
+            </span>
+            {sidebarExpanded && (
+              <ChevronDown className={`h-4 w-4 shrink-0 transition ${advancedOpen || advancedActive ? 'rotate-180' : ''}`} />
+            )}
+          </button>
+          {(advancedOpen || advancedActive || !sidebarExpanded) && (
+            <div className={`mt-1 space-y-1 ${sidebarExpanded ? '' : 'flex flex-col items-center'}`}>
+              {advancedNavItems.map(([key, title, Icon]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => selectTab(key)}
+                  title={title}
+                  aria-label={title}
+                  aria-current={tab === key ? 'page' : undefined}
+                  className={`flex items-center rounded-lg text-sm transition ${
+                    tab === key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                  } ${
+                    sidebarExpanded ? 'w-full gap-3 px-3 py-2.5 pl-7' : 'h-11 w-11 justify-center'
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {sidebarExpanded && <span className="truncate">{title}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div
+          title={`${stats.total} saved items`}
+          className={`border-t border-white/5 p-4 font-mono text-[10px] uppercase tracking-widest text-muted-foreground ${
+            sidebarExpanded ? '' : 'grid place-items-center'
+          }`}
+        >
+          {sidebarExpanded ? `${stats.total} saved items` : <Database className="h-4 w-4" />}
         </div>
       </aside>
 
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
+        {canUsePrivateActions && (
+          <button
+            type="button"
+            onClick={() => setQuickAddOpen(true)}
+            className="fixed bottom-6 right-6 z-40 inline-flex h-16 w-16 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-2xl shadow-primary/30 transition hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-black"
+            aria-label="Add to your library"
+            title="Add to your library"
+          >
+            <Plus className="h-7 w-7" />
+          </button>
+        )}
         <div className="dash-panel h-screen overflow-y-auto overflow-x-hidden">
           <div className="dash-panel-inner">
             <MobileTopbar
@@ -3663,8 +3803,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 )}
                 {authEnabled && !session && tab === 'settings' && (
                   <AuthRequiredPanel
-                    title="Sign in to manage keys."
-                    copy="API keys and privacy settings belong to your account."
+                    title="Sign in to open Settings."
+                    copy="Settings belong to your private account."
                     busy={busy}
                     onSignIn={onOpenLogin}
                   />
@@ -3706,6 +3846,25 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         </div>
       </main>
 
+      {quickAddOpen && (
+        <QuickAddModal
+          files={files}
+          setFiles={setFiles}
+          importSourceType={importSourceType}
+          setImportSourceType={setImportSourceType}
+          linkForm={linkForm}
+          setLinkForm={setLinkForm}
+          noteForm={noteForm}
+          setNoteForm={setNoteForm}
+          onSaveLink={handleSaveLink}
+          onCreateNote={handleCreateNote}
+          onImport={handleImport}
+          busy={busy}
+          onOpenHowTo={onOpenHowTo}
+          onClose={() => setQuickAddOpen(false)}
+          onError={setError}
+        />
+      )}
       {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} busy={busy} />}
       {accountSettingsOpen && (
         <AccountSettingsModal
@@ -4219,7 +4378,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                 </div>
                 {groupedCredentials.length === 0 ? (
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-sm text-muted-foreground">
-                    No API keys saved yet. Add OpenRouter from Keys & privacy when you are ready.
+                    No API keys saved yet. Add OpenRouter from Settings when you are ready.
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -4480,9 +4639,300 @@ function ProfileRequiredPanel({ profileForm, setProfileForm, onAvatarFile, onSav
   );
 }
 
+function QuickAddModal({
+  files,
+  setFiles,
+  importSourceType,
+  setImportSourceType,
+  linkForm,
+  setLinkForm,
+  noteForm,
+  setNoteForm,
+  onSaveLink,
+  onCreateNote,
+  onImport,
+  busy,
+  onOpenHowTo,
+  onClose,
+  onError,
+}) {
+  const [dragging, setDragging] = useState(false);
+  const allFileInputRef = useRef(null);
+  const folderInputRef = useRef(null);
+  const noteImageInputRef = useRef(null);
+  const importHealth = useMemo(() => importHealthForFiles(files, importSourceType), [files, importSourceType]);
+
+  const addImagesToNote = useCallback((nextImages) => {
+    if (!nextImages.length) return;
+    setNoteForm((current) => {
+      const images = [...current.images];
+      const errors = [];
+      for (const file of nextImages) {
+        const message = noteImageError(file, images.length);
+        if (message) {
+          errors.push(message);
+        } else {
+          images.push(file);
+        }
+      }
+      if (errors.length) onError(errors[0]);
+      return { ...current, images: images.slice(0, MAX_NOTE_IMAGES) };
+    });
+  }, [onError, setNoteForm]);
+
+  const handleAnyFiles = useCallback((fileList) => {
+    const { images, exports, unsupported } = splitQuickAddFiles(fileList);
+    if (images.length) addImagesToNote(images);
+    if (exports.length) {
+      setFiles(exports);
+      setImportSourceType('auto');
+    }
+    if (unsupported.length && !images.length && !exports.length) {
+      onError('Upload images, links, or Instagram/Pinterest download files.');
+    }
+  }, [addImagesToNote, onError, setFiles, setImportSourceType]);
+
+  const selectedExportNames = importCandidateFiles(files, importSourceType).slice(0, 5);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 backdrop-blur-md md:p-6" role="dialog" aria-modal="true" aria-label="Add to your library">
+      <div className="flex h-[90vh] w-[90vw] max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl shadow-black">
+        <div className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Add anything</div>
+            <h2 className="mt-1 font-display text-2xl font-bold tracking-tight">Add to your Library</h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
+            aria-label="Close add popup"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 md:p-6">
+          <div
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              handleAnyFiles(event.dataTransfer.files);
+            }}
+            className={`mb-6 rounded-2xl border-2 border-dashed p-6 text-center transition md:p-8 ${dragging ? 'border-primary bg-primary/10' : 'border-white/15 bg-white/[0.025]'}`}
+          >
+            <Upload className="mx-auto mb-3 h-8 w-8 text-primary" />
+            <h3 className="font-display text-xl font-bold">Drop images, ZIPs, folders, or files here</h3>
+            <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+              Images become note attachments. Instagram or Pinterest files are detected automatically.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => allFileInputRef.current?.click()}
+                className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
+              >
+                <Upload className="h-4 w-4" /> Choose files
+              </button>
+              <button
+                type="button"
+                onClick={() => folderInputRef.current?.click()}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5"
+              >
+                <Database className="h-4 w-4" /> Choose folder
+              </button>
+              <button
+                type="button"
+                onClick={onOpenHowTo}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
+              >
+                <FileText className="h-4 w-4" /> Help
+              </button>
+            </div>
+            <input
+              ref={allFileInputRef}
+              type="file"
+              multiple
+              accept="image/png,image/jpeg,image/webp,image/gif,.html,.htm,.zip,.json,.csv"
+              onChange={(event) => {
+                handleAnyFiles(event.target.files);
+                event.target.value = '';
+              }}
+              className="hidden"
+            />
+            <input
+              ref={folderInputRef}
+              type="file"
+              multiple
+              webkitdirectory=""
+              directory=""
+              onChange={(event) => {
+                handleAnyFiles(event.target.files);
+                event.target.value = '';
+              }}
+              className="hidden"
+            />
+          </div>
+
+          <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+            <form onSubmit={(event) => onCreateNote(event, { onSuccess: onClose })} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Note</div>
+                <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Save a note, image, or useful link</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">Write anything you want to remember. Add images or links when they help.</p>
+              </div>
+              <input
+                value={noteForm.title}
+                onChange={(event) => setNoteForm((current) => ({ ...current, title: event.target.value }))}
+                placeholder="Title optional"
+                maxLength={160}
+                className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+              />
+              <textarea
+                value={noteForm.body}
+                onChange={(event) => setNoteForm((current) => ({ ...current, body: event.target.value }))}
+                placeholder="Write your note..."
+                className="min-h-36 w-full resize-y rounded-xl border border-white/10 bg-black px-4 py-3 text-sm leading-6 outline-none focus:border-primary"
+              />
+              <input
+                value={noteForm.links}
+                onChange={(event) => setNoteForm((current) => ({ ...current, links: event.target.value }))}
+                placeholder="Optional links"
+                className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+              />
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => noteImageInputRef.current?.click()}
+                  className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold transition hover:bg-white/5"
+                >
+                  <Upload className="h-4 w-4" /> Add images
+                </button>
+                <span className="text-xs text-muted-foreground">{noteForm.images.length}/{MAX_NOTE_IMAGES} images selected</span>
+                <input
+                  ref={noteImageInputRef}
+                  type="file"
+                  multiple
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={(event) => {
+                    addImagesToNote(Array.from(event.target.files || []));
+                    event.target.value = '';
+                  }}
+                  className="hidden"
+                />
+              </div>
+              {noteForm.images.length > 0 && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {noteForm.images.map((file, index) => (
+                    <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black px-3 py-2 text-sm">
+                      <span className="min-w-0 truncate">{file.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => setNoteForm((current) => ({ ...current, images: current.images.filter((_, imageIndex) => imageIndex !== index) }))}
+                        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
+                        aria-label={`Remove ${file.name}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                Save note
+              </button>
+            </form>
+
+            <div className="space-y-5">
+              <form onSubmit={(event) => onSaveLink(event, null, { onSuccess: onClose })} className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Link</div>
+                  <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Save a link</h3>
+                </div>
+                <input
+                  type="url"
+                  value={linkForm.url}
+                  onChange={(event) => setLinkForm((current) => ({ ...current, url: event.target.value }))}
+                  placeholder="https://..."
+                  required
+                  className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+                />
+                <input
+                  value={linkForm.title}
+                  onChange={(event) => setLinkForm((current) => ({ ...current, title: event.target.value }))}
+                  placeholder="Title optional"
+                  maxLength={160}
+                  className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 outline-none focus:border-primary"
+                />
+                <textarea
+                  value={linkForm.note}
+                  onChange={(event) => setLinkForm((current) => ({ ...current, note: event.target.value }))}
+                  placeholder="Why are you saving this? optional"
+                  maxLength={500}
+                  className="min-h-24 w-full resize-none rounded-xl border border-white/10 bg-black px-4 py-3 text-sm leading-6 outline-none focus:border-primary"
+                />
+                <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+                  Save link
+                </button>
+              </form>
+
+              <section className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Instagram or Pinterest</div>
+                  <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Upload a ZIP or folder</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">Auto-detect is on, so you can upload the file you downloaded.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold">{importHealth.title}</div>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{importHealth.copy}</p>
+                    </div>
+                    <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-muted-foreground">
+                      {filterLabel(importSourceType)}
+                    </span>
+                  </div>
+                  {selectedExportNames.length > 0 && (
+                    <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                      {selectedExportNames.map((file) => (
+                        <div key={`${fileImportName(file)}-${file.size}`} className="truncate">{fileImportName(file) || file.name}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = await onImport();
+                    if (ok) onClose();
+                  }}
+                  disabled={busy || !files.length}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60"
+                >
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+                  Add uploaded files
+                </button>
+              </section>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOpenAccount }) {
   const avatarUrl = avatarUrlForSession(session, profile);
   const initial = initialForSession(session, profile);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const advancedActive = tab === 'graph' || tab === 'settings';
   return (
     <div className="sticky top-0 z-30 border-b border-white/10 bg-black/90 p-3 backdrop-blur md:hidden">
       <div className="mb-3 flex items-center justify-between">
@@ -4501,12 +4951,10 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
           </button>
         )}
       </div>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         {[
           ['library', 'Library'],
-          ['graph', 'Graph'],
-          ['upload', 'Add'],
-          ['settings', 'Privacy'],
+          ['upload', 'Add saves'],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -4516,6 +4964,38 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
             {label}
           </button>
         ))}
+      </div>
+      <div className="mt-2 rounded-lg border border-white/10">
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((current) => !current)}
+          aria-expanded={advancedOpen || advancedActive}
+          className={`flex w-full items-center justify-between px-3 py-2 text-xs ${
+            advancedActive ? 'text-primary' : 'text-muted-foreground'
+          }`}
+        >
+          <span className="inline-flex items-center gap-2">
+            <Settings className="h-3.5 w-3.5" />
+            Advanced Options
+          </span>
+          <ChevronDown className={`h-3.5 w-3.5 transition ${advancedOpen || advancedActive ? 'rotate-180' : ''}`} />
+        </button>
+        {(advancedOpen || advancedActive) && (
+          <div className="grid grid-cols-2 gap-2 border-t border-white/10 p-2">
+            {[
+              ['graph', 'Graph view'],
+              ['settings', 'Settings'],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setTab(key)}
+                className={`rounded-lg px-3 py-2 text-xs ${tab === key ? 'bg-primary text-primary-foreground' : 'border border-white/10 text-muted-foreground'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <button
         type="button"
@@ -4639,7 +5119,7 @@ function IndexingProgressCard({ activity }) {
           ))}
           {activity.activeTotal > activity.activeItems.length && (
             <div className="text-xs text-muted-foreground">
-              {activity.activeTotal - activity.activeItems.length} more saves are also being enriched.
+              {activity.activeTotal - activity.activeItems.length} more saves are still being updated.
             </div>
           )}
         </div>
@@ -4656,21 +5136,21 @@ function ImportHealthPanel({ health, pendingReviewCount, indexingActivity }) {
   }[health.state] || { icon: FileText, color: 'text-muted-foreground', label: 'Waiting' };
   const Icon = healthMeta.icon;
   const checks = [
-    ['File check', health.title, health.copy, Icon, healthMeta.color],
-    ['Approval queue', `${formatUsageNumber(pendingReviewCount)} waiting`, pendingReviewCount ? 'Approve these to make them searchable.' : 'No saves are waiting for review.', CheckCircle2, pendingReviewCount ? 'text-accent' : 'text-primary'],
-    ['Indexing', `${formatUsageNumber(indexingActivity.activeTotal)} active`, indexingActivity.activeTotal ? 'Search works from metadata while enrichment continues.' : 'No enrichment jobs are running right now.', indexingActivity.activeTotal ? Loader2 : CheckCircle2, indexingActivity.activeTotal ? 'text-accent' : 'text-primary'],
+    ['Ready to save', health.title, health.copy, Icon, healthMeta.color],
+    ['Needs your OK', `${formatUsageNumber(pendingReviewCount)} waiting`, pendingReviewCount ? 'Review these saved links before they appear in your library.' : 'Nothing is waiting for you right now.', CheckCircle2, pendingReviewCount ? 'text-accent' : 'text-primary'],
+    ['Still updating', `${formatUsageNumber(indexingActivity.activeTotal)} active`, indexingActivity.activeTotal ? 'We are adding more details in the background.' : 'Nothing is updating in the background right now.', indexingActivity.activeTotal ? Loader2 : CheckCircle2, indexingActivity.activeTotal ? 'text-accent' : 'text-primary'],
   ];
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Import health</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Before you add files</h2>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Before saving</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">We will check the files first</h2>
         </div>
         {health.selectedCount > 0 && (
           <span className="rounded-full border border-white/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            {formatUsageNumber(health.selectedCount)} selected · {formatBytes(health.totalBytes)}
+            {formatUsageNumber(health.selectedCount)} selected / {formatBytes(health.totalBytes)}
           </span>
         )}
       </div>
@@ -4687,7 +5167,7 @@ function ImportHealthPanel({ health, pendingReviewCount, indexingActivity }) {
       </div>
       {health.largeUpload && (
         <p className="mt-3 text-xs leading-5 text-muted-foreground">
-          Large uploads are handed to Supabase Storage first, so the UI can stay responsive while parsing starts.
+          Large uploads may take a little longer. You can keep this page open while we prepare them.
         </p>
       )}
     </section>
@@ -4728,14 +5208,6 @@ function LibraryTab({
   const [visibleCount, setVisibleCount] = useState(80);
   const activeFilters = (typeFilter !== 'all' ? 1 : 0) + (stateFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
   const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
-  const searchableCount = items.filter((item) => item.sourceStatus !== 'needs_review').length;
-  const enrichedCount = items.filter((item) => DASHBOARD_ENRICHED_STAGES.has(item.indexingStage)).length;
-  const boardStats = useMemo(() => ([
-    ['All saves', totalCount],
-    ['On this board', items.length],
-    ['Searchable', searchableCount],
-    ['Enriched', enrichedCount],
-    ]), [enrichedCount, items.length, searchableCount, totalCount]);
 
   useEffect(() => {
     const cards = boardRef.current?.querySelectorAll('.pin-card');
@@ -4783,7 +5255,7 @@ function LibraryTab({
               setVisibleCount(80);
               onSearch(event);
             }}
-            placeholder="Search approved saves by title, caption, tag, or note..."
+            placeholder="Search your saved posts, links, and notes..."
             className="min-h-16 w-full resize-none bg-transparent text-lg leading-7 outline-none placeholder:text-muted-foreground md:min-h-20 md:text-2xl"
           />
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
@@ -4820,15 +5292,6 @@ function LibraryTab({
         </form>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {boardStats.map(([label, value]) => (
-          <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
-            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{label}</div>
-            <div className="mt-2 font-display text-3xl font-bold">{value}</div>
-          </div>
-        ))}
-      </div>
-
       <IndexingProgressCard activity={indexingActivity} />
 
       {searchActive && (
@@ -4838,7 +5301,7 @@ function LibraryTab({
       <div className="sticky top-0 z-20 -mx-4 mt-5 border-y border-white/5 bg-black/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:-mx-10 md:px-10">
         <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
           <span>
-            {visibleItems.length} showing from {items.length} matching saves
+            {visibleItems.length} shown from {items.length} saves
             {searchActive ? ` · ${searchResultCount} search results from ${totalCount} total saves` : ''}
           </span>
           <div className="flex flex-wrap gap-2">
@@ -4854,8 +5317,8 @@ function LibraryTab({
                 }}
             />
             <DashboardFilterSelect
-              label="State"
-              ariaLabel="Filter by state"
+              label="Status"
+              ariaLabel="Filter by status"
               icon={CheckCircle2}
               value={stateFilter}
               options={STATE_FILTERS}
@@ -4914,21 +5377,21 @@ function LibraryTab({
                 : activeFilters > 0
                   ? 'No saves match these filters'
                   : activationState.needsReview
-                    ? 'Approve one save to see search work'
-                    : 'Add one save to see search work'}
+                    ? 'Check one saved link to add it'
+                    : 'Add one save to get started'}
             </h3>
             <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
               {searchActive && searchResultCount === 0
                 ? activationState.searchable
-                  ? `${formatUsageNumber(activationState.searchable)} saves are searchable now. Try another title, creator, tag, or collection.`
-                  : 'Nothing has been approved for search yet. Approve a save first, then search again.'
+                  ? `${formatUsageNumber(activationState.searchable)} saves are in your Library. Try another title, creator, tag, or collection.`
+                  : 'Nothing is in your Library search yet. Add or confirm a save first, then search again.'
                 : typeFilter === 'notes'
                   ? 'Create a note from the Add tab and it will appear here immediately.'
                 : activeFilters > 0
                   ? 'Clear the active filters or switch back to All to see your saved library.'
                   : activationState.needsReview
-                    ? 'Open the Add tab, approve a save from Review inbox, and it will become searchable from metadata.'
-                    : 'Paste a link or upload an export, approve the captured details, and it will appear in search from metadata.'}
+                    ? 'Open Add saves, check one saved link, and add it to your Library.'
+                    : 'Paste a link or upload your files, then add the saves you want to keep.'}
             </p>
             {(!searchActive || activationState.searchable === 0) && (
               <button
@@ -5084,6 +5547,13 @@ function PinCard({ item, index, onClick, searchActive = false, feedback = null, 
     ? STATUS_META.needs_review
     : INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
   const Icon = meta.icon;
+  const cardStatusLabel = item.sourceStatus === 'needs_review'
+    ? 'Needs check'
+    : item.indexingStage === 'visual_indexing'
+      ? 'Updating'
+      : item.indexingStage === 'index_failed' || item.status === 'failed'
+        ? 'Issue'
+        : '';
   const chip = note ? 'My Note' : firstUsefulCardChip(item);
   const preview = shortCardText(item.sourceDescription || item.visual || item.summary || item.caption || (note ? 'Open this note to see the full text.' : 'Open this save to see what was captured.'));
   const backdrop = PIN_BACKDROPS[index % PIN_BACKDROPS.length];
@@ -5129,10 +5599,12 @@ function PinCard({ item, index, onClick, searchActive = false, feedback = null, 
       <div className="p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
           <span className="truncate font-mono text-xs text-primary">{source}</span>
-          <span className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider ${meta.color}`}>
-            <Icon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
-            {note ? 'Searchable' : item.sourceStatus === 'needs_review' ? 'Review' : meta.label}
-          </span>
+          {!note && cardStatusLabel && (
+            <span className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider ${meta.color}`}>
+              <Icon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
+              {cardStatusLabel}
+            </span>
+          )}
         </div>
         <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">{preview}</p>
         {note && (imageCount > 0 || linkCount > 0) && (
@@ -5184,16 +5656,16 @@ function UploadTab({
   const noteImageInputRef = useRef(null);
   const importHealth = useMemo(() => importHealthForFiles(files, importSourceType), [files, importSourceType]);
   const sourceOptions = [
-    { value: 'auto', label: 'Auto-detect', help: 'Best for full export ZIPs.' },
-    { value: 'instagram', label: 'Instagram', help: 'Looks in your_instagram_activity/saved/.' },
-    { value: 'pinterest', label: 'Pinterest', help: 'Reads Pinterest ZIP, JSON, CSV, or HTML.' },
+    { value: 'auto', label: 'Choose for me', help: 'Best if you are not sure.' },
+    { value: 'instagram', label: 'Instagram', help: 'For files downloaded from Instagram.' },
+    { value: 'pinterest', label: 'Pinterest', help: 'For files downloaded from Pinterest.' },
   ];
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-6 py-20">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
-          <h1 className="font-display text-4xl font-bold tracking-tight">Add your saved posts</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Paste links or upload exports. Saves are added and searchable from metadata first, then enriched when opened.</p>
+          <h1 className="font-display text-4xl font-bold tracking-tight">Add to your library</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Save a note, paste a link, or upload files from Instagram or Pinterest.</p>
         </div>
         <button
           type="button"
@@ -5210,7 +5682,7 @@ function UploadTab({
             <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Create note</div>
             <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Write a note for your library</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              Notes save directly to Library and are searchable right away. Video notes are not supported yet.
+              Notes appear in your Library right away. You can add links and small images.
             </p>
           </div>
           <span className="rounded-full border border-white/10 px-3 py-2 text-xs text-muted-foreground">Images: PNG, JPEG, WebP, GIF · 5 MB</span>
@@ -5289,13 +5761,13 @@ function UploadTab({
       <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Launch offer</div>
-            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">First 200 imported saves are on us.</h2>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Included</div>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Your first 200 saved posts are included.</h2>
           </div>
           <span className="rounded-full bg-primary px-4 py-2 font-display text-xl font-bold text-primary-foreground">200</span>
         </div>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Use your free included allowance for posts you actually open or inspect. Imports stay instantly searchable from captions, hashtags, collections, and source metadata.
+          Start by adding the saves you care about most. You can search them from your Library after they are added.
         </p>
       </div>
 
@@ -5305,10 +5777,10 @@ function UploadTab({
 
       <form onSubmit={onSaveLink} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save from any platform</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Add a Pinterest pin, tweet, video, post, or article</h2>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save a link</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Paste a link you want to keep</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            New web links go into review first. Approving makes their captured metadata searchable.
+            We will show you what we found before it is added to your Library.
           </p>
         </div>
         <input
@@ -5336,7 +5808,7 @@ function UploadTab({
         />
         <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-          Save to review inbox
+          Save link
         </button>
       </form>
 
@@ -5344,9 +5816,9 @@ function UploadTab({
         <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
           <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Review inbox</div>
-              <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saves waiting</h2>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">Approve a save to make it appear in Library search from title, caption, tag, and note metadata.</p>
+              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Confirm links</div>
+              <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saved links need a quick check</h2>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">Check the title and note, then add them to your Library.</p>
             </div>
             <button
               type="button"
@@ -5359,7 +5831,7 @@ function UploadTab({
               className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              Approve all reviewed
+              Add all to Library
             </button>
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
@@ -5379,8 +5851,8 @@ function UploadTab({
 
       <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
         <div className="mb-4">
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Export source</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose what you are importing</h2>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Upload files</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Where did these files come from?</h2>
         </div>
         <div className="grid gap-3 md:grid-cols-3">
           {sourceOptions.map((option) => (
@@ -5415,7 +5887,7 @@ function UploadTab({
         className={`rounded-2xl border-2 border-dashed p-12 text-center transition md:p-16 ${dragging ? 'border-primary bg-primary/5' : 'border-white/15'}`}
       >
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
-        <h3 className="mb-2 font-display text-xl font-bold">Upload your files here</h3>
+        <h3 className="mb-2 font-display text-xl font-bold">Drop your files here</h3>
         <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV</p>
         <button
           type="button"
@@ -5448,7 +5920,7 @@ function UploadTab({
       <div>
         <button onClick={onImport} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-          Add and search from metadata
+          Add files to Library
         </button>
         {activationState.searchable > 0 && (
           <button
@@ -5457,7 +5929,7 @@ function UploadTab({
             className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5"
           >
             <Search className="h-4 w-4" />
-            View searchable saves
+            Go to Library
           </button>
         )}
       </div>
@@ -5485,7 +5957,7 @@ function ReviewCard({ item, busy, onSelect, onUpdate, onApprove }) {
         <div className="min-w-0 flex-1">
           <div className="mb-2 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-widest text-primary">
             <span>{item.platform}</span>
-            <span className="text-muted-foreground">{item.sourceStatus}</span>
+            <span className="text-muted-foreground">Needs check</span>
           </div>
           <button type="button" onClick={() => onSelect(item)} className="line-clamp-2 text-left font-display text-xl font-bold tracking-tight hover:text-primary">
             {item.sourceTitle || item.title}
@@ -5541,7 +6013,7 @@ function ReviewCard({ item, busy, onSelect, onUpdate, onApprove }) {
           className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-60"
         >
           <CheckCircle2 className="h-4 w-4" />
-          Approve and make searchable
+          Add to Library
         </button>
       </div>
     </article>
@@ -5584,7 +6056,7 @@ function SettingsTab({
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="font-display text-4xl font-bold tracking-tight">Keys & privacy</h1>
+            <h1 className="font-display text-4xl font-bold tracking-tight">Settings</h1>
             <span className="rounded-full bg-primary px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-primary-foreground">
               BYOK only
             </span>
@@ -6454,6 +6926,13 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
   const indexingMeta = INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
   const IndexingIcon = indexingMeta.icon;
   const note = isNoteItem(item);
+  const detailStatusLabel = item.sourceStatus === 'needs_review'
+    ? 'Needs check'
+    : item.indexingStage === 'visual_indexing'
+      ? 'Updating'
+      : item.indexingStage === 'index_failed' || item.status === 'failed'
+        ? 'Issue'
+        : '';
   const insight = useMemo(() => buildDetailInsight(item), [item]);
   useEffect(() => {
     gsap.fromTo(ref.current, { x: '100%' }, { x: 0, duration: 0.5, ease: 'power3.out' });
@@ -6473,10 +6952,12 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
             <div className="mb-2 flex flex-wrap gap-2 font-mono text-xs text-primary">
               <span>{note ? 'My Note' : item.platform}</span>
               {item.sourceAuthor ? <span className="text-muted-foreground">/ {item.sourceAuthor}</span> : null}
-              <span className={`inline-flex items-center gap-1 ${indexingMeta.color}`}>
-                <IndexingIcon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
-                {note ? 'Searchable' : indexingMeta.label}
-              </span>
+              {!note && detailStatusLabel && (
+                <span className={`inline-flex items-center gap-1 ${indexingMeta.color}`}>
+                  <IndexingIcon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
+                  {detailStatusLabel}
+                </span>
+              )}
             </div>
             {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" className="mb-5 max-h-64 w-full rounded-2xl object-cover" /> : null}
             <h2 className="mb-3 font-display text-3xl font-bold tracking-tight">{item.sourceTitle || item.title}</h2>
@@ -6493,7 +6974,7 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
                 className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                Approve and make searchable
+                Add to Library
               </button>
             )}
           </div>
@@ -6507,8 +6988,8 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
               ))}
             </div>
           )}
-          {item.indexingError && <Section icon={AlertCircle} label="Enrichment note">{item.indexingError}</Section>}
-          {!note && item.indexingStage === 'visual_indexing' && <Section icon={Loader2} label="Enrichment">Understanding this save now. Metadata search stays available.</Section>}
+          {item.indexingError && <Section icon={AlertCircle} label="Update note">{item.indexingError}</Section>}
+          {!note && item.indexingStage === 'visual_indexing' && <Section icon={Loader2} label="Updating">We are adding more details for this save now.</Section>}
           {!note && <InsightPanel insight={insight} />}
           {insight.verify && (
             <Section icon={AlertCircle} label="Check before using">
