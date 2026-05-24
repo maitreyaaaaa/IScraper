@@ -57,6 +57,7 @@ function buildManualSavedItem(input = {}) {
   const platform = cleanText(input.platform, 60) || detected.label;
   const sourceAuthor = cleanText(input.author, 120);
   const thumbnailUrl = safeExternalUrl(input.thumbnailUrl || input.thumbnail, 1000);
+  const collection = cleanCollection(input.collection) || 'Web saves';
   const savedAt = new Date().toISOString();
   const caption = [
     title,
@@ -75,7 +76,7 @@ function buildManualSavedItem(input = {}) {
     ownerName: platform,
     ownerUsername: '',
     savedAt,
-    collections: ['Web saves'],
+    collections: [collection],
     sourceName: 'manual-link',
     platform,
     platformKey: detected.key,
@@ -88,6 +89,7 @@ function buildManualSavedItem(input = {}) {
 }
 
 function parseManualLinkPayload(body = {}) {
+  const collection = cleanCollection(body.collection) || 'Web saves';
   const item = buildManualSavedItem({
     url: body.url,
     title: body.title,
@@ -96,9 +98,10 @@ function parseManualLinkPayload(body = {}) {
     platform: body.platform,
     author: body.author,
     thumbnailUrl: body.thumbnailUrl,
+    collection,
   });
   return {
-    collections: [{ name: 'Web saves', sourceName: 'manual-link', itemUrls: [item.url] }],
+    collections: [{ name: collection, sourceName: 'manual-link', itemUrls: [item.url] }],
     items: [item],
   };
 }
@@ -149,6 +152,10 @@ function safeExternalUrl(value, maxLength) {
 
 function cleanText(value, maxLength) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function cleanCollection(value) {
+  return cleanText(value, 80);
 }
 
 function extractHashtags(value) {

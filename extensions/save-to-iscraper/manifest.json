@@ -34,5 +34,11 @@
       "https://iscraper.vercel.app/*"
     ]
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/logo.png"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ],
   "options_page": "options/options.html"
 }

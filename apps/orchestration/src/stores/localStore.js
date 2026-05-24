@@ -26,6 +26,7 @@ const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
 const { ACTIVE_DELETION_STATUSES, hashDeletionValue } = require('../services/accountDeletion');
 const { publicNoteAsset } = require('../services/notes');
+const { listItemsPageFromItems } = require('../services/itemList');
 
 const DEFAULT_USER_ID = 'local-dev-user';
 
@@ -801,7 +802,7 @@ function createLocalStore({ dataPath }) {
       return entry;
     },
 
-    upsertImportData({ userId, importId, parsed, initialStatus = 'queued' }) {
+    upsertImportData({ userId, importId, parsed, initialStatus = 'queued', duplicateMode = 'mergeExisting' }) {
       for (const collection of parsed.collections) {
         const id = `${userId}:${collection.name}`;
         if (!state.collections.find((entry) => entry.id === id)) {
@@ -813,6 +814,7 @@ function createLocalStore({ dataPath }) {
       for (const item of parsed.items) {
         const existing = state.items.find((entry) => entry.userId === userId && (entry.id === item.id || entry.url === item.url));
         if (existing) {
+          if (duplicateMode === 'skipExisting') continue;
           Object.assign(existing, {
             ...item,
             userId,
@@ -935,6 +937,10 @@ function createLocalStore({ dataPath }) {
 
     getItems(userId) {
       return state.items.filter((item) => item.userId === userId).map((item) => hydrateLocalItem(state, item));
+    },
+
+    listItemsPage(userId, options = {}) {
+      return listItemsPageFromItems(this.getItems(userId), options);
     },
 
     getItem(userId, id) {

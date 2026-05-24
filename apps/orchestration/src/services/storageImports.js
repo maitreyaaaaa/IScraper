@@ -109,7 +109,13 @@ async function createImportRecordsFromFiles({ store, userId, importId, files }) 
     throw error;
   }
 
-  const items = await store.upsertImportData({ userId, importId, parsed, initialStatus: 'queued' });
+  const items = await store.upsertImportData({
+    userId,
+    importId,
+    parsed,
+    initialStatus: 'queued',
+    duplicateMode: 'skipExisting',
+  });
   const jobs = typeof store.createJobs === 'function'
     ? await store.createJobs({ userId, importId, items })
     : [];

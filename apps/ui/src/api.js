@@ -62,8 +62,18 @@ async function request(path, options = {}) {
   return body;
 }
 
-export function getItems() {
-  return request('/items');
+export function getItems(params = null) {
+  if (!params) return request('/items');
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === '' || value === 'all') continue;
+    query.set(key, String(value));
+  }
+  return request(`/items${query.toString() ? `?${query}` : ''}`);
+}
+
+export function getItemsPage(params = {}) {
+  return getItems({ limit: 60, ...params });
 }
 
 export function getPrivacyExportData() {

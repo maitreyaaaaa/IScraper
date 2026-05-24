@@ -217,6 +217,67 @@ test('search logs no-result queries and validates per-result feedback scope', as
   }
 });
 
+test('items API keeps full-list compatibility and supports paginated library queries', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  store.ensureUser('page-user', 'page@example.com');
+  store.upsertImportData({
+    userId: 'page-user',
+    importId: 'page-import',
+    parsed: {
+      collections: [],
+      items: [
+        {
+          id: 'post-a',
+          url: 'https://instagram.com/p/a',
+          contentType: 'post',
+          caption: 'Post A',
+          collections: ['Ideas'],
+          platform: 'Instagram',
+          platformKey: 'instagram',
+          sourceTitle: 'A post',
+        },
+        {
+          id: 'web-b',
+          url: 'https://example.com/b',
+          contentType: 'link',
+          caption: 'Web B',
+          collections: ['Research'],
+          platform: 'Web',
+          platformKey: 'web',
+          sourceTitle: 'B link',
+        },
+      ],
+    },
+    initialStatus: 'done',
+  });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const headers = { 'x-user-id': 'page-user', 'x-user-email': 'page@example.com' };
+    const full = await fetch(`http://127.0.0.1:${port}/api/items`, { headers });
+    const fullBody = await full.json();
+    assert.equal(full.status, 200);
+    assert.equal(fullBody.items.length, 2);
+    assert.equal(Object.prototype.hasOwnProperty.call(fullBody, 'nextCursor'), false);
+
+    const page = await fetch(`http://127.0.0.1:${port}/api/items?limit=1&sort=title&type=links`, { headers });
+    const pageBody = await page.json();
+    assert.equal(page.status, 200);
+    assert.equal(pageBody.items.length, 1);
+    assert.equal(pageBody.items[0].id, 'web-b');
+    assert.equal(pageBody.totalCount, 1);
+    assert.equal(pageBody.nextCursor, null);
+    assert.deepEqual(pageBody.facets.platforms, ['all', 'Instagram', 'Web']);
+    assert.ok(pageBody.serverTime);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('admin approval and deletion processing are idempotent and prevent account recreation', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
@@ -444,7 +505,10 @@ test('POST /api/imports skips already imported canonical duplicate URLs', async 
 
     const firstResponse = await fetch(`http://127.0.0.1:${port}/api/imports`, { method: 'POST', body: firstForm });
     const firstBody = await firstResponse.json();
+    const originalItem = await store.getItem('local-dev-user', 'AAA111');
+    const originalImportId = originalItem.importId;
     await store.saveAnalysis('local-dev-user', 'AAA111', { title: 'Done item' });
+    const analyzedItem = await store.getItem('local-dev-user', 'AAA111');
 
     const secondForm = new FormData();
     secondForm.append('exportFiles', new Blob([`
@@ -475,7 +539,10 @@ test('POST /api/imports skips already imported canonical duplicate URLs', async 
     assert.equal(secondBody.jobCount, 1);
     assert.equal(allJobs.length, 2);
     assert.equal(allJobs.filter((job) => job.itemId === 'AAA111').length, 1);
+    assert.equal(existingItem.importId, originalImportId);
+    assert.equal(existingItem.caption, 'Original reel');
     assert.equal(existingItem.status, 'done');
+    assert.deepEqual(existingItem.analysis, analyzedItem.analysis);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -552,7 +619,7 @@ test('POST /api/imports reads Pinterest pins, boards, and boards_followed folder
 test('POST /api/imports/storage imports files uploaded through storage', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
-  const html = `
+  let html = `
     <main>
       <div class="_a6-g"><table>
         <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/reel/STORED111/">x</a></div></td></tr>
@@ -599,7 +666,49 @@ test('POST /api/imports/storage imports files uploaded through storage', async (
     assert.equal(body.itemCount, 1);
     assert.equal(body.newItemCount, 1);
     assert.equal(items[0].id, 'STORED111');
-    assert.deepEqual(removedPaths, ['local-dev-user/imports/saved_posts.html']);
+    const originalItem = await store.getItem('local-dev-user', 'STORED111');
+    await store.saveAnalysis('local-dev-user', 'STORED111', { title: 'Stored done' });
+    html = `
+      <main>
+        <div class="_a6-g"><table>
+          <tr><td colspan="2" class="_a6_q">URL<div><a href="https://m.instagram.com/reel/STORED111/?igsh=abc">x</a></div></td></tr>
+          <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Duplicate stored upload reel</td></tr>
+        </table></div>
+        <div class="_a6-g"><table>
+          <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/p/STORED222/">x</a></div></td></tr>
+          <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">New stored upload post</td></tr>
+        </table></div>
+      </main>`;
+    const secondResponse = await fetch(`http://127.0.0.1:${port}/api/imports/storage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: [{
+          path: 'local-dev-user/imports/saved_posts.html',
+          name: 'saved_posts.html',
+          type: 'text/html',
+        }],
+      }),
+    });
+    const secondBody = await secondResponse.json();
+    const existingItem = await store.getItem('local-dev-user', 'STORED111');
+    const allJobs = await store.getJobs('local-dev-user');
+
+    assert.equal(secondResponse.status, 200);
+    assert.equal(secondBody.itemCount, 2);
+    assert.equal(secondBody.newItemCount, 1);
+    assert.equal(secondBody.skippedDuplicateCount, 1);
+    assert.equal(secondBody.queuedJobCount, 1);
+    assert.equal(existingItem.importId, originalItem.importId);
+    assert.equal(existingItem.caption, 'Stored upload reel');
+    assert.equal(existingItem.status, 'done');
+    assert.equal(store.getItems('local-dev-user').length, 2);
+    assert.equal(allJobs.filter((job) => job.itemId === 'STORED111').length, 1);
+    assert.equal(allJobs.filter((job) => job.itemId === 'STORED222').length, 1);
+    assert.deepEqual(removedPaths, [
+      'local-dev-user/imports/saved_posts.html',
+      'local-dev-user/imports/saved_posts.html',
+    ]);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -609,21 +718,24 @@ test('POST /api/imports/storage imports files uploaded through storage', async (
 test('POST /api/imports/storage imports chunked upload parts', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
-  const html = `
+  let html = `
     <main>
       <div class="_a6-g"><table>
         <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/reel/CHUNK111/">x</a></div></td></tr>
         <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Chunked upload reel</td></tr>
       </table></div>
     </main>`;
-  const partA = Buffer.from(html.slice(0, Math.floor(html.length / 2)));
-  const partB = Buffer.from(html.slice(Math.floor(html.length / 2)));
+  const chunkParts = () => [
+    Buffer.from(html.slice(0, Math.floor(html.length / 2))),
+    Buffer.from(html.slice(Math.floor(html.length / 2))),
+  ];
   const removedPaths = [];
   store.client = {
     storage: {
       from() {
         return {
           async download(storagePath) {
+            const [partA, partB] = chunkParts();
             if (storagePath.endsWith('/00000')) return { data: new Blob([partA], { type: 'application/octet-stream' }), error: null };
             if (storagePath.endsWith('/00001')) return { data: new Blob([partB], { type: 'application/octet-stream' }), error: null };
             return { data: null, error: new Error(`Unexpected path ${storagePath}`) };
@@ -660,7 +772,41 @@ test('POST /api/imports/storage imports chunked upload parts', async () => {
     assert.equal(response.status, 200);
     assert.equal(body.itemCount, 1);
     assert.equal(items[0].id, 'CHUNK111');
+    html = `
+      <main>
+        <div class="_a6-g"><table>
+          <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/reel/CHUNK111/?utm_source=old">x</a></div></td></tr>
+          <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Duplicate chunked upload reel</td></tr>
+        </table></div>
+        <div class="_a6-g"><table>
+          <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/p/CHUNK222/">x</a></div></td></tr>
+          <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">New chunked upload post</td></tr>
+        </table></div>
+      </main>`;
+    const secondResponse = await fetch(`http://127.0.0.1:${port}/api/imports/storage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: [{
+          path: 'local-dev-user/imports/chunked.html',
+          name: 'saved_posts.html',
+          type: 'text/html',
+          chunked: true,
+          totalChunks: 2,
+        }],
+      }),
+    });
+    const secondBody = await secondResponse.json();
+
+    assert.equal(secondResponse.status, 200);
+    assert.equal(secondBody.itemCount, 2);
+    assert.equal(secondBody.newItemCount, 1);
+    assert.equal(secondBody.skippedDuplicateCount, 1);
+    assert.equal(secondBody.queuedJobCount, 1);
+    assert.equal(store.getItems('local-dev-user').length, 2);
     assert.deepEqual(removedPaths, [
+      'local-dev-user/imports/chunked.html.parts/00000',
+      'local-dev-user/imports/chunked.html.parts/00001',
       'local-dev-user/imports/chunked.html.parts/00000',
       'local-dev-user/imports/chunked.html.parts/00001',
     ]);

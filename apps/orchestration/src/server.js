@@ -376,7 +376,13 @@ async function createImportFromFiles({ store, userId, files, config }) {
     mode: 'export',
     fileNames: files.map((file) => file.originalname),
   });
-  const items = await store.upsertImportData({ userId, importId: importEntry.id, parsed, initialStatus: 'queued' });
+  const items = await store.upsertImportData({
+    userId,
+    importId: importEntry.id,
+    parsed,
+    initialStatus: 'queued',
+    duplicateMode: 'skipExisting',
+  });
   const jobs = typeof store.createJobs === 'function'
     ? await store.createJobs({ userId, importId: importEntry.id, items })
     : [];
@@ -1282,14 +1288,17 @@ function createApp({ store, config = {}, observability = createObservability(con
     }
 
     const sourceUrl = cleanText(req.body?.sourceUrl || '', 1000);
-    const sourceTitle = cleanText(req.body?.sourceTitle || req.body?.title || 'Screen capture', 160);
+    const sourceTitle = cleanText(req.body?.sourceTitle || '', 160);
+    const captureTitle = cleanText(req.body?.title || sourceTitle || 'Screen capture', 160);
+    const collection = cleanText(req.body?.collection || 'Browser captures', 80) || 'Browser captures';
+    const shouldAnalyze = String(req.body?.autoAnalyze ?? 'true') !== 'false';
     const noteBody = [
       'Saved from the IScraper Chrome extension.',
       sourceTitle ? `Page: ${sourceTitle}` : '',
       sourceUrl ? `URL: ${sourceUrl}` : '',
     ].filter(Boolean).join('\n');
     const input = noteInputFromBody({
-      title: cleanText(req.body?.title || `Screen capture - ${sourceTitle}`, 160),
+      title: captureTitle,
       body: noteBody,
       links: sourceUrl ? [sourceUrl] : [],
     });
@@ -1298,17 +1307,25 @@ function createApp({ store, config = {}, observability = createObservability(con
     try {
       await persistNoteImages({ store, config, userId: user.id, itemId: item.id, files: [req.file] });
       item = await store.updateSavedItem(user.id, item.id, {
-        collections: ['Browser captures'],
+        collections: [collection],
         platform: 'IScraper Extension',
         platformKey: 'iscraper-extension-capture',
         sourceAuthor: 'Chrome extension',
-        sourceTitle,
+        sourceTitle: sourceTitle || captureTitle,
         sourceDescription: 'Cropped screenshot captured from the browser.',
         status: 'done',
       }) || await store.getItem(user.id, item.id);
       item = await store.getItem(user.id, item.id);
       try {
-        item = await analyzeExtensionScreenshot({ store, config, userId: user.id, item, file: req.file }) || item;
+        if (!shouldAnalyze) {
+          captureWorkflow(req, 'extension screenshot analysis skipped', {
+            userId: user.id,
+            itemId: item.id,
+            reason: 'extension_setting',
+          });
+        } else {
+          item = await analyzeExtensionScreenshot({ store, config, userId: user.id, item, file: req.file }) || item;
+        }
       } catch (analysisError) {
         warnWorkflow(req, 'extension screenshot analysis failed', {
           userId: user.id,
@@ -1411,8 +1428,21 @@ function createApp({ store, config = {}, observability = createObservability(con
   }));
 
   app.get('/api/items', asyncRoute(async (req, res) => {
+    const paged = ['limit', 'cursor', 'sort', 'type', 'state', 'collection', 'platform'].some((key) => Object.prototype.hasOwnProperty.call(req.query, key));
+    if (paged && typeof store.listItemsPage === 'function') {
+      const page = await store.listItemsPage(req.user.id, {
+        limit: req.query.limit,
+        cursor: req.query.cursor,
+        sort: req.query.sort,
+        type: req.query.type,
+        state: req.query.state,
+        collection: req.query.collection,
+        platform: req.query.platform,
+      });
+      return res.json(page);
+    }
     const items = await store.getItems(req.user.id);
-    res.json({ items });
+    return res.json({ items });
   }));
 
   app.post('/api/notes', noteUpload.array('images', MAX_NOTE_IMAGES), asyncRoute(async (req, res) => {

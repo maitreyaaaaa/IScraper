@@ -67,6 +67,18 @@ After connection, captures run in the background:
 
 The extension does not store the user's Supabase web-app session token and does not open IScraper during normal capture actions.
 
+## Settings
+
+The options page keeps user-facing controls small and review-friendly:
+
+- Account connection state, disconnect, and reset.
+- Default click behavior: show menu, capture URL, or start screen capture.
+- Screenshot quality: balanced or high quality.
+- Default collection name for extension saves.
+- Screenshot AI analysis on/off.
+- Privacy toggles for including the source page URL and page title with screenshots.
+- Troubleshooting details: extension version and the latest request status/request ID.
+
 ## Chrome Web Store Review Notes
 
 - Single purpose: capture URLs and selected screenshots into the user's private IScraper library.

@@ -1,8 +1,26 @@
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.sync.get({ appUrl: 'https://iscraper.vercel.app' }, (stored) => {
+  chrome.storage.sync.get({
+    appUrl: 'https://iscraper.vercel.app',
+    defaultAction: 'menu',
+    screenshotQuality: 'balanced',
+    autoClosePopup: true,
+    defaultCollection: 'Browser captures',
+    autoAnalyzeScreenshots: true,
+    includeSourceUrl: true,
+    includePageTitle: true,
+  }, (stored) => {
+    const defaults = {};
     if (!stored.appUrl) {
-      chrome.storage.sync.set({ appUrl: 'https://iscraper.vercel.app' });
+      defaults.appUrl = 'https://iscraper.vercel.app';
     }
+    if (!stored.defaultAction) defaults.defaultAction = 'menu';
+    if (!stored.screenshotQuality) defaults.screenshotQuality = 'balanced';
+    if (typeof stored.autoClosePopup !== 'boolean') defaults.autoClosePopup = true;
+    if (!stored.defaultCollection) defaults.defaultCollection = 'Browser captures';
+    if (typeof stored.autoAnalyzeScreenshots !== 'boolean') defaults.autoAnalyzeScreenshots = true;
+    if (typeof stored.includeSourceUrl !== 'boolean') defaults.includeSourceUrl = true;
+    if (typeof stored.includePageTitle !== 'boolean') defaults.includePageTitle = true;
+    if (Object.keys(defaults).length) chrome.storage.sync.set(defaults);
   });
 });
 
@@ -112,6 +130,8 @@ async function saveScreenshot(payload = {}) {
   formData.append('title', String(payload.title || 'Screen capture').slice(0, 160));
   formData.append('sourceTitle', String(payload.sourceTitle || '').slice(0, 160));
   formData.append('sourceUrl', String(payload.sourceUrl || '').slice(0, 1000));
+  formData.append('collection', String(payload.collection || 'Browser captures').slice(0, 80));
+  formData.append('autoAnalyze', payload.autoAnalyze === false ? 'false' : 'true');
 
   const response = await fetch(`${appUrl}/api/extension/captures/screenshot`, {
     method: 'POST',
@@ -163,11 +183,31 @@ async function responseBody(response, requestId) {
   const responseRequestId = response.headers.get('x-request-id') || requestId;
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
+    await recordLastRequest({
+      ok: false,
+      action: response.url.includes('/captures/') ? 'screenshot capture' : 'URL capture',
+      requestId: body.requestId || responseRequestId,
+      error: body.error || `IScraper request failed: ${response.status}`,
+    });
     const error = new Error(body.error || `IScraper request failed: ${response.status}`);
     error.requestId = body.requestId || responseRequestId;
     throw error;
   }
+  await recordLastRequest({
+    ok: true,
+    action: response.url.includes('/captures/') ? 'screenshot capture' : response.url.includes('/saves/') ? 'URL capture' : 'request',
+    requestId: responseRequestId,
+  });
   return { ok: true, body, requestId: responseRequestId };
+}
+
+async function recordLastRequest(details) {
+  await chrome.storage.local.set({
+    lastRequest: {
+      ...details,
+      time: new Date().toISOString(),
+    },
+  });
 }
 
 function dataUrlToBlob(value) {

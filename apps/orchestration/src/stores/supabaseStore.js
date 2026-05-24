@@ -19,6 +19,7 @@ const {
 } = require('../services/queue');
 const { ACTIVE_DELETION_STATUSES, hashDeletionValue } = require('../services/accountDeletion');
 const { NOTE_ASSET_BUCKET, publicNoteAsset } = require('../services/notes');
+const { facetsForItems, normalizeListOptions } = require('../services/itemList');
 
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
 const IMPORT_INSERT_BATCH_SIZE = 500;
@@ -642,15 +643,16 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data ? mapImport(data) : null;
     },
-    async upsertImportData({ userId, importId, parsed, initialStatus = 'queued' }) {
+    async upsertImportData({ userId, importId, parsed, initialStatus = 'queued', duplicateMode = 'skipExisting' }) {
       if (!parsed.items.length) return [];
 
       const ids = [...new Set(parsed.items.map((item) => item.id).filter(Boolean))];
       const urls = [...new Set(parsed.items.map((item) => item.url).filter(Boolean))];
       const existingKeys = await getExistingSavedItemKeys(client, { userId, ids, urls });
+      const shouldSkipExisting = duplicateMode === 'skipExisting';
 
       const items = parsed.items
-        .filter((item) => !existingKeys.has(`id:${item.id}`) && !existingKeys.has(`url:${item.url}`))
+        .filter((item) => !shouldSkipExisting || (!existingKeys.has(`id:${item.id}`) && !existingKeys.has(`url:${item.url}`)))
         .map((item) => ({
         id: cleanDbText(item.id),
         user_id: userId,
@@ -673,12 +675,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         status: initialStatus,
       }));
       if (!items.length) return [];
-      const inserted = [];
-      for (const batch of chunkValues(items, IMPORT_INSERT_BATCH_SIZE)) {
-        const { data, error } = await client.from('saved_items').insert(batch).select('*');
-        if (error) throw error;
-        inserted.push(...(data || []));
-      }
+      const inserted = await insertSavedItemRows(client, items);
       return inserted.map(mapItem);
     },
     async updateSavedItem(userId, id, patch = {}) {
@@ -711,6 +708,23 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     async getItems(userId) {
       const rows = await selectAllUserSavedItems(client, userId);
       return Promise.all(rows.map((row) => mapItemWithAnalysis(row, client)));
+    },
+    async listItemsPage(userId, options = {}) {
+      const normalized = normalizeListOptions(options);
+      const { rows, count } = await selectUserSavedItemPage(client, userId, normalized);
+      const items = await Promise.all(rows.map((row) => mapItemWithAnalysis(row, client)));
+      const facetRows = await selectUserRows(client, 'saved_items', userId, 'collections,platform', 10000);
+      const facets = facetsForItems(facetRows.map((row) => ({
+        collections: row.collections || [],
+        platform: row.platform || 'Instagram',
+      })));
+      return {
+        items,
+        nextCursor: encodePageCursor(normalized.offset + items.length, count || 0),
+        totalCount: count || 0,
+        facets,
+        serverTime: new Date().toISOString(),
+      };
     },
     async getItem(userId, id) {
       const { data, error } = await client
@@ -1442,6 +1456,48 @@ function chunkValues(values, size = EXISTING_ITEM_LOOKUP_BATCH_SIZE) {
   return chunks;
 }
 
+function isExpectedSavedItemDuplicateError(error) {
+  if (!error || error.code !== '23505') return false;
+  const text = [
+    error.message,
+    error.details,
+    error.hint,
+    error.constraint,
+    error.constraint_name,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return text.includes('saved_items_pkey')
+    || text.includes('saved_items_user_id_url_key')
+    || text.includes('key (user_id, id)')
+    || text.includes('key (user_id, url)')
+    || text.includes('(user_id, id)')
+    || text.includes('(user_id, url)');
+}
+
+async function insertSavedItemBatchSkippingDuplicates(client, batch) {
+  const { data, error } = await client.from('saved_items').insert(batch).select('*');
+  if (!error) return data || [];
+  if (!isExpectedSavedItemDuplicateError(error)) throw error;
+
+  const inserted = [];
+  for (const row of batch) {
+    const { data: rowData, error: rowError } = await client.from('saved_items').insert(row).select('*');
+    if (rowError) {
+      if (isExpectedSavedItemDuplicateError(rowError)) continue;
+      throw rowError;
+    }
+    inserted.push(...(Array.isArray(rowData) ? rowData : rowData ? [rowData] : []));
+  }
+  return inserted;
+}
+
+async function insertSavedItemRows(client, rows) {
+  const inserted = [];
+  for (const batch of chunkValues(rows, IMPORT_INSERT_BATCH_SIZE)) {
+    inserted.push(...await insertSavedItemBatchSkippingDuplicates(client, batch));
+  }
+  return inserted;
+}
+
 async function addExistingSavedItemKeys(client, { userId, field, values, existingKeys }) {
   for (const batch of chunkValues(values)) {
     const { data, error } = await client
@@ -1525,6 +1581,54 @@ async function selectAllUserSavedItems(client, userId) {
   }
 
   return rows;
+}
+
+function encodePageCursor(offset, totalCount) {
+  if (!Number.isInteger(offset) || offset <= 0 || offset >= totalCount) return null;
+  return Buffer.from(JSON.stringify({ offset })).toString('base64url');
+}
+
+function applySavedItemListFilters(query, options) {
+  if (options.type === 'notes') {
+    query = query.or('content_type.eq.note,platform_key.eq.iscraper-note');
+  } else if (options.type === 'links') {
+    query = query.or('platform_key.eq.web,id.like.web-%');
+  } else if (options.type === 'uploaded') {
+    query = query.neq('content_type', 'note').neq('platform_key', 'iscraper-note').neq('platform_key', 'web');
+  }
+
+  if (options.state === 'needs_review') {
+    query = query.eq('status', 'needs_review');
+  } else if (options.state === 'searchable') {
+    query = query.neq('status', 'needs_review');
+  } else if (options.state === 'enriched') {
+    query = query.in('status', ['done', 'downloading', 'analyzing']);
+  } else if (options.state === 'failed') {
+    query = query.in('status', ['failed', 'paused']);
+  }
+
+  if (options.collection !== 'all') query = query.contains('collections', [options.collection]);
+  if (options.platform !== 'all') query = query.eq('platform', options.platform);
+  return query;
+}
+
+function applySavedItemListSort(query, sort) {
+  if (sort === 'oldest') return query.order('created_at', { ascending: true }).order('id', { ascending: true });
+  if (sort === 'updated') return query.order('updated_at', { ascending: false }).order('id', { ascending: true });
+  if (sort === 'title') return query.order('source_title', { ascending: true, nullsFirst: false }).order('id', { ascending: true });
+  return query.order('created_at', { ascending: false }).order('id', { ascending: true });
+}
+
+async function selectUserSavedItemPage(client, userId, options) {
+  let query = client
+    .from('saved_items')
+    .select('*, item_analysis(*), item_assets(*)', { count: 'exact' })
+    .eq('user_id', userId);
+  query = applySavedItemListFilters(query, options);
+  query = applySavedItemListSort(query, options.sort);
+  const { data, error, count } = await query.range(options.offset, options.offset + options.limit - 1);
+  if (error) throw error;
+  return { rows: data || [], count: count || 0 };
 }
 
 async function selectAllUserRows(client, table, userId, columns = '*', apply = null) {
@@ -1986,6 +2090,9 @@ function mergeSearchResults({ items, keywordResults, semanticMatches, filters = 
 module.exports = {
   createSupabaseStore,
   getExistingSavedItemKeys,
+  insertSavedItemRows,
+  isExpectedSavedItemDuplicateError,
   cleanDbText,
   selectAllUserSavedItems,
+  selectUserSavedItemPage,
 };

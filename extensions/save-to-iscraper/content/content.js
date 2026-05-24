@@ -19,6 +19,11 @@
       appUrl: message.appUrl,
       token: message.token,
       page: message.page || {},
+      settings: {
+        screenshotQuality: message.settings?.screenshotQuality === 'high' ? 'high' : 'balanced',
+        defaultCollection: String(message.settings?.defaultCollection || 'Browser captures').trim().slice(0, 80) || 'Browser captures',
+        autoAnalyzeScreenshots: message.settings?.autoAnalyzeScreenshots !== false,
+      },
     };
     createCropOverlay();
   }
@@ -65,6 +70,7 @@
         appUrl: session.appUrl,
         token: session.token,
         page: { ...session.page },
+        settings: { ...session.settings },
       };
       closeCapture();
       window.setTimeout(() => saveSelectedArea(rect, captureSession), 0);
@@ -81,9 +87,11 @@
           appUrl: captureSession.appUrl,
           token: captureSession.token,
           imageDataUrl: crop,
-          title: `Screen capture - ${captureSession.page.title || document.title || 'Current page'}`,
-          sourceTitle: captureSession.page.title || document.title || '',
-          sourceUrl: captureSession.page.url || window.location.href,
+          title: captureSession.page.title ? `Screen capture - ${captureSession.page.title}` : 'Screen capture',
+          sourceTitle: captureSession.page.title || '',
+          sourceUrl: captureSession.page.url || '',
+          collection: captureSession.settings.defaultCollection,
+          autoAnalyze: captureSession.settings.autoAnalyzeScreenshots,
           requestId: createRequestId(),
         },
       });
@@ -121,7 +129,8 @@
     const scaleY = image.height / window.innerHeight;
     const canvas = document.createElement('canvas');
     const maxWidth = 1200;
-    const outputScale = Math.min(1, maxWidth / Math.max(rect.width * scaleX, 1));
+    const qualityMaxWidth = session?.settings?.screenshotQuality === 'high' ? 2000 : maxWidth;
+    const outputScale = Math.min(1, qualityMaxWidth / Math.max(rect.width * scaleX, 1));
     canvas.width = Math.max(1, Math.round(rect.width * scaleX * outputScale));
     canvas.height = Math.max(1, Math.round(rect.height * scaleY * outputScale));
     const context = canvas.getContext('2d');
@@ -157,9 +166,10 @@
 
     const header = document.createElement('header');
     const titleWrap = document.createElement('div');
-    const brand = document.createElement('div');
-    brand.className = 'iscraper-capture-brand';
-    brand.textContent = 'IScraper';
+    const brand = document.createElement('img');
+    brand.className = 'iscraper-capture-logo';
+    brand.src = chrome.runtime.getURL('icons/logo.png');
+    brand.alt = 'IScraper';
     const strong = document.createElement('strong');
     strong.textContent = title;
     titleWrap.append(brand, strong);

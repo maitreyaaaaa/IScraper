@@ -15,6 +15,7 @@
     "@react-three/fiber": "^9.6.1",
     "@supabase/supabase-js": "^2.87.1",
     "@tailwindcss/vite": "^4.2.4",
+    "@tanstack/react-virtual": "^3.13.25",
     "@vercel/analytics": "^2.0.1",
     "clsx": "^2.1.1",
     "d3-force": "^3.0.0",

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } from 'd3-force';
@@ -56,6 +56,8 @@ import {
   getAccountDeletion,
   getItem,
   getItems,
+  getItemsPage,
+  getIndexingSummary,
   getCredits,
   getKnowledgeGraph,
   getProfile,
@@ -78,6 +80,7 @@ import {
   testProviderCredential,
   updateReviewItem,
 } from './api';
+import VirtualLibraryGrid from './components/VirtualLibraryGrid';
 import { identifyPostHogUser, resetPostHogUser } from './posthog';
 import { supabase } from './supabaseClient';
 
@@ -419,7 +422,7 @@ function mapItem(item) {
   const analysis = item.analysis || {};
   const firstImageAsset = (item.assets || []).find((asset) => asset.assetType === 'image' && asset.url);
   const indexingStage = normalizeIndexingStage(item.indexingStage || indexingStageFromStatus(item.status, analysis));
-  return {
+  const mapped = {
     raw: item,
     id: item.id,
     hasAnalysis: Boolean(item.analysis),
@@ -459,6 +462,8 @@ function mapItem(item) {
     error: item.error || '',
     searchMatch: item.searchMatch || null,
   };
+  mapped.card = cardViewForItem(mapped);
+  return mapped;
 }
 
 function unique(values) {
@@ -509,6 +514,34 @@ function noteImageError(file, existingCount = 0) {
   if (file.size > MAX_NOTE_IMAGE_BYTES) return 'Note images must be 5 MB or smaller.';
   if (existingCount >= MAX_NOTE_IMAGES) return `Notes support up to ${MAX_NOTE_IMAGES} images.`;
   return '';
+}
+
+function cardViewForItem(item) {
+  const capture = isExtensionCaptureItem(item);
+  const note = isNoteItem(item) && !capture;
+  const meta = item.sourceStatus === 'needs_review'
+    ? STATUS_META.needs_review
+    : INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
+  const statusLabel = item.sourceStatus === 'needs_review'
+    ? 'Needs check'
+    : item.indexingStage === 'visual_indexing'
+      ? 'Updating'
+      : item.indexingStage === 'index_failed' || item.status === 'failed'
+        ? 'Issue'
+        : '';
+  const linkCount = item.note?.links?.length || (note ? [...String(item.caption || '').matchAll(/https?:\/\/[^\s<>"')\]]+/gi)].length : 0);
+  return {
+    capture,
+    note,
+    meta,
+    statusLabel,
+    chip: capture ? 'Screen Capture' : note ? 'My Note' : firstUsefulCardChip(item),
+    preview: shortCardText(item.summary || item.visual || item.sourceDescription || item.caption || (note ? 'Open this note to see the full text.' : 'Open this save to see what was captured.')),
+    title: shortCardText(item.sourceTitle || item.title || (note ? 'Untitled note' : 'Saved post')),
+    source: note ? 'Saved by you' : capture ? 'Chrome extension' : shortCardText(item.sourceAuthor || item.user || item.platform || 'Saved source'),
+    imageCount: item.assets?.filter((asset) => asset.assetType === 'image').length || 0,
+    linkCount,
+  };
 }
 
 function splitQuickAddFiles(fileList = []) {
@@ -3014,6 +3047,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [collectionFilter, setCollectionFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
   const [items, setItems] = useState([]);
+  const [libraryItems, setLibraryItems] = useState([]);
+  const [libraryTotalCount, setLibraryTotalCount] = useState(0);
+  const [libraryNextCursor, setLibraryNextCursor] = useState(null);
+  const [libraryFacets, setLibraryFacets] = useState({ collections: ['all'], platforms: ['all'] });
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [indexingSummary, setIndexingSummary] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
   const [searchMeta, setSearchMeta] = useState({ eventId: '', ai: null, feedback: {} });
   const [selected, setSelected] = useState(null);
@@ -3044,6 +3083,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const sidebarRef = useRef(null);
+  const dashPanelRef = useRef(null);
   const pendingSaveHandledRef = useRef(false);
   const pendingItemHandledRef = useRef(false);
   const pendingExtensionConnectHandledRef = useRef(false);
@@ -3085,6 +3125,37 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         })
       : current));
   }, []);
+
+  const loadLibraryPage = useCallback(async ({ reset = false, cursor = null } = {}) => {
+    setLibraryLoading(true);
+    try {
+      const body = await getItemsPage({
+        limit: 60,
+        cursor,
+        sort: sortOrder,
+        type: typeFilter,
+        state: stateFilter,
+        collection: collectionFilter,
+        platform: platformFilter,
+      });
+      const nextItems = (body.items || []).map(mapItem);
+      setLibraryItems((current) => {
+        if (reset) return nextItems;
+        const seen = new Set(current.map((item) => item.id));
+        return [...current, ...nextItems.filter((item) => !seen.has(item.id))];
+      });
+      setLibraryTotalCount(body.totalCount ?? nextItems.length);
+      setLibraryNextCursor(body.nextCursor || null);
+      setLibraryFacets({
+        collections: body.facets?.collections?.length ? body.facets.collections : ['all'],
+        platforms: body.facets?.platforms?.length ? body.facets.platforms : ['all'],
+      });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLibraryLoading(false);
+    }
+  }, [collectionFilter, platformFilter, sortOrder, stateFilter, typeFilter]);
 
   const loadControls = useCallback(async () => {
     const credentialBody = await getProviderCredentials();
@@ -3150,13 +3221,16 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setApiAccessToken(data.session?.access_token);
-      if (data.session) {
-        initialize(data.session).finally(() => cleanAuthCallbackUrl());
-      } else {
-        setItems([]);
-        setSearchResults(null);
-        setCredentials([]);
-        setLoading(false);
+        if (data.session) {
+          initialize(data.session).finally(() => cleanAuthCallbackUrl());
+        } else {
+          setItems([]);
+          setLibraryItems([]);
+          setLibraryTotalCount(0);
+          setLibraryNextCursor(null);
+          setSearchResults(null);
+          setCredentials([]);
+          setLoading(false);
         resetPostHogUser();
       }
     });
@@ -3168,6 +3242,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         initialize(nextSession).finally(() => cleanAuthCallbackUrl());
       } else {
         setItems([]);
+        setLibraryItems([]);
+        setLibraryTotalCount(0);
+        setLibraryNextCursor(null);
         setSearchResults(null);
         setCredentials([]);
         setProfile(null);
@@ -3199,6 +3276,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       window.removeEventListener('hashchange', onDashboardLocationChange);
     };
   }, []);
+
+  useEffect(() => {
+    if (!canUsePrivateActions || searchResults !== null) return;
+    loadLibraryPage({ reset: true });
+  }, [canUsePrivateActions, loadLibraryPage, searchResults]);
 
   useEffect(() => {
     if (!canUsePrivateActions || pendingExtensionConnectHandledRef.current) return;
@@ -3236,13 +3318,18 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     );
   }, [tab]);
 
-  const boardItems = searchResults || items;
   const searchActive = searchResults !== null;
-  const collections = useMemo(() => ['all', ...unique(boardItems.map((item) => item.collection))], [boardItems]);
-  const platforms = useMemo(() => ['all', ...unique(boardItems.map((item) => item.platform))], [boardItems]);
+  const boardItems = searchActive ? searchResults : libraryItems;
+  const collections = useMemo(() => (
+    searchActive ? ['all', ...unique(boardItems.map((item) => item.collection))] : libraryFacets.collections
+  ), [boardItems, libraryFacets.collections, searchActive]);
+  const platforms = useMemo(() => (
+    searchActive ? ['all', ...unique(boardItems.map((item) => item.platform))] : libraryFacets.platforms
+  ), [boardItems, libraryFacets.platforms, searchActive]);
   const pendingReviews = useMemo(() => items.filter((item) => item.sourceStatus === 'needs_review'), [items]);
 
   const filtered = useMemo(() => {
+    if (!searchActive) return libraryItems;
     return sortedItems(boardItems.filter((item) => {
       if (!itemTypeMatches(item, typeFilter)) return false;
       if (!itemStateMatches(item, stateFilter)) return false;
@@ -3250,7 +3337,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       if (platformFilter !== 'all' && item.platform !== platformFilter) return false;
       return true;
     }), sortOrder);
-  }, [boardItems, collectionFilter, platformFilter, sortOrder, stateFilter, typeFilter]);
+  }, [boardItems, collectionFilter, libraryItems, platformFilter, searchActive, sortOrder, stateFilter, typeFilter]);
 
   const stats = useMemo(() => ({
     total: items.length,
@@ -3259,16 +3346,30 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     needsReview: items.filter((item) => item.sourceStatus === 'needs_review').length,
     paused: items.filter((item) => item.status === 'paused' || item.status === 'failed').length,
   }), [items]);
-  const indexingActivity = useMemo(() => summarizeIndexing(items), [items]);
+  const indexingActivity = useMemo(() => activityFromIndexingSummary(indexingSummary, items), [indexingSummary, items]);
   const activationState = useMemo(() => buildActivationState(items, indexingActivity), [indexingActivity, items]);
 
   useEffect(() => {
-    if (!canUsePrivateActions || indexingActivity.activeTotal <= 0) return undefined;
+    if (!canUsePrivateActions) return undefined;
+    let cancelled = false;
+    const refreshSummary = () => {
+      getIndexingSummary()
+        .then((body) => {
+          if (!cancelled) setIndexingSummary(body.summary || null);
+        })
+        .catch((err) => {
+          if (!cancelled) setError(err.message);
+        });
+    };
+    refreshSummary();
     const timer = window.setInterval(() => {
-      loadItems().catch((err) => setError(err.message));
-    }, 3500);
-    return () => window.clearInterval(timer);
-  }, [canUsePrivateActions, indexingActivity.activeTotal, loadItems]);
+      refreshSummary();
+    }, indexingActivity.activeTotal > 0 ? 3500 : 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [canUsePrivateActions, indexingActivity.activeTotal]);
 
   const handleAvatarFile = (event) => {
     const file = event.target.files?.[0];
@@ -3297,7 +3398,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const body = await saveProfile(profileForm);
       applyProfileState(body.profile, false);
       identifyPostHogUser(session, body.profile);
-      await Promise.all([loadItems(), loadControls()]);
+      await Promise.all([loadItems(), loadControls(), loadLibraryPage({ reset: true })]);
       setNotice('Profile saved. Your private library is ready.');
     } catch (err) {
       setError(err.message);
@@ -3386,7 +3487,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setNotice(duplicate ? 'That link was already in your library.' : queued ? 'Link saved to your Library and queued for indexing.' : 'Link saved to your Library.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
-      await loadItems();
+      await Promise.all([loadItems(), loadLibraryPage({ reset: true })]);
       options.onSuccess?.();
       return true;
     } catch (err) {
@@ -3395,7 +3496,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     } finally {
       setBusy(false);
     }
-  }, [linkForm, loadItems, requireProfile, requireSignIn]);
+  }, [linkForm, loadItems, loadLibraryPage, requireProfile, requireSignIn]);
 
   const handleCreateNote = useCallback(async (event, options = {}) => {
     event.preventDefault();
@@ -3506,7 +3607,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         const skippedCount = result.skippedDuplicateCount ?? 0;
         setNotice(`Added ${newCount} new saves. ${skippedCount} already existed.`);
       }
-      await loadItems();
+      await Promise.all([loadItems(), loadLibraryPage({ reset: true })]);
       return true;
     } catch (err) {
       setError(err.message);
@@ -3859,7 +3960,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             <Plus className="h-7 w-7" />
           </button>
         )}
-        <div className="dash-panel h-screen overflow-y-auto overflow-x-hidden">
+        <div ref={dashPanelRef} className="dash-panel h-screen overflow-y-auto overflow-x-hidden">
           <div className="dash-panel-inner">
             <MobileTopbar
               onBack={onBack}
@@ -3900,7 +4001,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 {canUsePrivateActions && tab === 'library' && (
                   <LibraryTab
                     items={filtered}
-                    totalCount={items.length}
+                    totalCount={searchActive ? items.length : libraryTotalCount}
                     searchActive={searchActive}
                     searchResultCount={boardItems.length}
                     query={query}
@@ -3932,6 +4033,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     searchAi={searchMeta.ai}
                     searchFeedback={searchMeta.feedback}
                     onSearchFeedback={handleSearchFeedback}
+                    scrollRef={dashPanelRef}
+                    hasMore={!searchActive && Boolean(libraryNextCursor)}
+                    loadingMore={libraryLoading}
+                    onLoadMore={() => {
+                      if (!libraryLoading && libraryNextCursor) loadLibraryPage({ cursor: libraryNextCursor });
+                    }}
                   />
                 )}
                 {authEnabled && !session && tab === 'graph' && (
@@ -5491,6 +5598,25 @@ function summarizeIndexing(items) {
   };
 }
 
+function activityFromIndexingSummary(summary, fallbackItems = []) {
+  if (!summary) return summarizeIndexing(fallbackItems);
+  const total = Number(summary.needsReview || 0) + Number(summary.totalJobs || 0);
+  const enriched = Number(summary.done || 0) + Number(summary.processing || 0);
+  return {
+    metadata: Number(summary.queued || summary.waiting || 0),
+    text: 0,
+    visual: Number(summary.done || 0),
+    deep: 0,
+    indexing: Number(summary.processing || 0),
+    failed: Number(summary.failed || 0),
+    active: Number(summary.processing || 0),
+    activeTotal: Number(summary.processing || 0),
+    activeItems: [],
+    enriched,
+    progress: total > 0 ? Math.round((enriched / total) * 100) : 0,
+  };
+}
+
 function suggestedSearchQuery(items = []) {
   const source = items.find((item) => firstUsefulCardChip(item) || item.sourceTitle || item.title || firstLine(item.caption));
   if (!source) return '';
@@ -5716,14 +5842,14 @@ function LibraryTab({
   activationState,
   onOpenAdd,
   onSearchFeedback,
+  scrollRef,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
 }) {
-  const boardRef = useRef(null);
-  const [visibleCount, setVisibleCount] = useState(80);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const activeFilters = (typeFilter !== 'all' ? 1 : 0) + (stateFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
-  const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
   const updateFilter = useCallback((setter) => (value) => {
-    setVisibleCount(80);
     setter(value);
   }, []);
   const mobileFilterGroups = useMemo(() => [
@@ -5734,30 +5860,11 @@ function LibraryTab({
     { label: 'Sort', value: sortOrder, options: SORT_OPTIONS, onChange: updateFilter(setSortOrder) },
   ], [collectionFilter, collections, platformFilter, platforms, sortOrder, stateFilter, typeFilter, updateFilter, setCollectionFilter, setPlatformFilter, setSortOrder, setStateFilter, setTypeFilter]);
 
-  useEffect(() => {
-    const cards = boardRef.current?.querySelectorAll('.pin-card');
-    if (!cards?.length) return undefined;
-
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduceMotion || cards.length > 48) {
-      gsap.set(cards, { autoAlpha: 1, y: 0, scale: 1, clearProps: 'transform,opacity,visibility' });
-      return undefined;
-    }
-
-    gsap.fromTo(
-      cards,
-      { autoAlpha: 0, y: 28, scale: 0.98 },
-      { autoAlpha: 1, y: 0, scale: 1, duration: 0.5, ease: 'power3.out', stagger: 0.035, clearProps: 'transform,opacity,visibility' },
-    );
-    return undefined;
-  }, [collectionFilter, items, platformFilter, sortOrder, stateFilter, typeFilter, visibleCount]);
-
   return (
     <div className="mx-auto max-w-[1480px] px-4 pb-28 pt-8 sm:px-6 md:px-10 md:py-12">
       <div className="mb-7">
         <form
           onSubmit={(event) => {
-            setVisibleCount(80);
             onSearch(event);
           }}
           className="w-full rounded-2xl border border-white/10 bg-white/[0.035] p-5 shadow-2xl shadow-black/40 transition focus-within:border-primary focus-within:bg-white/[0.05] md:p-6"
@@ -5770,14 +5877,12 @@ function LibraryTab({
               const nextQuery = event.target.value;
               setQuery(nextQuery);
               if (!nextQuery.trim() && searchActive) {
-                setVisibleCount(80);
                 onClearSearch();
               }
             }}
             onKeyDown={(event) => {
               if (event.key !== 'Enter' || event.shiftKey) return;
               event.preventDefault();
-              setVisibleCount(80);
               onSearch(event);
             }}
             placeholder="Search your saved posts, links, and notes..."
@@ -5800,7 +5905,6 @@ function LibraryTab({
                 <button
                   type="button"
                   onClick={() => {
-                    setVisibleCount(80);
                     onClearSearch();
                   }}
                   className="grid h-9 w-9 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
@@ -5826,7 +5930,7 @@ function LibraryTab({
       <div className="sticky top-0 z-20 -mx-4 mt-5 border-y border-white/5 bg-black/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:-mx-10 md:px-10">
         <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
           <span>
-            {visibleItems.length} shown from {items.length} saves
+            {items.length} shown from {totalCount || items.length} saves
             {searchActive ? ` · ${searchResultCount} search results from ${totalCount} total saves` : ''}
           </span>
           <button
@@ -5845,7 +5949,6 @@ function LibraryTab({
               value={typeFilter}
               options={TYPE_FILTERS}
               onChange={(nextType) => {
-                  setVisibleCount(80);
                   setTypeFilter(nextType);
                 }}
             />
@@ -5856,7 +5959,6 @@ function LibraryTab({
               value={stateFilter}
               options={STATE_FILTERS}
               onChange={(nextState) => {
-                  setVisibleCount(80);
                   setStateFilter(nextState);
                 }}
             />
@@ -5866,7 +5968,6 @@ function LibraryTab({
               value={platformFilter}
               options={platforms}
               onChange={(nextPlatform) => {
-                  setVisibleCount(80);
                   setPlatformFilter(nextPlatform);
                 }}
             />
@@ -5876,7 +5977,6 @@ function LibraryTab({
               value={collectionFilter}
               options={collections}
               onChange={(nextCollection) => {
-                  setVisibleCount(80);
                   setCollectionFilter(nextCollection);
                 }}
             />
@@ -5887,7 +5987,6 @@ function LibraryTab({
               value={sortOrder}
               options={SORT_OPTIONS}
               onChange={(nextSort) => {
-                  setVisibleCount(80);
                   setSortOrder(nextSort);
                 }}
             />
@@ -5944,30 +6043,37 @@ function LibraryTab({
             )}
           </div>
         ) : (
-          <div ref={boardRef} className="columns-1 gap-5 sm:columns-2 lg:columns-3 2xl:columns-4">
-            {visibleItems.map((item, index) => (
+          <VirtualLibraryGrid
+            items={items}
+            scrollRef={scrollRef}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={onLoadMore}
+            renderItem={(item, index, cardHeight) => (
               <PinCard
                 key={item.id}
                 item={item}
                 index={index}
-                onClick={() => onSelect(item)}
+                height={cardHeight}
+                onClick={onSelect}
                 searchActive={searchActive}
                 feedback={searchFeedback?.[item.id]}
                 onSearchFeedback={onSearchFeedback}
               />
-            ))}
-          </div>
+            )}
+          />
         )}
       </div>
 
-      {visibleItems.length < items.length && (
+      {hasMore && (
         <div className="mt-4 flex justify-center">
           <button
             type="button"
-            onClick={() => setVisibleCount((count) => count + 80)}
+            onClick={onLoadMore}
+            disabled={loadingMore}
             className="rounded-full border border-white/10 bg-white/[0.04] px-6 py-3 text-sm font-semibold transition hover:border-primary hover:text-primary"
           >
-            Show more saves
+            {loadingMore ? 'Loading...' : 'Show more saves'}
           </button>
         </div>
       )}
@@ -5983,8 +6089,6 @@ const PIN_BACKDROPS = [
   '#ffb347',
   '#ff8a1f',
 ];
-
-const PIN_HEIGHTS = ['min-h-72', 'min-h-96', 'min-h-80', 'min-h-[28rem]', 'min-h-64', 'min-h-[24rem]'];
 
 function firstUsefulCardChip(item) {
   return [item.collection, item.tags[0], item.topics[0], item.brands[0], item.tools[0]]
@@ -6081,54 +6185,40 @@ function SearchResultFeedback({ itemId, value, onVote }) {
   );
 }
 
-function PinCard({ item, index, onClick, searchActive = false, feedback = null, onSearchFeedback = null }) {
-  const capture = isExtensionCaptureItem(item);
-  const note = isNoteItem(item) && !capture;
-  const meta = item.sourceStatus === 'needs_review'
-    ? STATUS_META.needs_review
-    : INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
+const PinCard = memo(function PinCard({ item, index, height = 420, onClick, searchActive = false, feedback = null, onSearchFeedback = null }) {
+  const card = item.card || cardViewForItem(item);
+  const { capture, note, meta } = card;
   const Icon = meta.icon;
-  const cardStatusLabel = item.sourceStatus === 'needs_review'
-    ? 'Needs check'
-    : item.indexingStage === 'visual_indexing'
-      ? 'Updating'
-      : item.indexingStage === 'index_failed' || item.status === 'failed'
-        ? 'Issue'
-        : '';
-  const chip = capture ? 'Screen Capture' : note ? 'My Note' : firstUsefulCardChip(item);
-  const preview = shortCardText(item.summary || item.visual || item.sourceDescription || item.caption || (note ? 'Open this note to see the full text.' : 'Open this save to see what was captured.'));
   const backdrop = PIN_BACKDROPS[index % PIN_BACKDROPS.length];
-  const height = note || capture ? 'min-h-56' : PIN_HEIGHTS[index % PIN_HEIGHTS.length];
-  const cardTitle = shortCardText(item.sourceTitle || item.title || (note ? 'Untitled note' : 'Saved post'));
-  const source = note ? 'Saved by you' : capture ? 'Chrome extension' : shortCardText(item.sourceAuthor || item.user || item.platform || 'Saved source');
   const searchReason = searchActive ? firstSearchReason(item) : '';
-  const imageCount = item.assets?.filter((asset) => asset.assetType === 'image').length || 0;
-  const linkCount = item.note?.links?.length || (note ? [...String(item.caption || '').matchAll(/https?:\/\/[^\s<>"')\]]+/gi)].length : 0);
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={onClick}
+      onClick={() => onClick(item)}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          onClick();
+          onClick(item);
         }
       }}
-      className="pin-card group mb-5 block w-full break-inside-avoid overflow-hidden rounded-[1.75rem] border border-white/10 bg-white/[0.035] text-left shadow-2xl shadow-black/30 transition duration-300 hover:-translate-y-1 hover:border-primary/60 hover:bg-white/[0.055]"
+      className="pin-card group block w-full overflow-hidden rounded-[1.25rem] border border-white/10 bg-white/[0.035] text-left shadow-[0_12px_32px_rgba(0,0,0,0.24)] transition-colors duration-200 hover:border-primary/60 hover:bg-white/[0.055]"
+      style={{ height, contain: 'layout paint style' }}
     >
-      <div className={`relative flex ${height} flex-col justify-between overflow-hidden p-5 text-black`} style={{ background: capture ? '#070707' : note ? 'linear-gradient(135deg, #f7f2df 0%, #d8f99d 100%)' : backdrop }}>
+      <div className="relative flex h-[62%] min-h-0 flex-col justify-between overflow-hidden p-5 text-black" style={{ background: capture ? '#070707' : note ? 'linear-gradient(135deg, #f7f2df 0%, #d8f99d 100%)' : backdrop }}>
         {item.thumbnailUrl ? (
           <img
             src={item.thumbnailUrl}
             alt=""
-            className={`absolute inset-0 h-full w-full object-cover ${capture ? 'opacity-85' : 'opacity-50 mix-blend-multiply'}`}
+            className={`absolute inset-0 h-full w-full object-cover ${capture ? 'opacity-85' : 'opacity-45'}`}
             loading="lazy"
+            decoding="async"
+            width="480"
+            height="300"
           />
         ) : null}
-        {!capture && <div className="absolute inset-0 opacity-25 grid-bg" />}
-        {!capture && <div className="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-white/45 blur-2xl" />}
+        {!capture && <div className="absolute inset-0 opacity-10 grid-bg" />}
         <div className="relative flex items-center justify-between gap-3">
           <span className="rounded-full bg-black/75 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-white">{capture ? 'Screen Capture' : note ? 'My Note' : item.platform}</span>
           <span className="rounded-full bg-white/80 p-2 text-black">
@@ -6136,29 +6226,29 @@ function PinCard({ item, index, onClick, searchActive = false, feedback = null, 
           </span>
         </div>
         <div className={`relative ${capture ? 'text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.75)]' : ''}`}>
-          {chip && (
+          {card.chip && (
             <span className={`mb-3 inline-flex max-w-full rounded-full px-3 py-1 font-mono text-[10px] uppercase tracking-widest ${capture ? 'bg-black/70 text-white' : 'bg-black/15 text-black'}`}>
-              <span className="truncate">{chip}</span>
+              <span className="truncate">{card.chip}</span>
             </span>
           )}
-          <h3 className="line-clamp-3 font-display text-3xl font-bold leading-none tracking-tight md:text-[2.35rem]">{cardTitle}</h3>
+          <h3 className="line-clamp-3 font-display text-3xl font-bold leading-none tracking-tight md:text-[2.15rem]">{card.title}</h3>
         </div>
       </div>
-      <div className="p-5">
+      <div className="flex h-[38%] min-h-0 flex-col p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <span className="truncate font-mono text-xs text-primary">{source}</span>
-          {!note && cardStatusLabel && (
+          <span className="truncate font-mono text-xs text-primary">{card.source}</span>
+          {!note && card.statusLabel && (
             <span className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider ${meta.color}`}>
               <Icon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
-              {cardStatusLabel}
+              {card.statusLabel}
             </span>
           )}
         </div>
-        <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">{preview}</p>
-        {note && (imageCount > 0 || linkCount > 0) && (
+        <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">{card.preview}</p>
+        {note && (card.imageCount > 0 || card.linkCount > 0) && (
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-            {linkCount > 0 && <span className="rounded-full border border-white/10 px-2.5 py-1">{linkCount} links</span>}
-            {imageCount > 0 && <span className="rounded-full border border-white/10 px-2.5 py-1">{imageCount} images</span>}
+            {card.linkCount > 0 && <span className="rounded-full border border-white/10 px-2.5 py-1">{card.linkCount} links</span>}
+            {card.imageCount > 0 && <span className="rounded-full border border-white/10 px-2.5 py-1">{card.imageCount} images</span>}
           </div>
         )}
         {searchReason && (
@@ -6169,13 +6259,13 @@ function PinCard({ item, index, onClick, searchActive = false, feedback = null, 
         {searchActive && onSearchFeedback && (
           <SearchResultFeedback itemId={item.id} value={feedback} onVote={onSearchFeedback} />
         )}
-        <div className="mt-4 flex items-center justify-end border-t border-white/10 pt-4 text-muted-foreground">
+        <div className="mt-auto flex items-center justify-end border-t border-white/10 pt-3 text-muted-foreground">
           <ExternalLink className="h-3.5 w-3.5 transition group-hover:translate-x-0.5 group-hover:text-primary" />
         </div>
       </div>
     </div>
   );
-}
+});
 
 function UploadTab({
   files,
@@ -6843,6 +6933,29 @@ function SettingsTab({
   );
 }
 
+const GRAPH_UI_NODE_LIMIT = 240;
+const GRAPH_UI_LINK_LIMIT = 420;
+
+function capGraphForUi(graph) {
+  if (!graph?.nodes?.length) return graph;
+  if (graph.nodes.length <= GRAPH_UI_NODE_LIMIT && (graph.links || []).length <= GRAPH_UI_LINK_LIMIT) return graph;
+  const nodes = [...graph.nodes]
+    .sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0))
+    .slice(0, GRAPH_UI_NODE_LIMIT);
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const links = (graph.links || [])
+    .filter((link) => nodeIds.has(link.source) && nodeIds.has(link.target))
+    .slice(0, GRAPH_UI_LINK_LIMIT);
+  return {
+    ...graph,
+    nodes,
+    links,
+    capped: true,
+    originalNodeCount: graph.nodes.length,
+    originalLinkCount: graph.links?.length || 0,
+  };
+}
+
 function GraphTab({ onSelectItem }) {
   const [graph, setGraph] = useState(null);
   const [busy, setBusy] = useState(true);
@@ -6868,7 +6981,7 @@ function GraphTab({ onSelectItem }) {
     let cancelled = false;
     getKnowledgeGraph()
       .then((body) => {
-        if (!cancelled) setGraph(body.graph);
+        if (!cancelled) setGraph(capGraphForUi(body.graph));
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);

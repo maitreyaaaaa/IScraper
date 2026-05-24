@@ -8,7 +8,9 @@
   </head>
   <body>
     <main>
-      <div class="brand">IScraper</div>
+      <header class="app-header">
+        <img class="brand-logo" src="../icons/logo.png" alt="IScraper" />
+      </header>
       <h1>Extension settings</h1>
       <p class="muted">Manage the IScraper account connection used for background captures.</p>
 
@@ -24,10 +26,65 @@
         <p class="hint">The extension stores a scoped session created after you sign in to IScraper.</p>
       </section>
 
+      <section>
+        <h2>Capture behavior</h2>
+        <div class="field-grid">
+          <div>
+            <label for="default-action">Extension click</label>
+            <select id="default-action">
+              <option value="menu">Show menu</option>
+              <option value="capture-url">Capture URL</option>
+              <option value="screen-capture">Screen Capture</option>
+            </select>
+          </div>
+          <div>
+            <label for="screenshot-quality">Screenshot quality</label>
+            <select id="screenshot-quality">
+              <option value="balanced">Balanced</option>
+              <option value="high">High quality</option>
+            </select>
+          </div>
+        </div>
+        <label class="check-row">
+          <input id="auto-close-popup" type="checkbox" />
+          <span>Auto-close popup after starting screen capture</span>
+        </label>
+      </section>
+
+      <section>
+        <h2>Save defaults</h2>
+        <label for="default-collection">Default collection</label>
+        <input id="default-collection" type="text" value="Browser captures" autocomplete="off" maxlength="80" />
+        <label class="check-row">
+          <input id="auto-analyze-screenshots" type="checkbox" />
+          <span>Analyze screenshots with AI after saving</span>
+        </label>
+      </section>
+
+      <section>
+        <h2>Privacy</h2>
+        <p class="privacy-note">Only pages and screenshot areas you manually capture are sent to IScraper.</p>
+        <label class="check-row">
+          <input id="include-source-url" type="checkbox" />
+          <span>Include source page URL with screenshots</span>
+        </label>
+        <label class="check-row">
+          <input id="include-page-title" type="checkbox" />
+          <span>Include page title with screenshots</span>
+        </label>
+      </section>
+
+      <section>
+        <h2>Troubleshooting</h2>
+        <p id="version" class="connection-state">Version unknown</p>
+        <p id="last-request" class="connection-state">No extension requests yet.</p>
+      </section>
+
       <div class="actions">
         <button id="save" type="button">Save settings</button>
         <button id="connect" type="button" class="secondary">Sign in to IScraper</button>
         <button id="disconnect" type="button" class="secondary">Disconnect this browser</button>
+        <button id="reset" type="button" class="secondary">Reset extension settings</button>
       </div>
 
       <p id="status" class="muted" role="status"></p>

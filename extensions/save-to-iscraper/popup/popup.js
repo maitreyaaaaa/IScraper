@@ -1,4 +1,13 @@
 const DEFAULT_APP_URL = 'https://iscraper.vercel.app';
+const DEFAULT_SETTINGS = {
+  defaultAction: 'menu',
+  screenshotQuality: 'balanced',
+  autoClosePopup: true,
+  defaultCollection: 'Browser captures',
+  autoAnalyzeScreenshots: true,
+  includeSourceUrl: true,
+  includePageTitle: true,
+};
 
 const titleEl = document.getElementById('tab-title');
 const signedOutEl = document.getElementById('signed-out');
@@ -14,6 +23,8 @@ const undoUrlEl = document.getElementById('undo-url');
 let activeTab = null;
 let pageMeta = {};
 let extensionSession = null;
+let settings = DEFAULT_SETTINGS;
+let defaultActionStarted = false;
 let undoUrlTimer = null;
 let pendingUrlUndo = null;
 
@@ -40,6 +51,21 @@ async function getExtensionSession() {
     token,
     tokenId: String(stored.extensionTokenId || ''),
     email: String(stored.extensionUserEmail || ''),
+  };
+}
+
+async function getSettings() {
+  const stored = await chrome.storage.sync.get(DEFAULT_SETTINGS);
+  return {
+    ...DEFAULT_SETTINGS,
+    ...stored,
+    defaultAction: ['menu', 'capture-url', 'screen-capture'].includes(stored.defaultAction) ? stored.defaultAction : DEFAULT_SETTINGS.defaultAction,
+    screenshotQuality: ['balanced', 'high'].includes(stored.screenshotQuality) ? stored.screenshotQuality : DEFAULT_SETTINGS.screenshotQuality,
+    defaultCollection: String(stored.defaultCollection || DEFAULT_SETTINGS.defaultCollection).trim().replace(/\s+/g, ' ').slice(0, 80) || DEFAULT_SETTINGS.defaultCollection,
+    autoClosePopup: stored.autoClosePopup !== false,
+    autoAnalyzeScreenshots: stored.autoAnalyzeScreenshots !== false,
+    includeSourceUrl: stored.includeSourceUrl !== false,
+    includePageTitle: stored.includePageTitle !== false,
   };
 }
 
@@ -78,6 +104,7 @@ function captureBody() {
     author: pageMeta.author || '',
     platform: detectPlatform(activeTab.url || ''),
     source: 'extension',
+    collection: settings.defaultCollection,
     clientActionId: createRequestId(),
   };
 }
@@ -174,24 +201,33 @@ async function startScreenCapture() {
     return;
   }
   const appUrl = await getAppUrl();
+  const pageTitle = settings.includePageTitle ? (pageMeta.title || activeTab.title || '') : '';
+  const pageUrl = settings.includeSourceUrl ? (activeTab.url || '') : '';
   const message = {
     type: 'ISCRAPER_START_SCREEN_CAPTURE',
     appUrl,
     token: extensionSession.token,
+    settings: {
+      screenshotQuality: settings.screenshotQuality,
+      defaultCollection: settings.defaultCollection,
+      autoAnalyzeScreenshots: settings.autoAnalyzeScreenshots,
+      includeSourceUrl: settings.includeSourceUrl,
+      includePageTitle: settings.includePageTitle,
+    },
     page: {
-      url: activeTab.url || '',
-      title: pageMeta.title || activeTab.title || '',
+      url: pageUrl,
+      title: pageTitle,
     },
   };
   try {
     await sendTabMessage(activeTab.id, message);
-    window.close();
+    if (settings.autoClosePopup) window.close();
   } catch (_error) {
     try {
       await chrome.scripting.insertCSS({ target: { tabId: activeTab.id }, files: ['content/content.css'] });
       await chrome.scripting.executeScript({ target: { tabId: activeTab.id }, files: ['content/content.js'] });
       await sendTabMessage(activeTab.id, message);
-      window.close();
+      if (settings.autoClosePopup) window.close();
     } catch {
       statusEl.textContent = 'Screen capture cannot run on this browser page.';
     }
@@ -207,6 +243,7 @@ async function openConnect() {
 
 async function init() {
   activeTab = await getActiveTab();
+  settings = await getSettings();
   extensionSession = await getExtensionSession();
   if (activeTab?.id && /^https?:\/\//i.test(activeTab.url || '')) {
     pageMeta = await readPageMeta(activeTab.id).catch(() => ({}));
@@ -217,6 +254,14 @@ async function init() {
   signedOutEl.hidden = Boolean(extensionSession?.token);
   actionsEl.hidden = !extensionSession?.token;
   accountEl.textContent = extensionSession?.email ? `Signed in as ${extensionSession.email}` : '';
+
+  if (extensionSession?.token && !defaultActionStarted && settings.defaultAction !== 'menu') {
+    defaultActionStarted = true;
+    window.setTimeout(() => {
+      if (settings.defaultAction === 'capture-url') captureUrl();
+      if (settings.defaultAction === 'screen-capture') startScreenCapture();
+    }, 120);
+  }
 }
 
 function setBusy(button, busy, label) {
