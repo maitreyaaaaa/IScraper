@@ -100,6 +100,34 @@ test('expired active leases are reclaimable but fresh active leases are not', as
     assert.equal(reclaimed[0].id, leased.id);
     assert.equal(reclaimed[0].attempts, 2);
     assert.equal(reclaimed[0].leaseOwner, 'worker-b');
+    assert.ok(reclaimed[0].leaseToken);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('claimNextJobs skips jobs with future retry backoff and exhausted attempts', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+
+  try {
+    const { entry, jobs } = seedJobs(store);
+    await store.updateJob('u1', jobs[0].id, {
+      attempts: 1,
+      nextAttemptAt: new Date(Date.now() + 60 * 1000).toISOString(),
+    });
+    await store.updateJob('u1', jobs[1].id, { attempts: 3 });
+
+    const claimed = await store.claimNextJobs({
+      userId: 'u1',
+      importId: entry.id,
+      limit: 3,
+      leaseOwner: 'worker-a',
+      maxAttempts: 3,
+      perUserConcurrency: 3,
+    });
+
+    assert.deepEqual(claimed.map((job) => job.itemId), ['u1-lease-3']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

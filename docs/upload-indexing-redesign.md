@@ -39,6 +39,15 @@
 11. Worker processing leases queued or expired active jobs before running them, so overlapping workers skip jobs already leased.
 12. `INLINE_INDEXING_ENABLED=false` is the production default. Inline processing is only a local/fallback escape hatch.
 
-## Next Structural Step
+## Current Worker Reliability Contract
 
-Keep tuning Trigger.dev concurrency, per-user limits, and batch sizes while measuring actual provider cost and failure rates. Vercel remains the web API; long AI work should not depend on the user request lifecycle.
+The current production path is a long-running worker process plus a protected worker endpoint fallback:
+
+- `npm run worker --prefix apps/orchestration` starts the worker runner at `src/worker/indexing-runner.js`.
+- `WORKER_RUN_ONCE=true` drains one bounded pass and exits, which is useful for cron or smoke checks.
+- Loop mode scans due scopes, respects `WORKER_GLOBAL_CONCURRENCY`, `WORKER_PER_USER_CONCURRENCY`, `WORKER_BATCH_SIZE`, and `WORKER_SCAN_LIMIT`, then sleeps with `WORKER_IDLE_MS`.
+- Every claimed job gets a lease owner and lease token. Final job writes are ignored if another worker reclaimed the lease.
+- Failed jobs retry with capped backoff through `next_attempt_at` until `WORKER_MAX_ATTEMPTS` is reached.
+- Billing/provider pauses stay paused until the user fixes the required account state.
+
+Trigger.dev remains a valid future drain path, but it is not required for the current reliability hardening. If adopted later, it should call the same scoped worker runtime rather than introduce a separate job state store.

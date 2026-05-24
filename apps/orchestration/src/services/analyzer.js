@@ -260,17 +260,17 @@ function mergeAnalyses(analyses) {
 function searchableFields(item) {
   const analysis = item.analysis || {};
   return [
-    { weight: 9, text: analysis.title },
-    { weight: 7, text: analysis.ocrText },
-    { weight: 7, text: analysis.transcript },
-    { weight: 5, text: analysis.summary },
-    { weight: 5, text: item.caption },
-    { weight: 5, text: [item.platform, item.platformKey, item.sourceTitle, item.sourceAuthor, item.sourceDescription].filter(Boolean).join(' ') },
-    { weight: 4, text: analysis.visualDescription },
-    { weight: 4, text: [...(analysis.topics || []), ...(analysis.tags || [])].join(' ') },
-    { weight: 4, text: [...(analysis.brandsMentioned || []), ...(analysis.toolsMentioned || [])].join(' ') },
-    { weight: 3, text: [...(analysis.reposMentioned || []), ...(analysis.peopleMentioned || [])].join(' ') },
-    { weight: 1, text: [item.ownerName, item.ownerUsername, item.url].filter(Boolean).join(' ') },
+    { key: 'title', label: 'Title', weight: 9, text: analysis.title || item.sourceTitle },
+    { key: 'ocr', label: 'Words on screen', weight: 7, text: analysis.ocrText },
+    { key: 'transcript', label: 'Transcript', weight: 7, text: analysis.transcript },
+    { key: 'summary', label: 'Summary', weight: 5, text: analysis.summary },
+    { key: 'caption', label: 'Caption', weight: 5, text: item.caption },
+    { key: 'source', label: 'Source metadata', weight: 5, text: [item.platform, item.platformKey, item.sourceTitle, item.sourceAuthor, item.sourceDescription].filter(Boolean).join(' ') },
+    { key: 'visual', label: 'Visual notes', weight: 4, text: analysis.visualDescription },
+    { key: 'topics', label: 'Topics and tags', weight: 4, text: [...(analysis.topics || []), ...(analysis.tags || [])].join(' ') },
+    { key: 'mentions', label: 'Mentioned tools and brands', weight: 4, text: [...(analysis.brandsMentioned || []), ...(analysis.toolsMentioned || [])].join(' ') },
+    { key: 'peopleRepos', label: 'People and repos', weight: 3, text: [...(analysis.reposMentioned || []), ...(analysis.peopleMentioned || [])].join(' ') },
+    { key: 'url', label: 'Original URL', weight: 1, text: [item.ownerName, item.ownerUsername, item.url].filter(Boolean).join(' ') },
   ];
 }
 
@@ -317,33 +317,90 @@ function fieldMatchesGroup(fieldText, group) {
   return group.some((term) => tokens.has(term));
 }
 
+function matchedTermsForField(fieldText, group) {
+  const tokens = new Set(tokenizeSearchText(fieldText));
+  return group.filter((term) => tokens.has(term));
+}
+
 function haystackMatchesGroup(haystack, group) {
   const tokens = new Set(tokenizeSearchText(haystack));
   return group.some((term) => tokens.has(term));
 }
 
 function scoreItem(item, query, groups) {
+  return explainSearchMatch(item, query, groups).score;
+}
+
+function compactSearchSnippet(text, terms = [], maxLength = 180) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (value.length <= maxLength) return value;
+  const lower = value.toLowerCase();
+  const firstTerm = terms.find((term) => lower.includes(String(term).toLowerCase()));
+  const center = firstTerm ? lower.indexOf(String(firstTerm).toLowerCase()) : 0;
+  const start = Math.max(0, center - Math.floor(maxLength / 2));
+  const snippet = value.slice(start, start + maxLength).trim();
+  return `${start > 0 ? '...' : ''}${snippet}${start + maxLength < value.length ? '...' : ''}`;
+}
+
+function explainSearchMatch(item, query, groups = queryGroups(query)) {
   const normalizedQuery = normalizeSearchText(query);
   const haystack = searchableText(item);
   if (!groups.every((group) => haystackMatchesGroup(haystack, group))) {
-    return 0;
+    return { score: 0, matchedTerms: [], matchedFields: [], matchTypes: [] };
   }
 
-  return searchableFields(item).reduce((total, field) => {
+  const matchTypes = new Set();
+  const matchedTerms = new Set();
+  const matchedFields = [];
+  const score = searchableFields(item).reduce((total, field) => {
     const normalizedField = normalizeSearchText(field.text);
     if (!normalizedField) return total;
-    const groupScore = groups.reduce((sum, group) => sum + (fieldMatchesGroup(normalizedField, group) ? field.weight : 0), 0);
-    const phraseScore = normalizedQuery && normalizedField.includes(normalizedQuery) ? field.weight * 3 : 0;
+    const terms = unique(groups.flatMap((group) => matchedTermsForField(normalizedField, group)));
+    const groupScore = terms.length ? field.weight * terms.length : 0;
+    const phraseMatched = Boolean(normalizedQuery && normalizedField.includes(normalizedQuery));
+    const phraseScore = phraseMatched ? field.weight * 3 : 0;
+    if (terms.length || phraseMatched) {
+      terms.forEach((term) => matchedTerms.add(term));
+      if (terms.length) matchTypes.add('keyword');
+      if (phraseMatched) matchTypes.add('phrase');
+      matchedFields.push({
+        key: field.key,
+        label: field.label,
+        terms: terms.slice(0, 8),
+        snippet: compactSearchSnippet(field.text, terms.length ? terms : [normalizedQuery]),
+      });
+    }
     return total + groupScore + phraseScore;
   }, 0);
+
+  return {
+    score,
+    matchedTerms: [...matchedTerms].slice(0, 12),
+    matchedFields: matchedFields
+      .sort((a, b) => {
+        const aWeight = searchableFields(item).find((field) => field.key === a.key)?.weight || 0;
+        const bWeight = searchableFields(item).find((field) => field.key === b.key)?.weight || 0;
+        return bWeight - aWeight;
+      })
+      .slice(0, 4),
+    matchTypes: [...matchTypes],
+  };
 }
 
 function searchItems(items, query, filters = {}) {
+  return searchItemsWithDetails(items, query, filters).map(({ searchMatch, ...item }) => {
+    void searchMatch;
+    return item;
+  });
+}
+
+function searchItemsWithDetails(items, query, filters = {}) {
   const groups = queryGroups(query);
   if (!groups.length) return items;
 
   return items
-    .map((item) => ({ item, score: scoreItem(item, query, groups) }))
+    .map((item) => ({ item, searchMatch: explainSearchMatch(item, query, groups) }))
+    .map(({ item, searchMatch }) => ({ item, score: searchMatch.score, searchMatch }))
     .filter(({ item, score }) => {
       if (!score) return false;
       if (filters.contentType && item.contentType !== filters.contentType) return false;
@@ -353,7 +410,13 @@ function searchItems(items, query, filters = {}) {
       return true;
     })
     .sort((a, b) => b.score - a.score)
-    .map(({ item }) => item);
+    .map(({ item, searchMatch }) => ({
+      ...item,
+      searchMatch: {
+        ...searchMatch,
+        matchTypes: searchMatch.matchTypes.length ? searchMatch.matchTypes : ['keyword'],
+      },
+    }));
 }
 
 module.exports = {
@@ -363,5 +426,7 @@ module.exports = {
   buildOpenRouterAnalysisRequest,
   mergeAnalysis,
   parseOpenRouterAnalysisResponse,
+  explainSearchMatch,
   searchItems,
+  searchItemsWithDetails,
 };

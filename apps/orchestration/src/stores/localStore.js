@@ -1,7 +1,17 @@
 const fs = require('fs');
 const path = require('path');
-const { createJobsForImport, hasActiveLease, isReclaimableJob, isRestartableJob, PAUSED_JOB_STATUSES } = require('../services/queue');
-const { searchItems } = require('../services/analyzer');
+const crypto = require('crypto');
+const {
+  DEFAULT_MAX_JOB_ATTEMPTS,
+  createJobsForImport,
+  hasActiveLease,
+  isAttemptExhausted,
+  isReclaimableJob,
+  isRestartableJob,
+  isRetryDue,
+  PAUSED_JOB_STATUSES,
+} = require('../services/queue');
+const { searchItemsWithDetails } = require('../services/analyzer');
 const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
 const {
   OPENAI_COMPATIBLE_PROVIDER,
@@ -51,6 +61,8 @@ function seedFromLegacyIndex(dataPath) {
     analysisUsageEvents: [],
     adminCreditAdjustments: [],
     feedback: [],
+    searchEvents: [],
+    searchFeedback: [],
     userAdminStates: [],
     userActivityEvents: [],
     profiles: [],
@@ -109,6 +121,8 @@ function emptyState() {
     analysisUsageEvents: [],
     adminCreditAdjustments: [],
     feedback: [],
+    searchEvents: [],
+    searchFeedback: [],
     profiles: [],
     extensionTokens: [],
     lensSearchEvents: [],
@@ -130,8 +144,11 @@ function normalizeState(state) {
     analysisUsageEvents: state.analysisUsageEvents || [],
     adminCreditAdjustments: state.adminCreditAdjustments || [],
     feedback: state.feedback || [],
+    searchEvents: state.searchEvents || [],
+    searchFeedback: state.searchFeedback || [],
     userAdminStates: state.userAdminStates || [],
     userActivityEvents: state.userActivityEvents || [],
+    jobs: (state.jobs || []).map(normalizeJob),
     profiles: state.profiles || [],
     extensionTokens: state.extensionTokens || [],
     lensSearchEvents: state.lensSearchEvents || [],
@@ -139,6 +156,19 @@ function normalizeState(state) {
     accountDeletionSteps: state.accountDeletionSteps || [],
     accountDeletionAudit: state.accountDeletionAudit || [],
     accountDeletionTombstones: state.accountDeletionTombstones || [],
+  };
+}
+
+function normalizeJob(job) {
+  return {
+    leaseOwner: null,
+    leaseToken: null,
+    leaseExpiresAt: null,
+    nextAttemptAt: null,
+    claimedAt: null,
+    completedAt: null,
+    lastErrorAt: null,
+    ...job,
   };
 }
 
@@ -401,6 +431,7 @@ function createLocalStore({ dataPath }) {
             leaseOwner: null,
             leaseToken: null,
             leaseExpiresAt: null,
+            nextAttemptAt: null,
             updatedAt: now(),
           });
           canceledJobs += 1;
@@ -421,6 +452,8 @@ function createLocalStore({ dataPath }) {
         collections: deleteFromArrayByUser('collections', userId),
         imports: deleteFromArrayByUser('imports', userId),
         lensSearchEvents: deleteFromArrayByUser('lensSearchEvents', userId),
+        searchEvents: deleteFromArrayByUser('searchEvents', userId),
+        searchFeedback: deleteFromArrayByUser('searchFeedback', userId),
       };
       save();
       return deleted;
@@ -495,6 +528,8 @@ function createLocalStore({ dataPath }) {
         credits: this.getCredits(userId),
         providerCredentials: this.listProviderCredentials(userId),
         extensionTokens: state.extensionTokens.filter((entry) => entry.userId === userId).map(publicExtensionToken),
+        searchEvents: state.searchEvents.filter((entry) => entry.userId === userId),
+        searchFeedback: state.searchFeedback.filter((entry) => entry.userId === userId),
         profile: this.getProfile(userId),
         deletion: mapDeletionRequest(activeDeletionRequestForUser(userId)),
       };
@@ -652,6 +687,50 @@ function createLocalStore({ dataPath }) {
       return feedback;
     },
 
+    recordSearchEvent({ id, userId, query, queryLength = 0, filters = {}, resultCount = 0, includeAi = false, resultIds = [] }) {
+      const event = {
+        id,
+        userId,
+        query: String(query || '').trim().slice(0, 240),
+        queryLength: Number(queryLength || 0),
+        filters,
+        resultCount: Number(resultCount || 0),
+        includeAi: Boolean(includeAi),
+        resultIds: Array.isArray(resultIds) ? resultIds.slice(0, 30) : [],
+        createdAt: now(),
+      };
+      state.searchEvents.push(event);
+      save();
+      return event;
+    },
+
+    recordSearchFeedback({ userId, searchEventId, itemId, rating, reason = '' }) {
+      const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
+      if (!item) {
+        const error = new Error('Saved item not found.');
+        error.statusCode = 404;
+        throw error;
+      }
+      const event = state.searchEvents.find((entry) => entry.userId === userId && entry.id === searchEventId);
+      if (!event || !(event.resultIds || []).includes(itemId)) {
+        const error = new Error('Search feedback must reference one of your current search results.');
+        error.statusCode = 400;
+        throw error;
+      }
+      const feedback = {
+        id: `search-feedback-${Date.now()}-${state.searchFeedback.length + 1}`,
+        userId,
+        searchEventId,
+        itemId,
+        rating,
+        reason: String(reason || '').trim().slice(0, 300),
+        createdAt: now(),
+      };
+      state.searchFeedback.push(feedback);
+      save();
+      return feedback;
+    },
+
     createImport({ userId, source, mode = 'export', fileNames = [], status = 'imported', storageFiles = [] }) {
       const entry = {
         id: `import-${Date.now()}`,
@@ -786,12 +865,12 @@ function createLocalStore({ dataPath }) {
       return state.jobs.filter((job) => job.userId === userId && (!importId || job.importId === importId));
     },
 
-    getProcessableJobScopes({ limit = 10, perUserConcurrency = 1 } = {}) {
+    getProcessableJobScopes({ limit = 10, perUserConcurrency = 1, maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS } = {}) {
       const scopes = [];
       const seen = new Set();
       const currentTime = new Date();
       const processableJobs = state.jobs
-        .filter((job) => isReclaimableJob(job, currentTime))
+        .filter((job) => isReclaimableJob(job, currentTime, { maxAttempts }))
         .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
       for (const job of processableJobs) {
         const activeForUser = state.jobs.filter((entry) => entry.userId === job.userId && hasActiveLease(entry, currentTime)).length;
@@ -809,7 +888,15 @@ function createLocalStore({ dataPath }) {
       return state.jobs.find((job) => job.userId === userId && job.id === id) || null;
     },
 
-    claimNextJobs({ userId, importId = null, limit = 5, leaseOwner = 'local-worker', leaseMs = 15 * 60 * 1000, perUserConcurrency = 1 } = {}) {
+    claimNextJobs({
+      userId,
+      importId = null,
+      limit = 5,
+      leaseOwner = 'local-worker',
+      leaseMs = 15 * 60 * 1000,
+      perUserConcurrency = 1,
+      maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS,
+    } = {}) {
       const currentTime = new Date();
       const activeForUser = state.jobs.filter((job) => job.userId === userId && hasActiveLease(job, currentTime)).length;
       const availableSlots = activeForUser >= (Number(perUserConcurrency) || 1)
@@ -819,17 +906,20 @@ function createLocalStore({ dataPath }) {
 
       const leaseExpiresAt = new Date(currentTime.getTime() + leaseMs).toISOString();
       const claimed = state.jobs
-        .filter((job) => job.userId === userId && (!importId || job.importId === importId) && isReclaimableJob(job, currentTime))
+        .filter((job) => job.userId === userId && (!importId || job.importId === importId) && isReclaimableJob(job, currentTime, { maxAttempts }))
         .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
         .slice(0, availableSlots);
 
       for (const job of claimed) {
+        const leaseToken = crypto.randomUUID();
         Object.assign(job, {
           status: 'downloading',
           attempts: (job.attempts || 0) + 1,
           error: null,
           leaseOwner,
+          leaseToken,
           leaseExpiresAt,
+          nextAttemptAt: null,
           claimedAt: currentTime.toISOString(),
           lastErrorAt: null,
           updatedAt: now(),
@@ -842,6 +932,14 @@ function createLocalStore({ dataPath }) {
     updateJob(userId, id, patch) {
       const job = this.getJob(userId, id);
       if (!job) return null;
+      Object.assign(job, patch, { updatedAt: now() });
+      save();
+      return job;
+    },
+
+    updateClaimedJob(userId, id, leaseToken, patch) {
+      const job = this.getJob(userId, id);
+      if (!job || !leaseToken || job.leaseToken !== leaseToken) return null;
       Object.assign(job, patch, { updatedAt: now() });
       save();
       return job;
@@ -860,9 +958,12 @@ function createLocalStore({ dataPath }) {
       for (const job of jobs) {
         Object.assign(job, {
           status: 'queued',
+          attempts: 0,
           error: null,
           leaseOwner: null,
+          leaseToken: null,
           leaseExpiresAt: null,
+          nextAttemptAt: null,
           claimedAt: null,
           completedAt: null,
           lastErrorAt: null,
@@ -888,18 +989,24 @@ function createLocalStore({ dataPath }) {
         stats[status] = (stats[status] || 0) + 1;
         return stats;
       }, {});
+      const retrying = jobs.filter((job) => job.status === 'queued' && !isRetryDue(job, currentTime)).length;
+      const exhausted = jobs.filter((job) => job.status === 'failed' && isAttemptExhausted(job)).length;
+      const retryableFailed = jobs.filter((job) => job.status === 'failed' && !isAttemptExhausted(job)).length;
       const needsReview = items.filter((item) => item.status === 'needs_review').length;
       const paused = PAUSED_JOB_STATUSES.reduce((total, status) => total + (byStatus[status] || 0), 0);
       return {
         totalJobs: jobs.length,
         needsReview,
-        waiting: byStatus.queued || 0,
-        queued: byStatus.queued || 0,
+        waiting: Math.max((byStatus.queued || 0) - retrying, 0),
+        queued: Math.max((byStatus.queued || 0) - retrying, 0),
+        retrying,
         processing: (byStatus.downloading || 0) + (byStatus.analyzing || 0),
         downloading: byStatus.downloading || 0,
         analyzing: byStatus.analyzing || 0,
         done: byStatus.done || 0,
         failed: byStatus.failed || 0,
+        retryableFailed,
+        exhausted,
         paused,
         pausedMissingProvider: byStatus.paused_missing_provider || 0,
         pausedNeedsBilling: byStatus.paused_needs_billing || 0,
@@ -939,7 +1046,7 @@ function createLocalStore({ dataPath }) {
     },
 
     search(userId, query, filters = {}) {
-      return searchItems(this.getItems(userId), query, filters);
+      return searchItemsWithDetails(this.getItems(userId), query, filters);
     },
 
     listCreditPackages() {

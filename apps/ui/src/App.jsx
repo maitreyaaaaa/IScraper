@@ -33,6 +33,8 @@ import {
   ShieldCheck,
   Sparkles,
   Tag,
+  ThumbsDown,
+  ThumbsUp,
   Upload,
   User,
   X,
@@ -66,6 +68,7 @@ import {
   saveProviderCredential,
   searchItems,
   setApiAccessToken,
+  submitSearchFeedback,
   submitPublicFeedback,
   testProviderCredential,
   updateReviewItem,
@@ -151,6 +154,49 @@ function validateExportFiles(files = [], sourceType = 'auto') {
   }
   if (sourceType === 'instagram' && !files.some(isInstagramSavedFile)) {
     throw new Error('For Instagram, upload the full export ZIP or the saved_posts/saved_collections HTML or JSON file from your_instagram_activity/saved/.');
+  }
+}
+
+function importHealthForFiles(files = [], sourceType = 'auto') {
+  const selectedFiles = importCandidateFiles(files, sourceType);
+  const totalBytes = selectedFiles.reduce((total, file) => total + Number(file.size || 0), 0);
+  const largeUpload = shouldUseStorageUpload(selectedFiles);
+
+  if (!files.length) {
+    return {
+      state: 'waiting',
+      title: 'Waiting for an export',
+      copy: 'Choose a ZIP, JSON, CSV, or saved-posts HTML file to run the import check.',
+      selectedCount: 0,
+      totalBytes: 0,
+      largeUpload: false,
+    };
+  }
+
+  try {
+    validateExportFiles(selectedFiles, sourceType);
+    if (selectedFiles.length > 20) {
+      throw new Error('Upload at most 20 export files at once. For full exports, upload the original ZIP instead of every folder file.');
+    }
+    return {
+      state: 'ready',
+      title: `${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'} ready`,
+      copy: largeUpload
+        ? 'Large imports will upload first, then parse in the background.'
+        : 'This import can be parsed now and made searchable from metadata.',
+      selectedCount: selectedFiles.length,
+      totalBytes,
+      largeUpload,
+    };
+  } catch (err) {
+    return {
+      state: 'blocked',
+      title: 'Import check failed',
+      copy: err.message,
+      selectedCount: selectedFiles.length,
+      totalBytes,
+      largeUpload,
+    };
   }
 }
 
@@ -392,6 +438,7 @@ function mapItem(item) {
     url: item.url,
     why: analysis.whyUseful || '',
     error: item.error || '',
+    searchMatch: item.searchMatch || null,
   };
 }
 
@@ -405,6 +452,13 @@ function firstLine(value = '') {
 
 function formatUsageNumber(value = 0) {
   return Number(value || 0).toLocaleString();
+}
+
+function formatBytes(value = 0) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatUsageDate(value) {
@@ -2738,6 +2792,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [platformFilter, setPlatformFilter] = useState('all');
   const [items, setItems] = useState([]);
   const [searchResults, setSearchResults] = useState(null);
+  const [searchMeta, setSearchMeta] = useState({ eventId: '', ai: null, feedback: {} });
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
   const [importSourceType, setImportSourceType] = useState('auto');
@@ -2803,7 +2858,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const mergeUpdatedItem = useCallback((updated) => {
     const nextItem = mapItem(updated);
     setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
-    setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
+    setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? { ...nextItem, searchMatch: entry.searchMatch } : entry)) : current));
     setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
     return nextItem;
   }, []);
@@ -2939,6 +2994,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     paused: items.filter((item) => item.status === 'paused' || item.status === 'failed').length,
   }), [items]);
   const indexingActivity = useMemo(() => summarizeIndexing(items), [items]);
+  const activationState = useMemo(() => buildActivationState(items, indexingActivity), [indexingActivity, items]);
 
   useEffect(() => {
     if (!canUsePrivateActions || indexingActivity.activeTotal <= 0) return undefined;
@@ -2984,21 +3040,24 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   };
 
-  const handleSearch = async (event) => {
+  const handleSearch = useCallback(async (event) => {
     event?.preventDefault();
     if (!requireSignIn('search your library')) return;
+    const searchText = String(event?.searchQuery ?? query).trim();
     const searchRun = activeSearchRef.current + 1;
     activeSearchRef.current = searchRun;
     setBusy(true);
     setError('');
     try {
-      if (!query.trim()) {
+      if (!searchText) {
         setSearchResults(null);
+        setSearchMeta({ eventId: '', ai: null, feedback: {} });
         await loadItems();
       } else {
-        const body = await searchItems(query);
+        const body = await searchItems(searchText, {}, { includeAi: true });
         const mappedResults = (body.results || []).map(mapItem);
         setSearchResults(mappedResults);
+        setSearchMeta({ eventId: body.searchEventId || '', ai: body.ai || null, feedback: {} });
         const suggestedIds = (body.suggestedEnrichmentIds || mappedResults.filter(shouldEnrichItem).slice(0, 3).map((item) => item.id)).slice(0, 3);
         if (suggestedIds.length) {
           enrichIntentBatch(suggestedIds)
@@ -3015,6 +3074,30 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setError(err.message);
     } finally {
       setBusy(false);
+    }
+  }, [loadItems, mergeUpdatedItem, query, requireSignIn]);
+
+  const handleSearchFeedback = async (itemId, rating) => {
+    if (!searchMeta.eventId) return;
+    setSearchMeta((current) => ({
+      ...current,
+      feedback: { ...current.feedback, [itemId]: { rating, status: 'saving' } },
+    }));
+    try {
+      await submitSearchFeedback({
+        searchEventId: searchMeta.eventId,
+        itemId,
+        rating,
+      });
+      setSearchMeta((current) => ({
+        ...current,
+        feedback: { ...current.feedback, [itemId]: { rating, status: 'saved' } },
+      }));
+    } catch (err) {
+      setSearchMeta((current) => ({
+        ...current,
+        feedback: { ...current.feedback, [itemId]: { rating, status: 'failed', message: err.message } },
+      }));
     }
   };
 
@@ -3033,7 +3116,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     try {
       const result = await saveLink({ ...payload, startProcessing: false });
       const duplicate = result.skippedDuplicateCount > 0;
-      setNotice(duplicate ? 'That link was already in your brain.' : 'Link saved to review. Approve it when you want it searchable.');
+      setNotice(duplicate ? 'That link was already in your brain.' : 'Link saved. Review it below, then approve it to make it searchable.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
       await loadItems();
@@ -3159,7 +3242,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
       setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
       setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
-      setNotice('Approved. Searchable from metadata. Open it to enrich.');
+      setNotice('Approved. Go to Library and search for it by title, caption, tag, or note.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -3242,6 +3325,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     replaceAppTabUrl(nextTab);
     resetPageScroll();
   }, []);
+
+  const tryActivationSearch = useCallback((searchText) => {
+    const nextQuery = String(searchText || '').trim();
+    selectTab('library');
+    if (!nextQuery) return;
+    setQuery(nextQuery);
+    handleSearch({ preventDefault: () => {}, searchQuery: nextQuery });
+  }, [handleSearch, selectTab]);
 
   useLayoutEffect(() => {
     resetPageScroll();
@@ -3364,6 +3455,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     onClearSearch={() => {
                       activeSearchRef.current += 1;
                       setSearchResults(null);
+                      setSearchMeta({ eventId: '', ai: null, feedback: {} });
                       setQuery('');
                     }}
                     onSearch={handleSearch}
@@ -3378,6 +3470,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     platforms={platforms}
                     onSelect={openDetail}
                     indexingActivity={indexingActivity}
+                    activationState={activationState}
+                    onOpenAdd={() => selectTab('upload')}
+                    onTrySearch={tryActivationSearch}
+                    searchAi={searchMeta.ai}
+                    searchFeedback={searchMeta.feedback}
+                    onSearchFeedback={handleSearchFeedback}
                   />
                 )}
                 {authEnabled && !session && tab === 'graph' && (
@@ -3444,6 +3542,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     busy={busy}
                     onOpenHowTo={onOpenHowTo}
                     indexingActivity={indexingActivity}
+                    activationState={activationState}
+                    onTrySearch={tryActivationSearch}
                   />
                 )}
                 {authEnabled && !session && tab === 'settings' && (
@@ -4347,6 +4447,37 @@ function summarizeIndexing(items) {
   };
 }
 
+function suggestedSearchQuery(items = []) {
+  const source = items.find((item) => firstUsefulCardChip(item) || item.sourceTitle || item.title || firstLine(item.caption));
+  if (!source) return '';
+  return firstUsefulCardChip(source) || source.sourceTitle || source.title || firstLine(source.caption) || '';
+}
+
+function buildActivationState(items = [], activity = summarizeIndexing(items)) {
+  const reviewItems = items.filter((item) => item.sourceStatus === 'needs_review');
+  const searchableItems = items.filter((item) => item.sourceStatus !== 'needs_review');
+  const metadataOnly = searchableItems.filter((item) => item.indexingStage === 'metadata_ready' || item.indexingStage === 'index_failed').length;
+  const enriched = searchableItems.filter((item) => DASHBOARD_ENRICHED_STAGES.has(item.indexingStage)).length;
+  const failed = searchableItems.filter((item) => item.indexingStage === 'index_failed' || item.status === 'failed').length;
+  const searchQuery = suggestedSearchQuery(searchableItems);
+
+  let currentStep = 'add';
+  if (items.length > 0 && reviewItems.length > 0 && searchableItems.length === 0) currentStep = 'approve';
+  if (searchableItems.length > 0) currentStep = 'search';
+
+  return {
+    currentStep,
+    total: items.length,
+    needsReview: reviewItems.length,
+    searchable: searchableItems.length,
+    metadataOnly,
+    enriched,
+    indexing: activity.activeTotal || 0,
+    failed,
+    searchQuery,
+  };
+}
+
 function isStaleEnrichmentItem(item) {
   if (item?.indexingStage !== 'visual_indexing') return false;
   const timestamp = Date.parse(item.lastEnrichmentRequestedAt || item.raw?.lastEnrichmentRequestedAt || item.raw?.updatedAt || '');
@@ -4402,11 +4533,170 @@ function IndexingProgressCard({ activity }) {
   );
 }
 
+function FirstRunActivationCard({ activation, onOpenAdd, onTrySearch }) {
+  const steps = [
+    {
+      key: 'add',
+      title: 'Add',
+      copy: activation.total ? `${formatUsageNumber(activation.total)} saved` : 'Paste a link or upload an export',
+      icon: Upload,
+      state: activation.total > 0 ? 'done' : 'current',
+    },
+    {
+      key: 'approve',
+      title: 'Approve',
+      copy: activation.needsReview ? `${formatUsageNumber(activation.needsReview)} waiting` : 'Ready for search',
+      icon: CheckCircle2,
+      state: activation.total === 0 ? 'upcoming' : activation.needsReview > 0 ? 'current' : 'done',
+    },
+    {
+      key: 'search',
+      title: 'Search',
+      copy: activation.searchable ? `${formatUsageNumber(activation.searchable)} searchable now` : 'Appears after approval',
+      icon: Search,
+      state: activation.searchable > 0 ? 'done' : 'upcoming',
+    },
+  ];
+  const cta = activation.total === 0
+    ? { label: 'Add a save', action: onOpenAdd, icon: Upload }
+    : activation.needsReview > 0 && activation.searchable === 0
+      ? { label: 'Review saves', action: onOpenAdd, icon: CheckCircle2 }
+      : activation.searchable > 0
+        ? { label: activation.searchQuery ? `Search "${activation.searchQuery}"` : 'Search library', action: () => onTrySearch(activation.searchQuery), icon: Search }
+        : { label: 'Add a save', action: onOpenAdd, icon: Upload };
+  const CtaIcon = cta.icon;
+
+  return (
+    <section className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">First run</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Save, approve, then search.</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+            Approved saves are searchable from metadata right away. Opening a save adds richer visual, OCR, and transcript signals as indexing finishes.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={cta.action}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]"
+        >
+          <CtaIcon className="h-4 w-4" /> {cta.label}
+        </button>
+      </div>
+      <div className="mt-5 grid gap-3 md:grid-cols-3">
+        {steps.map(({ key, title, copy, icon: Icon, state }) => (
+          <div
+            key={key}
+            className={`rounded-xl border p-4 ${
+              state === 'done'
+                ? 'border-primary/30 bg-black/40'
+                : state === 'current'
+                  ? 'border-accent/50 bg-accent/10'
+                  : 'border-white/10 bg-black/30'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <span className={`grid h-9 w-9 place-items-center rounded-full ${state === 'upcoming' ? 'bg-white/10 text-muted-foreground' : 'bg-primary text-primary-foreground'}`}>
+                <Icon className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">{title}</div>
+                <div className="truncate text-xs text-muted-foreground">{copy}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SearchabilityStatusCard({ activation }) {
+  const statuses = [
+    ['Searchable now', activation.searchable, 'Captions, notes, titles, collections, and source metadata.'],
+    ['Still indexing', activation.indexing, 'Visual descriptions, OCR, and transcripts are being added.'],
+    ['Needs approval', activation.needsReview, 'These stay out of search until you approve them.'],
+    ['Enriched', activation.enriched, 'These have text or visual indexing beyond basic metadata.'],
+  ];
+
+  return (
+    <section className="mt-5 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Search readiness</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">What can show up right now</h2>
+        </div>
+        <p className="max-w-xl text-sm leading-6 text-muted-foreground">
+          Metadata search is available after approval. Enrichment improves ranking and citations as each save is opened and indexed.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {statuses.map(([label, value, copy]) => (
+          <div key={label} className="rounded-xl border border-white/10 bg-black/40 p-4">
+            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">{label}</div>
+            <div className="mt-2 font-display text-3xl font-bold">{formatUsageNumber(value)}</div>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">{copy}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ImportHealthPanel({ health, pendingReviewCount, indexingActivity }) {
+  const healthMeta = {
+    waiting: { icon: FileText, color: 'text-muted-foreground', label: 'Waiting' },
+    ready: { icon: CheckCircle2, color: 'text-primary', label: 'Ready' },
+    blocked: { icon: AlertCircle, color: 'text-destructive', label: 'Blocked' },
+  }[health.state] || { icon: FileText, color: 'text-muted-foreground', label: 'Waiting' };
+  const Icon = healthMeta.icon;
+  const checks = [
+    ['File check', health.title, health.copy, Icon, healthMeta.color],
+    ['Approval queue', `${formatUsageNumber(pendingReviewCount)} waiting`, pendingReviewCount ? 'Approve these to make them searchable.' : 'No saves are waiting for review.', CheckCircle2, pendingReviewCount ? 'text-accent' : 'text-primary'],
+    ['Indexing', `${formatUsageNumber(indexingActivity.activeTotal)} active`, indexingActivity.activeTotal ? 'Search works from metadata while enrichment continues.' : 'No enrichment jobs are running right now.', indexingActivity.activeTotal ? Loader2 : CheckCircle2, indexingActivity.activeTotal ? 'text-accent' : 'text-primary'],
+  ];
+
+  return (
+    <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Import health</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Before you add files</h2>
+        </div>
+        {health.selectedCount > 0 && (
+          <span className="rounded-full border border-white/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+            {formatUsageNumber(health.selectedCount)} selected · {formatBytes(health.totalBytes)}
+          </span>
+        )}
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {checks.map(([label, title, copy, CheckIcon, color]) => (
+          <div key={label} className="rounded-xl border border-white/10 bg-black/40 p-4">
+            <div className={`mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] ${color}`}>
+              <CheckIcon className={`h-3.5 w-3.5 ${CheckIcon === Loader2 ? 'animate-spin' : ''}`} /> {label}
+            </div>
+            <div className="text-sm font-semibold">{title}</div>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">{copy}</p>
+          </div>
+        ))}
+      </div>
+      {health.largeUpload && (
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">
+          Large uploads are handed to Supabase Storage first, so the UI can stay responsive while parsing starts.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function LibraryTab({
   items,
   totalCount,
   searchActive,
   searchResultCount,
+  searchAi,
+  searchFeedback,
   query,
   setQuery,
   onClearSearch,
@@ -4422,6 +4712,10 @@ function LibraryTab({
   platforms,
   onSelect,
   indexingActivity,
+  activationState,
+  onOpenAdd,
+  onTrySearch,
+  onSearchFeedback,
 }) {
   const boardRef = useRef(null);
   const [visibleCount, setVisibleCount] = useState(80);
@@ -4456,6 +4750,10 @@ function LibraryTab({
 
   return (
     <div className="mx-auto max-w-[1480px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
+      <div className="mb-5">
+        <FirstRunActivationCard activation={activationState} onOpenAdd={onOpenAdd} onTrySearch={onTrySearch} />
+      </div>
+
       <div className="mb-7">
         <form
           onSubmit={(event) => {
@@ -4482,7 +4780,7 @@ function LibraryTab({
               setVisibleCount(80);
               onSearch(event);
             }}
-            placeholder="Ask anything..."
+            placeholder="Search approved saves by title, caption, tag, or note..."
             className="min-h-16 w-full resize-none bg-transparent text-lg leading-7 outline-none placeholder:text-muted-foreground md:min-h-20 md:text-2xl"
           />
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
@@ -4530,6 +4828,12 @@ function LibraryTab({
 
       <IndexingProgressCard activity={indexingActivity} />
 
+      <SearchabilityStatusCard activation={activationState} />
+
+      {searchActive && (
+        <SearchAiPanel ai={searchAi} items={items} onSelect={onSelect} />
+      )}
+
       <div className="sticky top-0 z-20 -mx-4 mt-5 border-y border-white/5 bg-black/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:-mx-10 md:px-10">
         <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
           <span>
@@ -4575,12 +4879,53 @@ function LibraryTab({
 
       <div className="mt-8">
         {items.length === 0 ? (
-          <div className="rounded-[2rem] border border-dashed border-white/10 p-20 text-center text-muted-foreground">
-            Nothing searchable yet, or nothing matches your filters.
+          <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center md:p-14">
+            <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary">
+              {searchActive && searchResultCount === 0 ? <Search className="h-5 w-5" /> : <Upload className="h-5 w-5" />}
+            </div>
+            <h3 className="mt-4 font-display text-2xl font-bold tracking-tight">
+              {searchActive && searchResultCount === 0
+                ? 'No matching saves yet'
+                : activeFilters > 0
+                  ? 'No saves match these filters'
+                  : activationState.needsReview
+                    ? 'Approve one save to see search work'
+                    : 'Add one save to see search work'}
+            </h3>
+            <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+              {searchActive && searchResultCount === 0
+                ? activationState.searchable
+                  ? `${formatUsageNumber(activationState.searchable)} saves are searchable now. Try another title, creator, tag, or collection.`
+                  : 'Nothing has been approved for search yet. Approve a save first, then search again.'
+                : activeFilters > 0
+                  ? 'Clear the active filters or switch back to All to see your saved library.'
+                  : activationState.needsReview
+                    ? 'Open the Add tab, approve a save from Review inbox, and it will become searchable from metadata.'
+                    : 'Paste a link or upload an export, approve the captured details, and it will appear in search from metadata.'}
+            </p>
+            {(!searchActive || activationState.searchable === 0) && (
+              <button
+                type="button"
+                onClick={onOpenAdd}
+                className="mt-5 inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
+              >
+                <Upload className="h-4 w-4" /> Add saves
+              </button>
+            )}
           </div>
         ) : (
           <div ref={boardRef} className="columns-1 gap-5 sm:columns-2 lg:columns-3 2xl:columns-4">
-            {visibleItems.map((item, index) => <PinCard key={item.id} item={item} index={index} onClick={() => onSelect(item)} />)}
+            {visibleItems.map((item, index) => (
+              <PinCard
+                key={item.id}
+                item={item}
+                index={index}
+                onClick={() => onSelect(item)}
+                searchActive={searchActive}
+                feedback={searchFeedback?.[item.id]}
+                onSearchFeedback={onSearchFeedback}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -4621,7 +4966,92 @@ function shortCardText(value = '') {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
-function PinCard({ item, index, onClick }) {
+function firstSearchReason(item) {
+  const match = item.searchMatch;
+  const field = match?.matchedFields?.[0];
+  if (field?.label && field?.terms?.length) return `Matched ${field.label.toLowerCase()}: ${field.terms.slice(0, 3).join(', ')}`;
+  if (field?.label) return `Matched ${field.label.toLowerCase()}`;
+  if (match?.matchTypes?.includes('semantic')) return 'Matched related meaning';
+  return '';
+}
+
+function SearchAiPanel({ ai, items, onSelect }) {
+  if (!ai) return null;
+  if (ai.error) {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5 text-sm text-muted-foreground">
+        {ai.error}
+      </div>
+    );
+  }
+  const citations = (ai.citations || []).filter((citation) => items.some((item) => item.id === citation.id));
+  if (!ai.answer || !citations.length) return null;
+  return (
+    <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
+      <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em] text-primary">
+        <Sparkles className="h-3.5 w-3.5" /> From your saved items
+      </div>
+      <p className="text-sm leading-6 text-foreground">{ai.answer}</p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {citations.slice(0, 4).map((citation) => {
+          const item = items.find((entry) => entry.id === citation.id);
+          return (
+            <button
+              key={citation.id}
+              type="button"
+              onClick={() => item && onSelect(item)}
+              className="max-w-full rounded-full border border-white/10 px-3 py-1.5 text-left text-xs text-muted-foreground transition hover:border-primary hover:text-foreground"
+              title={citation.reason || citation.snippet}
+            >
+              <span className="line-clamp-1">{citation.title || item?.sourceTitle || item?.title || 'Saved item'}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SearchResultFeedback({ itemId, value, onVote }) {
+  const saving = value?.status === 'saving';
+  const saved = value?.status === 'saved';
+  const failed = value?.status === 'failed';
+  return (
+    <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/10 pt-3">
+      <span className={`text-[11px] ${failed ? 'text-destructive' : 'text-muted-foreground'}`}>
+        {saving ? 'Saving vote...' : saved ? 'Vote saved' : failed ? 'Vote failed' : 'This result'}
+      </span>
+      <div className="flex gap-1">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onVote(itemId, 'helpful');
+          }}
+          disabled={saving}
+          className={`grid h-8 w-8 place-items-center rounded-full border border-white/10 transition hover:border-primary hover:text-primary ${value?.rating === 'helpful' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
+          aria-label="Mark this result helpful"
+        >
+          <ThumbsUp className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onVote(itemId, 'not_helpful');
+          }}
+          disabled={saving}
+          className={`grid h-8 w-8 place-items-center rounded-full border border-white/10 transition hover:border-destructive hover:text-destructive ${value?.rating === 'not_helpful' ? 'bg-destructive text-white' : 'text-muted-foreground'}`}
+          aria-label="Mark this result not helpful"
+        >
+          <ThumbsDown className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PinCard({ item, index, onClick, searchActive = false, feedback = null, onSearchFeedback = null }) {
   const meta = item.sourceStatus === 'needs_review'
     ? STATUS_META.needs_review
     : INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
@@ -4632,11 +5062,19 @@ function PinCard({ item, index, onClick }) {
   const height = PIN_HEIGHTS[index % PIN_HEIGHTS.length];
   const cardTitle = shortCardText(item.sourceTitle || item.title || 'Saved post');
   const source = shortCardText(item.sourceAuthor || item.user || item.platform || 'Saved source');
+  const searchReason = searchActive ? firstSearchReason(item) : '';
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onClick();
+        }
+      }}
       className="pin-card group mb-5 block w-full break-inside-avoid overflow-hidden rounded-[1.75rem] border border-white/10 bg-white/[0.035] text-left shadow-2xl shadow-black/30 transition duration-300 hover:-translate-y-1 hover:border-primary/60 hover:bg-white/[0.055]"
     >
       <div className={`relative flex ${height} flex-col justify-between overflow-hidden p-5 text-black`} style={{ background: backdrop }}>
@@ -4667,11 +5105,19 @@ function PinCard({ item, index, onClick }) {
           </span>
         </div>
         <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">{preview}</p>
+        {searchReason && (
+          <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs leading-5 text-muted-foreground">
+            {searchReason}
+          </p>
+        )}
+        {searchActive && onSearchFeedback && (
+          <SearchResultFeedback itemId={item.id} value={feedback} onVote={onSearchFeedback} />
+        )}
         <div className="mt-4 flex items-center justify-end border-t border-white/10 pt-4 text-muted-foreground">
           <ExternalLink className="h-3.5 w-3.5 transition group-hover:translate-x-0.5 group-hover:text-primary" />
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -4691,8 +5137,12 @@ function UploadTab({
   busy,
   onOpenHowTo,
   indexingActivity,
+  activationState,
+  onTrySearch,
 }) {
   const [dragging, setDragging] = useState(false);
+  const linkInputRef = useRef(null);
+  const importHealth = useMemo(() => importHealthForFiles(files, importSourceType), [files, importSourceType]);
   const sourceOptions = [
     { value: 'auto', label: 'Auto-detect', help: 'Best for full export ZIPs.' },
     { value: 'instagram', label: 'Instagram', help: 'Looks in your_instagram_activity/saved/.' },
@@ -4714,6 +5164,8 @@ function UploadTab({
         </button>
       </div>
 
+      <FirstRunActivationCard activation={activationState} onOpenAdd={() => linkInputRef.current?.focus()} onTrySearch={onTrySearch} />
+
       <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -4729,6 +5181,8 @@ function UploadTab({
 
       <IndexingProgressCard activity={indexingActivity} />
 
+      <ImportHealthPanel health={importHealth} pendingReviewCount={pendingReviews.length} indexingActivity={indexingActivity} />
+
       <form onSubmit={onSaveLink} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save from any platform</div>
@@ -4738,6 +5192,7 @@ function UploadTab({
           </p>
         </div>
         <input
+          ref={linkInputRef}
           type="url"
           value={linkForm.url}
           onChange={(event) => setLinkForm((current) => ({ ...current, url: event.target.value }))}
@@ -4771,7 +5226,7 @@ function UploadTab({
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Review inbox</div>
               <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saves waiting</h2>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">Clean up the title and notes before making the save searchable.</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">Approve a save to make it appear in Library search from title, caption, tag, and note metadata.</p>
             </div>
             <button
               type="button"
@@ -4875,6 +5330,16 @@ function UploadTab({
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
           Add and search from metadata
         </button>
+        {activationState.searchable > 0 && (
+          <button
+            type="button"
+            onClick={() => onTrySearch(activationState.searchQuery)}
+            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5"
+          >
+            <Search className="h-4 w-4" />
+            View searchable saves
+          </button>
+        )}
       </div>
     </div>
   );
@@ -4956,7 +5421,7 @@ function ReviewCard({ item, busy, onSelect, onUpdate, onApprove }) {
           className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-60"
         >
           <CheckCircle2 className="h-4 w-4" />
-          Approve
+          Approve and make searchable
         </button>
       </div>
     </article>

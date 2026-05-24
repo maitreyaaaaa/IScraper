@@ -18,6 +18,7 @@ async function scanIndexingScopes({ store, config }) {
   return store.getProcessableJobScopes({
     limit: config.workerScanLimit || 20,
     perUserConcurrency: config.workerPerUserConcurrency || 1,
+    maxAttempts: config.workerMaxAttempts || 3,
   });
 }
 
@@ -40,6 +41,9 @@ async function processIndexingScope({ store, config, userId, importId = null, ma
     leaseOwner: config.workerLeaseOwner,
     leaseMs: config.workerLeaseMs,
     perUserConcurrency: config.workerPerUserConcurrency || 1,
+    maxAttempts: config.workerMaxAttempts || 3,
+    retryBackoffMs: config.workerRetryBackoffMs,
+    maxRetryBackoffMs: config.workerMaxRetryBackoffMs,
   });
 }
 

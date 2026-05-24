@@ -19,6 +19,13 @@ function publicResultSnippet(item, index) {
     brands: (analysis.brandsMentioned || []).slice(0, 10),
     tools: (analysis.toolsMentioned || []).slice(0, 10),
     whyUseful: compactText(analysis.whyUseful, 300),
+    match: item.searchMatch ? {
+      terms: (item.searchMatch.matchedTerms || []).slice(0, 8),
+      fields: (item.searchMatch.matchedFields || []).slice(0, 3).map((field) => ({
+        label: field.label,
+        snippet: compactText(field.snippet, 180),
+      })),
+    } : null,
   };
 }
 
@@ -36,8 +43,9 @@ function buildDeepSeekSearchAnswerRequest({ model = 'deepseek-v4-flash', query, 
           'You answer search queries using only the provided saved-post snippets.',
           'Never invent posts, URLs, facts, brands, or claims not present in the snippets.',
           'Keep the answer short and useful.',
+          'Ground every useful claim in saved item ids from the snippets.',
           'Return valid JSON only with this shape:',
-          '{"answer":"string","resultReasons":[{"id":"string","reason":"string"}],"suggestions":["string"]}',
+          '{"answer":"string","citations":[{"id":"string","reason":"string","snippet":"string"}],"resultReasons":[{"id":"string","reason":"string"}],"suggestions":["string"]}',
         ].join(' '),
       },
       {
@@ -57,6 +65,26 @@ function parseJsonContent(content) {
 
 function normalizeAiSearchAnswer(parsed = {}, results = []) {
   const resultIds = new Set(results.map((item) => item.id));
+  const byId = new Map(results.map((item, index) => [item.id, publicResultSnippet(item, index)]));
+  const rawCitations = Array.isArray(parsed.citations) && parsed.citations.length
+    ? parsed.citations
+    : parsed.resultReasons;
+  const citations = Array.isArray(rawCitations)
+    ? rawCitations
+      .map((entry) => {
+        const id = String(entry.id || '');
+        const snippet = byId.get(id);
+        return {
+          id,
+          title: compactText(snippet?.title, 160),
+          url: snippet?.url || '',
+          reason: compactText(entry.reason, 320),
+          snippet: compactText(entry.snippet || snippet?.summary || snippet?.transcript || snippet?.ocrText || snippet?.visualDescription, 260),
+        };
+      })
+      .filter((entry) => resultIds.has(entry.id) && (entry.reason || entry.snippet))
+      .slice(0, 8)
+    : [];
   return {
     answer: compactText(parsed.answer, 1800) || 'I found related saved posts, but there was not enough indexed text to write a useful answer.',
     resultReasons: Array.isArray(parsed.resultReasons)
@@ -68,6 +96,7 @@ function normalizeAiSearchAnswer(parsed = {}, results = []) {
         .filter((entry) => resultIds.has(entry.id) && entry.reason)
         .slice(0, 8)
       : [],
+    citations,
     suggestions: Array.isArray(parsed.suggestions)
       ? parsed.suggestions.map((entry) => compactText(entry, 120)).filter(Boolean).slice(0, 5)
       : [],

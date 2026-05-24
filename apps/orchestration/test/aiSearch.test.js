@@ -86,5 +86,14 @@ test('createDeepSeekSearchAnswer returns normalized grounded answer', async () =
   assert.deepEqual(answer.resultReasons, [
     { id: 'save-1', reason: 'It directly mentions SOC 2 and security controls.' },
   ]);
+  assert.deepEqual(answer.citations, [
+    {
+      id: 'save-1',
+      title: 'SOC 2 checklist',
+      url: '',
+      reason: 'It directly mentions SOC 2 and security controls.',
+      snippet: 'Security controls',
+    },
+  ]);
   assert.deepEqual(answer.suggestions, ['audit checklist']);
 });

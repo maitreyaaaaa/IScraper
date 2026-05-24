@@ -6,6 +6,7 @@ const {
   buildOpenRouterAnalysisRequest,
   parseOpenRouterAnalysisResponse,
   searchItems,
+  searchItemsWithDetails,
 } = require('../src/services/analyzer');
 
 test('analyzeTextMetadata extracts useful tech entities from caption text', () => {
@@ -144,6 +145,24 @@ test('searchItems can filter by status, platform, and collection', () => {
   });
 
   assert.deepEqual(results.map((item) => item.id), ['match']);
+});
+
+test('searchItemsWithDetails explains matched fields without changing item ranking', () => {
+  const items = [
+    {
+      id: 'match',
+      caption: 'SOC 2 compliance checklist',
+      analysis: { title: 'SOC 2 security controls', summary: 'Audit evidence tracker' },
+    },
+  ];
+
+  const results = searchItemsWithDetails(items, 'SOC 2');
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, 'match');
+  assert.ok(results[0].searchMatch.score > 0);
+  assert.ok(results[0].searchMatch.matchedTerms.includes('soc'));
+  assert.equal(results[0].searchMatch.matchedFields[0].label, 'Title');
 });
 
 test('buildOpenRouterAnalysisRequest creates a structured JSON chat request without exposing secrets', () => {

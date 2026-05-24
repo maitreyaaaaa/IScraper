@@ -255,6 +255,10 @@ function aiSearchCacheKey({ userId, query, results, model }) {
     .digest('hex');
 }
 
+function createSearchEventId() {
+  return crypto.randomUUID();
+}
+
 async function runAiSearchAnswer({ config, req, userId, query, results }) {
   if (config.aiSearchEnabled === false || !config.deepSeekApiKey || !query || !results.length) return null;
   const topResults = results.slice(0, Math.max(1, Math.min(config.aiSearchResultLimit || 8, 12)));
@@ -652,6 +656,7 @@ function createApp({ store, config = {}, observability = createObservability(con
     const scopes = await store.getProcessableJobScopes({
       limit: maxJobs,
       perUserConcurrency: config.workerPerUserConcurrency || 1,
+      maxAttempts: config.workerMaxAttempts || 3,
     });
     const processed = [];
 
@@ -1582,7 +1587,8 @@ function createApp({ store, config = {}, observability = createObservability(con
   }));
 
   app.post('/api/search', searchRateLimit, asyncRoute(async (req, res) => {
-    const query = String(req.body.query || '').trim().slice(0, 240);
+    const rawQuery = String(req.body.query || '').trim();
+    const query = rawQuery.slice(0, 240);
     const results = await runSearch({ store, config, userId: req.user.id, query, filters: req.body.filters || {} });
     let ai = null;
     if (req.body.includeAi && query && results.length) {
@@ -1594,8 +1600,53 @@ function createApp({ store, config = {}, observability = createObservability(con
         ai = { error: 'AI answer is unavailable right now. Showing regular search results.' };
       }
     }
-    captureWorkflow(req, 'search completed', { resultCount: results.length, hasFilters: Boolean(Object.keys(req.body.filters || {}).length), includeAi: Boolean(req.body.includeAi) });
-    res.json({ results, ai });
+    const searchEventId = createSearchEventId();
+    if (typeof store.recordSearchEvent === 'function') {
+      await store.recordSearchEvent({
+        id: searchEventId,
+        userId: req.user.id,
+        query: results.length === 0 ? query : '',
+        queryLength: rawQuery.length,
+        filters: req.body.filters || {},
+        resultCount: results.length,
+        includeAi: Boolean(req.body.includeAi),
+        resultIds: results.map((item) => item.id),
+      });
+    }
+    captureWorkflow(req, 'search completed', {
+      searchEventId,
+      resultCount: results.length,
+      hasFilters: Boolean(Object.keys(req.body.filters || {}).length),
+      includeAi: Boolean(req.body.includeAi),
+      noResults: results.length === 0,
+    });
+    res.json({ results, ai, searchEventId });
+  }));
+
+  app.post('/api/search/feedback', searchRateLimit, asyncRoute(async (req, res) => {
+    if (typeof store.recordSearchFeedback !== 'function') {
+      return res.status(501).json({ error: 'Search feedback is not available for this store.' });
+    }
+    const searchEventId = String(req.body.searchEventId || '').trim();
+    const itemId = String(req.body.itemId || '').trim();
+    const rating = String(req.body.rating || '').trim();
+    const reason = String(req.body.reason || '').trim();
+    if (!searchEventId || !itemId || !['helpful', 'not_helpful'].includes(rating)) {
+      return res.status(400).json({ error: 'Search feedback requires a search event, item, and valid rating.' });
+    }
+    const feedback = await store.recordSearchFeedback({
+      userId: req.user.id,
+      searchEventId,
+      itemId,
+      rating,
+      reason,
+    });
+    captureWorkflow(req, 'search feedback recorded', {
+      searchEventId,
+      itemId,
+      rating,
+    });
+    res.status(201).json({ feedback });
   }));
 
   app.use((error, req, res, _next) => {
@@ -1641,6 +1692,9 @@ function runProcessImportJobs({ store, userId, importId, config, shouldDownload 
     leaseOwner: config.workerLeaseOwner,
     leaseMs: config.workerLeaseMs,
     perUserConcurrency: config.workerPerUserConcurrency || 1,
+    maxAttempts: config.workerMaxAttempts || 3,
+    retryBackoffMs: config.workerRetryBackoffMs,
+    maxRetryBackoffMs: config.workerMaxRetryBackoffMs,
   });
 }
 

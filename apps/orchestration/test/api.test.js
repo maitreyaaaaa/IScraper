@@ -125,6 +125,98 @@ test('account deletion request is user-scoped, deduplicated, and blocks risky ac
   }
 });
 
+test('search logs no-result queries and validates per-result feedback scope', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  store.ensureUser('search-user', 'search@example.com');
+  store.upsertImportData({
+    userId: 'search-user',
+    importId: null,
+    parsed: {
+      collections: [],
+      items: [
+        {
+          id: 'save-1',
+          url: 'https://example.com/soc2',
+          contentType: 'post',
+          caption: 'SOC 2 compliance checklist',
+          hashtags: [],
+          ownerName: '',
+          ownerUsername: '',
+          savedAt: '',
+          collections: [],
+          platform: 'Instagram',
+          platformKey: 'instagram',
+          sourceId: 'save-1',
+          sourceTitle: 'SOC 2 checklist',
+          sourceAuthor: 'security-team',
+          sourceDescription: 'Security controls and audit evidence',
+          thumbnailUrl: '',
+        },
+      ],
+    },
+    initialStatus: 'done',
+  });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}/api`;
+    const headers = { 'Content-Type': 'application/json', 'x-user-id': 'search-user', 'x-user-email': 'search@example.com' };
+
+    const empty = await fetch(`${base}/search`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query: 'kubernetes recipes' }),
+    });
+    const emptyBody = await empty.json();
+    assert.equal(empty.status, 200);
+    assert.equal(emptyBody.results.length, 0);
+
+    const matched = await fetch(`${base}/search`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query: 'SOC 2' }),
+    });
+    const matchedBody = await matched.json();
+    assert.equal(matched.status, 200);
+    assert.equal(matchedBody.results.length, 1);
+    assert.equal(matchedBody.results[0].searchMatch.matchedFields[0].label, 'Title');
+
+    const feedback = await fetch(`${base}/search/feedback`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        searchEventId: matchedBody.searchEventId,
+        itemId: 'save-1',
+        rating: 'helpful',
+      }),
+    });
+    assert.equal(feedback.status, 201);
+
+    const invalidFeedback = await fetch(`${base}/search/feedback`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        searchEventId: matchedBody.searchEventId,
+        itemId: 'missing-save',
+        rating: 'helpful',
+      }),
+    });
+    assert.equal(invalidFeedback.status, 404);
+
+    const privacy = store.getPrivacyExport('search-user');
+    assert.equal(privacy.searchEvents.length, 2);
+    assert.equal(privacy.searchEvents.find((event) => event.resultCount === 0).query, 'kubernetes recipes');
+    assert.equal(privacy.searchEvents.find((event) => event.resultCount === 1).query, '');
+    assert.equal(privacy.searchFeedback.length, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('admin approval and deletion processing are idempotent and prevent account recreation', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

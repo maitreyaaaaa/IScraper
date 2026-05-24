@@ -347,3 +347,11 @@ export function searchItems(query, filters = {}, options = {}) {
     body: JSON.stringify({ query, filters, ...options }),
   });
 }
+
+export function submitSearchFeedback(payload) {
+  return request('/search/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}

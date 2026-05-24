@@ -307,3 +307,117 @@ test('processing jobs can run with bounded parallel indexing', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('transient provider failures back off instead of retrying immediately forever', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const userId = 'u1';
+  const originalFetch = global.fetch;
+
+  global.fetch = async () => ({
+    ok: false,
+    status: 503,
+    json: async () => ({ error: { message: 'Provider temporarily unavailable' } }),
+  });
+
+  try {
+    store.ensureUser(userId, 'u1@example.com');
+    store.saveProviderCredential(userId, {
+      provider: 'openrouter',
+      purpose: 'text',
+      model: 'deepseek/deepseek-v4-pro',
+      apiKey: 'test-key',
+      encryptionKey: 'dev-encryption-key',
+    });
+    const entry = store.createImport({ userId, source: 'manual-link', fileNames: ['https://example.com/retry'] });
+    const items = store.upsertImportData({
+      userId,
+      importId: entry.id,
+      parsed: {
+        collections: [],
+        items: [{ id: 'retry-1', url: 'https://example.com/retry', contentType: 'unknown', caption: 'Retry me', hashtags: [], collections: [] }],
+      },
+    });
+    const [createdJob] = store.createJobs({ userId, importId: entry.id, items });
+
+    await processImportJobs({
+      store,
+      userId,
+      importId: entry.id,
+      videoDir: path.join(dir, 'videos'),
+      shouldDownload: false,
+      credentialEncryptionKey: 'dev-encryption-key',
+      maxAttempts: 2,
+      retryBackoffMs: 60 * 1000,
+    });
+
+    const job = store.getJob(userId, createdJob.id);
+    const item = store.getItem(userId, 'retry-1');
+
+    assert.equal(job.status, 'queued');
+    assert.equal(job.attempts, 1);
+    assert.ok(Date.parse(job.nextAttemptAt) > Date.now());
+    assert.equal(job.leaseToken, null);
+    assert.equal(item.status, 'queued');
+    assert.match(item.error, /retry automatically/i);
+  } finally {
+    global.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('provider failures become terminal after max attempts', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const userId = 'u1';
+  const originalFetch = global.fetch;
+
+  global.fetch = async () => ({
+    ok: false,
+    status: 503,
+    json: async () => ({ error: { message: 'Provider temporarily unavailable' } }),
+  });
+
+  try {
+    store.ensureUser(userId, 'u1@example.com');
+    store.saveProviderCredential(userId, {
+      provider: 'openrouter',
+      purpose: 'text',
+      model: 'deepseek/deepseek-v4-pro',
+      apiKey: 'test-key',
+      encryptionKey: 'dev-encryption-key',
+    });
+    const entry = store.createImport({ userId, source: 'manual-link', fileNames: ['https://example.com/fail'] });
+    const items = store.upsertImportData({
+      userId,
+      importId: entry.id,
+      parsed: {
+        collections: [],
+        items: [{ id: 'fail-1', url: 'https://example.com/fail', contentType: 'unknown', caption: 'Fail me', hashtags: [], collections: [] }],
+      },
+    });
+    const [createdJob] = store.createJobs({ userId, importId: entry.id, items });
+
+    await processImportJobs({
+      store,
+      userId,
+      importId: entry.id,
+      videoDir: path.join(dir, 'videos'),
+      shouldDownload: false,
+      credentialEncryptionKey: 'dev-encryption-key',
+      maxAttempts: 1,
+    });
+
+    const job = store.getJob(userId, createdJob.id);
+    const item = store.getItem(userId, 'fail-1');
+
+    assert.equal(job.status, 'failed');
+    assert.equal(job.attempts, 1);
+    assert.equal(job.nextAttemptAt, null);
+    assert.equal(item.status, 'failed');
+    assert.match(item.error, /retry if attempts remain/i);
+  } finally {
+    global.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

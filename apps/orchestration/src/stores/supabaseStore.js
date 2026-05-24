@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
 const {
@@ -11,7 +12,11 @@ const {
 const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
-const { PAUSED_JOB_STATUSES } = require('../services/queue');
+const { searchItemsWithDetails } = require('../services/analyzer');
+const {
+  DEFAULT_MAX_JOB_ATTEMPTS,
+  PAUSED_JOB_STATUSES,
+} = require('../services/queue');
 const { ACTIVE_DELETION_STATUSES, hashDeletionValue } = require('../services/accountDeletion');
 
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
@@ -249,7 +254,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         client.from('user_provider_credentials').update({ status: 'disabled', updated_at: timestamp }).eq('user_id', userId).neq('status', 'disabled').select('id'),
         client
           .from('processing_jobs')
-          .update({ status: 'failed', error: 'Account deletion requested.', lease_owner: null, lease_token: null, lease_expires_at: null, updated_at: timestamp })
+          .update({ status: 'failed', error: 'Account deletion requested.', lease_owner: null, lease_token: null, lease_expires_at: null, next_attempt_at: null, updated_at: timestamp })
           .eq('user_id', userId)
           .in('status', ['queued', 'downloading', 'analyzing', ...PAUSED_JOB_STATUSES])
           .select('id'),
@@ -282,7 +287,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return { deletedObjects, buckets: bucketResults };
     },
     async deleteUserContentData(userId) {
-      const tables = ['processing_jobs', 'item_embeddings', 'item_analysis', 'item_assets', 'saved_items', 'collections', 'imports', 'lens_search_events'];
+      const tables = ['search_result_feedback', 'search_events', 'processing_jobs', 'item_embeddings', 'item_analysis', 'item_assets', 'saved_items', 'collections', 'imports', 'lens_search_events'];
       return deleteUserRowsFromTables(client, userId, tables);
     },
     async deleteUserAccessData(userId) {
@@ -341,12 +346,14 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return mapDeletionRequest(data);
     },
     async getPrivacyExport(userId) {
-      const [items, imports, collections, credentials, extensionTokens, profile, credits, deletionRequest] = await Promise.all([
+      const [items, imports, collections, credentials, extensionTokens, searchEvents, searchFeedback, profile, credits, deletionRequest] = await Promise.all([
         this.getItems(userId),
         selectAllUserRows(client, 'imports', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'collections', userId, '*', (query) => query.order('created_at', { ascending: false })),
         this.listProviderCredentials(userId),
         this.listExtensionTokens(userId),
+        selectAllUserRows(client, 'search_events', userId, '*', (query) => query.order('created_at', { ascending: false })),
+        selectAllUserRows(client, 'search_result_feedback', userId, '*', (query) => query.order('created_at', { ascending: false })),
         this.getProfile(userId),
         this.getCredits(userId),
         this.getActiveDeletionRequest(userId),
@@ -359,6 +366,8 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         credits,
         providerCredentials: credentials,
         extensionTokens,
+        searchEvents: searchEvents.map(mapSearchEvent),
+        searchFeedback: searchFeedback.map(mapSearchFeedback),
         profile,
         deletion: deletionRequest,
       };
@@ -482,6 +491,57 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .from('lens_search_events')
         .insert({ user_id: userId, query_type: queryType, result_count: Number(resultCount || 0) })
         .throwOnError();
+    },
+    async recordSearchEvent({ id, userId, query, queryLength = 0, filters = {}, resultCount = 0, includeAi = false, resultIds = [] }) {
+      const { data, error } = await client
+        .from('search_events')
+        .insert({
+          id,
+          user_id: userId,
+          query: cleanDbText(query).slice(0, 240),
+          query_length: Number(queryLength || 0),
+          filters,
+          result_count: Number(resultCount || 0),
+          include_ai: Boolean(includeAi),
+          result_ids: Array.isArray(resultIds) ? resultIds.slice(0, 30) : [],
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return mapSearchEvent(data);
+    },
+    async recordSearchFeedback({ userId, searchEventId, itemId, rating, reason = '' }) {
+      const item = await this.getItem(userId, itemId);
+      if (!item) {
+        const error = new Error('Saved item not found.');
+        error.statusCode = 404;
+        throw error;
+      }
+      const { data: searchEvent, error: searchEventError } = await client
+        .from('search_events')
+        .select('id,result_ids')
+        .eq('user_id', userId)
+        .eq('id', searchEventId)
+        .maybeSingle();
+      if (searchEventError) throw searchEventError;
+      if (!searchEvent || !(searchEvent.result_ids || []).includes(itemId)) {
+        const error = new Error('Search feedback must reference one of your current search results.');
+        error.statusCode = 400;
+        throw error;
+      }
+      const { data, error } = await client
+        .from('search_result_feedback')
+        .insert({
+          user_id: userId,
+          search_event_id: searchEventId,
+          item_id: itemId,
+          rating,
+          reason: cleanDbText(reason).slice(0, 300),
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return mapSearchFeedback(data);
     },
     async listPublicFeedback() {
       const { data, error } = await client
@@ -658,10 +718,11 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data.map(mapJob);
     },
-    async getProcessableJobScopes({ limit = 10, perUserConcurrency = 1 } = {}) {
+    async getProcessableJobScopes({ limit = 10, perUserConcurrency = 1, maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS } = {}) {
       const { data, error } = await client.rpc('list_processable_job_scopes', {
         p_limit: Math.max(1, Math.min(Number(limit) || 10, 100)),
         p_per_user_concurrency: Math.max(1, Math.min(Number(perUserConcurrency) || 1, 10)),
+        p_max_attempts: Math.max(1, Math.min(Number(maxAttempts) || DEFAULT_MAX_JOB_ATTEMPTS, 20)),
       });
       if (error) throw error;
       return (data || []).map((row) => ({
@@ -675,14 +736,25 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data ? mapJob(data) : null;
     },
-    async claimNextJobs({ userId, importId = null, limit = 5, leaseOwner = 'worker', leaseMs = 15 * 60 * 1000, perUserConcurrency = 1 } = {}) {
+    async claimNextJobs({
+      userId,
+      importId = null,
+      limit = 5,
+      leaseOwner = 'worker',
+      leaseMs = 15 * 60 * 1000,
+      perUserConcurrency = 1,
+      maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS,
+    } = {}) {
+      const leaseToken = crypto.randomUUID();
       const { data, error } = await client.rpc('claim_processing_jobs', {
         p_user_id: userId,
         p_import_id: importId,
         p_limit: Math.max(1, Math.min(Number(limit) || 5, 100)),
         p_lease_owner: leaseOwner,
+        p_lease_token: leaseToken,
         p_lease_expires_at: new Date(Date.now() + leaseMs).toISOString(),
         p_per_user_concurrency: Math.max(1, Math.min(Number(perUserConcurrency) || 1, 10)),
+        p_max_attempts: Math.max(1, Math.min(Number(maxAttempts) || DEFAULT_MAX_JOB_ATTEMPTS, 20)),
       });
       if (error) throw error;
       return (data || []).map(mapJob);
@@ -697,6 +769,18 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .single();
       if (error) throw error;
       return mapJob(data);
+    },
+    async updateClaimedJob(userId, id, leaseToken, patch) {
+      const { data, error } = await client
+        .from('processing_jobs')
+        .update(toJobRow(patch))
+        .eq('user_id', userId)
+        .eq('id', id)
+        .eq('lease_token', leaseToken)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapJob(data) : null;
     },
     async claimJob(userId, id, patch) {
       const { data, error } = await client
@@ -716,9 +800,12 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .from('processing_jobs')
         .update({
           status: 'queued',
+          attempts: 0,
           error: null,
           lease_owner: null,
+          lease_token: null,
           lease_expires_at: null,
+          next_attempt_at: null,
           claimed_at: null,
           completed_at: null,
           last_error_at: null,
@@ -744,32 +831,33 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     async getIndexingSummary(userId) {
       const statuses = ['queued', 'downloading', 'analyzing', 'done', 'failed', ...PAUSED_JOB_STATUSES];
       const byStatus = Object.fromEntries(statuses.map((status) => [status, 0]));
-      const { data: jobs, error } = await client
-        .from('processing_jobs')
-        .select('status, lease_expires_at')
-        .eq('user_id', userId)
-        .in('status', statuses)
-        .limit(10000);
-      if (error) throw error;
+      const jobs = await selectAllUserRows(client, 'processing_jobs', userId, 'status, attempts, lease_expires_at, next_attempt_at', (query) => query.in('status', statuses));
       const nowMs = Date.now();
       for (const job of jobs || []) {
         const activeExpired = ['downloading', 'analyzing'].includes(job.status)
           && (!job.lease_expires_at || Date.parse(job.lease_expires_at) <= nowMs);
-        const status = activeExpired ? 'queued' : job.status;
+        const retryPending = job.status === 'queued' && job.next_attempt_at && Date.parse(job.next_attempt_at) > nowMs;
+        const status = activeExpired || retryPending ? 'queued' : job.status;
         byStatus[status] = (byStatus[status] || 0) + 1;
       }
+      const retrying = (jobs || []).filter((job) => job.status === 'queued' && job.next_attempt_at && Date.parse(job.next_attempt_at) > nowMs).length;
+      const exhausted = (jobs || []).filter((job) => job.status === 'failed' && (Number(job.attempts) || 0) >= DEFAULT_MAX_JOB_ATTEMPTS).length;
+      const retryableFailed = (jobs || []).filter((job) => job.status === 'failed' && (Number(job.attempts) || 0) < DEFAULT_MAX_JOB_ATTEMPTS).length;
       const needsReview = await countRows(client, 'saved_items', (query) => query.eq('user_id', userId).eq('status', 'needs_review'));
       const paused = PAUSED_JOB_STATUSES.reduce((total, status) => total + (byStatus[status] || 0), 0);
       return {
         totalJobs: Object.values(byStatus).reduce((total, count) => total + count, 0),
         needsReview,
-        waiting: byStatus.queued || 0,
-        queued: byStatus.queued || 0,
+        waiting: Math.max((byStatus.queued || 0) - retrying, 0),
+        queued: Math.max((byStatus.queued || 0) - retrying, 0),
+        retrying,
         processing: (byStatus.downloading || 0) + (byStatus.analyzing || 0),
         downloading: byStatus.downloading || 0,
         analyzing: byStatus.analyzing || 0,
         done: byStatus.done || 0,
         failed: byStatus.failed || 0,
+        retryableFailed,
+        exhausted,
         paused,
         pausedMissingProvider: byStatus.paused_missing_provider || 0,
         pausedNeedsBilling: byStatus.paused_needs_billing || 0,
@@ -1183,8 +1271,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async search(userId, query, filters = {}, options = {}) {
       const items = await this.getItems(userId);
-      const { searchItems } = require('../services/analyzer');
-      const keywordResults = searchItems(items, query, filters);
+      const keywordResults = searchItemsWithDetails(items, query, filters);
       if (!options.queryEmbedding) return keywordResults;
 
       const { data, error } = await client.rpc('match_saved_items', {
@@ -1532,7 +1619,9 @@ function mapJob(row) {
     attempts: row.attempts,
     error: row.error,
     leaseOwner: row.lease_owner,
+    leaseToken: row.lease_token,
     leaseExpiresAt: row.lease_expires_at,
+    nextAttemptAt: row.next_attempt_at,
     claimedAt: row.claimed_at,
     completedAt: row.completed_at,
     lastErrorAt: row.last_error_at,
@@ -1547,7 +1636,9 @@ function toJobRow(patch) {
   if (Object.prototype.hasOwnProperty.call(patch, 'attempts')) row.attempts = patch.attempts;
   if (Object.prototype.hasOwnProperty.call(patch, 'error')) row.error = patch.error;
   if (Object.prototype.hasOwnProperty.call(patch, 'leaseOwner')) row.lease_owner = patch.leaseOwner;
+  if (Object.prototype.hasOwnProperty.call(patch, 'leaseToken')) row.lease_token = patch.leaseToken;
   if (Object.prototype.hasOwnProperty.call(patch, 'leaseExpiresAt')) row.lease_expires_at = patch.leaseExpiresAt;
+  if (Object.prototype.hasOwnProperty.call(patch, 'nextAttemptAt')) row.next_attempt_at = patch.nextAttemptAt;
   if (Object.prototype.hasOwnProperty.call(patch, 'claimedAt')) row.claimed_at = patch.claimedAt;
   if (Object.prototype.hasOwnProperty.call(patch, 'completedAt')) row.completed_at = patch.completedAt;
   if (Object.prototype.hasOwnProperty.call(patch, 'lastErrorAt')) row.last_error_at = patch.lastErrorAt;
@@ -1669,6 +1760,32 @@ function mapFeedback(row) {
   };
 }
 
+function mapSearchEvent(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    query: row.query || '',
+    queryLength: row.query_length || 0,
+    filters: row.filters || {},
+    resultCount: row.result_count || 0,
+    includeAi: Boolean(row.include_ai),
+    resultIds: row.result_ids || [],
+    createdAt: row.created_at,
+  };
+}
+
+function mapSearchFeedback(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    searchEventId: row.search_event_id,
+    itemId: row.item_id,
+    rating: row.rating,
+    reason: row.reason || '',
+    createdAt: row.created_at,
+  };
+}
+
 function mapUserAdminState(row) {
   return {
     userId: row.user_id,
@@ -1723,21 +1840,34 @@ function matchesFilters(item, filters = {}) {
 function mergeSearchResults({ items, keywordResults, semanticMatches, filters = {} }) {
   const byId = new Map(items.map((item) => [item.id, item]));
   const scores = new Map();
+  const matches = new Map();
 
   keywordResults.forEach((item, index) => {
     const score = 1 + (keywordResults.length - index) / Math.max(keywordResults.length, 1);
     scores.set(item.id, (scores.get(item.id) || 0) + score);
+    if (item.searchMatch) matches.set(item.id, item.searchMatch);
   });
 
   semanticMatches.forEach((match) => {
     const item = byId.get(match.item_id);
     if (!item || !matchesFilters(item, filters)) return;
-    scores.set(item.id, (scores.get(item.id) || 0) + Number(match.similarity || 0) * 2);
+    const similarity = Number(match.similarity || 0);
+    scores.set(item.id, (scores.get(item.id) || 0) + similarity * 2);
+    const current = matches.get(item.id) || { score: 0, matchedTerms: [], matchedFields: [], matchTypes: [] };
+    matches.set(item.id, {
+      ...current,
+      score: (current.score || 0) + similarity * 20,
+      semanticSimilarity: similarity,
+      matchTypes: [...new Set([...(current.matchTypes || []), 'semantic'])],
+    });
   });
 
   return [...scores.entries()]
     .sort((a, b) => b[1] - a[1])
-    .map(([id]) => byId.get(id))
+    .map(([id]) => {
+      const item = byId.get(id);
+      return item ? { ...item, searchMatch: matches.get(id) || null } : null;
+    })
     .filter(Boolean)
     .slice(0, filters.limit || 30);
 }

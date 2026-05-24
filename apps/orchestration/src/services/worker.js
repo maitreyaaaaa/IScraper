@@ -3,7 +3,7 @@ const fs = require('fs');
 const { analyzeMediaWithGemini, analyzeTextMetadata, analyzeTextWithOpenRouter, mergeAnalysis } = require('./analyzer');
 const { buildEmbeddingContent, createOpenRouterEmbedding } = require('./embeddings');
 const { analyzeMediaWithCredential, analyzeTextWithCredential, buildTextBaseAnalysis, isProviderLimitError } = require('./providerClients');
-const { pickNextProcessableJob } = require('./queue');
+const { DEFAULT_MAX_JOB_ATTEMPTS, nextRetryAt, pickNextProcessableJob } = require('./queue');
 const { downloadInstagramMedia } = require('./downloader');
 const { DEFAULT_APP_MEDIA_MODEL } = require('./providers');
 
@@ -63,6 +63,9 @@ async function processImportJobs({
   leaseOwner = 'worker',
   leaseMs = 15 * 60 * 1000,
   perUserConcurrency = 1,
+  maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS,
+  retryBackoffMs,
+  maxRetryBackoffMs,
 }) {
   fs.mkdirSync(videoDir, { recursive: true });
   const processed = [];
@@ -80,6 +83,7 @@ async function processImportJobs({
           leaseOwner,
           leaseMs,
           perUserConcurrency,
+          maxAttempts,
         })
       : pickNextProcessableJobs(await store.getJobs(userId, importId), batchLimit);
     if (!batch.length) break;
@@ -97,6 +101,9 @@ async function processImportJobs({
       openRouterEmbeddingModel,
       embeddingDimensions,
       credentialEncryptionKey,
+      maxAttempts,
+      retryBackoffMs,
+      maxRetryBackoffMs,
     })));
     attempted += batch.length;
     processed.push(...batchResults.filter(Boolean));
@@ -118,6 +125,9 @@ async function processOneJob({
   openRouterEmbeddingModel,
   embeddingDimensions,
   credentialEncryptionKey,
+  maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS,
+  retryBackoffMs,
+  maxRetryBackoffMs,
 }) {
   let currentJob = job;
   const item = await store.getItem(userId, currentJob.itemId);
@@ -126,6 +136,9 @@ async function processOneJob({
       status: 'failed',
       attempts: (currentJob.attempts || 0) + 1,
       error: 'Saved item not found for job.',
+      leaseOwner: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
     });
     return null;
   }
@@ -171,7 +184,8 @@ async function processOneJob({
       }
     }
 
-    await store.updateJob(userId, currentJob.id, { status: 'analyzing', error: null });
+    currentJob = await updateCurrentJob({ store, userId, job: currentJob, patch: { status: 'analyzing', error: null } });
+    if (!currentJob) return null;
     await store.setItemStatus?.(userId, item.id, 'analyzing', null);
 
     const mediaAnalysis = analysisPlan.mediaCredential && mediaPaths.length
@@ -198,16 +212,9 @@ async function processOneJob({
       )
       : null;
     const analysis = mergeAnalysis(baseAnalysis, textAnalysis);
-    await store.saveAnalysis(userId, item.id, analysis);
-    if (analysisPlan.source === 'free' || analysisPlan.source === 'paid') {
-      await store.recordUsage({
-        userId,
-        itemId: item.id,
-        source: analysisPlan.source,
-        provider: analysisPlan.billingCredential.provider,
-        model: analysisPlan.billingCredential.model,
-      });
-    }
+    if (!(await isLeaseStillOwned({ store, userId, job: currentJob }))) return null;
+
+    let embeddingPayload = null;
     if (analysisPlan.embeddingCredential && typeof store.saveEmbedding === 'function') {
       try {
         const content = buildEmbeddingContent(item, analysis);
@@ -223,24 +230,41 @@ async function processOneJob({
           'Search embedding timed out.',
         );
         if (embedding) {
-          await store.saveEmbedding(userId, item.id, {
+          embeddingPayload = {
             content,
             embedding,
             model: analysisPlan.embeddingCredential.model || openRouterEmbeddingModel,
-          });
+          };
         }
       } catch (error) {
         console.warn(`OpenRouter embedding failed for ${item.id}: ${error.message}`);
       }
     }
-    return store.updateJob(userId, currentJob.id, {
+    if (!(await isLeaseStillOwned({ store, userId, job: currentJob }))) return null;
+    await store.saveAnalysis(userId, item.id, analysis);
+    if (embeddingPayload) {
+      await store.saveEmbedding(userId, item.id, embeddingPayload);
+    }
+    if (analysisPlan.source === 'free' || analysisPlan.source === 'paid') {
+      await store.recordUsage({
+        userId,
+        itemId: item.id,
+        source: analysisPlan.source,
+        provider: analysisPlan.billingCredential.provider,
+        model: analysisPlan.billingCredential.model,
+      });
+    }
+    return updateCurrentJob({ store, userId, job: currentJob, patch: {
       status: 'done',
       error: null,
       leaseOwner: null,
+      leaseToken: null,
       leaseExpiresAt: null,
+      nextAttemptAt: null,
       completedAt: new Date().toISOString(),
-    });
+    } });
   } catch (error) {
+    if (!(await isLeaseStillOwned({ store, userId, job: currentJob }))) return null;
     if (error.pauseStatus) {
       await pauseJob({ store, userId, item, job: currentJob, status: error.pauseStatus, message: error.message });
       return null;
@@ -256,15 +280,23 @@ async function processOneJob({
       });
       return null;
     }
-    await store.markItemFailed(userId, item.id, error.message);
-    await store.updateJob(userId, currentJob.id, {
-      status: 'failed',
-      attempts: currentJob.attempts || (job.attempts || 0) + 1,
-      error: error.message,
+    const attempts = currentJob.attempts || (job.attempts || 0) + 1;
+    const exhausted = attempts >= Math.max(1, Number(maxAttempts) || DEFAULT_MAX_JOB_ATTEMPTS);
+    if (exhausted) {
+      await store.markItemFailed(userId, item.id, userSafeIndexingError(error));
+    } else {
+      await store.setItemStatus?.(userId, item.id, 'queued', 'Indexing hit a temporary problem. IScraper will retry automatically.');
+    }
+    await updateCurrentJob({ store, userId, job: currentJob, patch: {
+      status: exhausted ? 'failed' : 'queued',
+      attempts,
+      error: userSafeIndexingError(error),
       leaseOwner: null,
+      leaseToken: null,
       leaseExpiresAt: null,
+      nextAttemptAt: exhausted ? null : nextRetryAt({ attempts, baseMs: retryBackoffMs, maxMs: maxRetryBackoffMs }),
       lastErrorAt: new Date().toISOString(),
-    });
+    } });
     return null;
   }
 }
@@ -386,14 +418,38 @@ async function pauseJob({ store, userId, item, job, status, message }) {
   } else {
     await store.markItemFailed(userId, item.id, message);
   }
-  await store.updateJob(userId, job.id, {
+  await updateCurrentJob({ store, userId, job, patch: {
     status,
     attempts: job.attempts || 0,
     error: message,
     leaseOwner: null,
+    leaseToken: null,
     leaseExpiresAt: null,
+    nextAttemptAt: null,
     lastErrorAt: new Date().toISOString(),
-  });
+  } });
+}
+
+async function updateCurrentJob({ store, userId, job, patch }) {
+  if (job?.leaseToken && typeof store.updateClaimedJob === 'function') {
+    return store.updateClaimedJob(userId, job.id, job.leaseToken, patch);
+  }
+  return store.updateJob(userId, job.id, patch);
+}
+
+async function isLeaseStillOwned({ store, userId, job }) {
+  if (!job?.leaseToken || typeof store.getJob !== 'function') return true;
+  const latest = await store.getJob(userId, job.id);
+  return latest?.leaseToken === job.leaseToken;
+}
+
+function userSafeIndexingError(error) {
+  const message = String(error?.message || error || 'Indexing failed.');
+  if (/timeout/i.test(message)) return message;
+  if (/api limit|rate limit|quota/i.test(message)) return 'Provider API limit reached while indexing this save.';
+  if (/billing|allowance|credits/i.test(message)) return 'Indexing allowance is not available for this save.';
+  if (/provider key|api provider|no text ai provider/i.test(message)) return 'Connect an AI provider before indexing this save.';
+  return 'Indexing failed for this save. IScraper will retry if attempts remain.';
 }
 
 module.exports = {
