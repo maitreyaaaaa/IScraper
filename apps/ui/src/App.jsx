@@ -3454,6 +3454,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   ];
   const SidebarToggleIcon = sidebarExpanded ? PanelLeftClose : PanelLeftOpen;
   const advancedActive = advancedNavItems.some(([key]) => key === tab);
+  const advancedExpanded = sidebarExpanded && (advancedOpen || advancedActive);
 
   const selectTab = useCallback((nextTab) => {
     if (!['library', 'graph', 'upload', 'settings'].includes(nextTab)) return;
@@ -3592,10 +3593,17 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         <div className={`border-t border-white/5 p-3 ${sidebarExpanded ? '' : 'flex flex-col items-center'}`}>
           <button
             type="button"
-            onClick={() => setAdvancedOpen((current) => !current)}
+            onClick={() => {
+              if (!sidebarExpanded) {
+                setSidebarExpanded(true);
+                setAdvancedOpen(true);
+                return;
+              }
+              setAdvancedOpen((current) => !current);
+            }}
             title="Advanced Options"
             aria-label="Advanced Options"
-            aria-expanded={advancedOpen || advancedActive}
+            aria-expanded={advancedExpanded}
             className={`flex items-center rounded-lg text-sm transition ${
               advancedActive ? 'text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
             } ${
@@ -3607,10 +3615,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
               {sidebarExpanded && <span className="truncate">Advanced Options</span>}
             </span>
             {sidebarExpanded && (
-              <ChevronDown className={`h-4 w-4 shrink-0 transition ${advancedOpen || advancedActive ? 'rotate-180' : ''}`} />
+              <ChevronDown className={`h-4 w-4 shrink-0 transition ${advancedExpanded ? 'rotate-180' : ''}`} />
             )}
           </button>
-          {(advancedOpen || advancedActive || !sidebarExpanded) && (
+          {advancedExpanded && (
             <div className={`mt-1 space-y-1 ${sidebarExpanded ? '' : 'flex flex-col items-center'}`}>
               {advancedNavItems.map(([key, title, Icon]) => (
                 <button
