@@ -121,6 +121,7 @@ const HERO_PLATFORMS = [
   { name: 'YouTube', src: '/platforms/youtube.svg', bg: '#ff0033' },
   { name: 'Substack', src: '/platforms/substack.svg', bg: '#ff6719', scale: 0.92 },
 ];
+const HERO_OUTCOME_WORDS = ['usable', 'searchable', 'exportable', 'organized', 'summarized', 'findable'];
 const IMPORT_STORAGE_BUCKET = import.meta.env.VITE_SUPABASE_IMPORT_BUCKET || 'instagram-assets';
 const VERCEL_SAFE_UPLOAD_BYTES = 4 * 1024 * 1024;
 const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv']);
@@ -689,6 +690,41 @@ function RotatingPlatformLogo() {
           style={{ transform: `scale(${platform.scale || 1})` }}
           draggable="false"
         />
+      </span>
+    </span>
+  );
+}
+
+function RotatingOutcomeText() {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const wordRef = useRef(null);
+  const word = HERO_OUTCOME_WORDS[activeIndex];
+
+  useEffect(() => {
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion) return undefined;
+
+    const timer = window.setInterval(() => {
+      const target = wordRef.current;
+      if (!target) {
+        setActiveIndex((current) => (current + 1) % HERO_OUTCOME_WORDS.length);
+        return;
+      }
+
+      gsap.timeline()
+        .to(target, { yPercent: -115, autoAlpha: 0, duration: 0.35, ease: 'power2.in' })
+        .add(() => setActiveIndex((current) => (current + 1) % HERO_OUTCOME_WORDS.length))
+        .set(target, { yPercent: 115 })
+        .to(target, { yPercent: 0, autoAlpha: 1, duration: 0.45, ease: 'power3.out' });
+    }, 1700);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <span className="inline-grid min-w-[5.8em] overflow-hidden align-baseline text-left text-glow italic text-primary">
+      <span ref={wordRef} className="inline-block" aria-live="polite">
+        {word}<span className="text-foreground">.</span>
       </span>
     </span>
   );
@@ -1611,8 +1647,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           <nav className="pointer-events-auto hidden justify-self-center rounded-full border border-white/10 bg-black/75 p-1 text-sm font-semibold text-muted-foreground shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl md:flex">
             <a href="#features" onClick={(event) => scrollToSection(event, '#features')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Features</a>
             <a href="#extension" onClick={(event) => scrollToSection(event, '#extension')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Extension</a>
-            <a href="#why" onClick={(event) => scrollToSection(event, '#why')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Why</a>
-            <a href="#feedback" onClick={(event) => scrollToSection(event, '#feedback')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Feedback</a>
+            <button type="button" className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Pricing</button>
             <button type="button" onClick={onOpenHowTo} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">How to Use</button>
           </nav>
           <div className="nav-item pointer-events-auto flex items-center gap-2 justify-self-end">
@@ -1696,16 +1731,26 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
 
           <div className="mt-12 flex flex-col items-start justify-between gap-8 md:flex-row md:items-end">
             <p className="hero-fade max-w-xl text-lg leading-relaxed text-muted-foreground">
-              Import exports, save links, approve what matters, and turn the posts, products, creators, research, and ideas you already saved into a private library you can actually search.
+              Stop digging through old saves. IScraper keeps the posts, links, products, and ideas you care about in one private place, so you can find them again when you need them.
             </p>
             <div className="hero-fade flex flex-wrap items-center gap-4">
-              <button
-                type="button"
-                onClick={onOpenLogin}
-                className="glow-ring group inline-flex items-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
-              >
-                Log in <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
-              </button>
+              {landingSession ? (
+                <button
+                  type="button"
+                  onClick={onOpenApp}
+                  className="glow-ring group inline-flex items-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
+                >
+                  Open library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onOpenLogin}
+                  className="glow-ring group inline-flex items-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
+                >
+                  Log in <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+                </button>
+              )}
               <button type="button" onClick={onOpenApp} className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
                 Visit library
               </button>
@@ -1937,7 +1982,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         <div className="cta-bg radial-fade grid-bg absolute inset-0 opacity-50" />
         <div className="relative mx-auto max-w-5xl text-center">
           <h2 data-reveal className="text-balance font-display text-6xl font-bold tracking-tighter md:text-8xl">
-            Your best references are already saved. <br />Make them <span className="text-glow italic text-primary">usable</span>.
+            Your best references are already saved. <br />Make them <RotatingOutcomeText />
           </h2>
           <p data-reveal className="mx-auto mt-8 max-w-xl text-lg text-muted-foreground">Paste one link or upload an export, then turn saved posts, products, creators, research, and ideas into a library you can come back to.</p>
           <div data-reveal className="mt-12 flex flex-wrap items-center justify-center gap-4">
@@ -3450,7 +3495,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   ];
   const advancedNavItems = [
     ['graph', 'Graph view', GitBranch],
-    ['settings', 'Settings', Settings],
+    ['settings', 'BYOK', Settings],
   ];
   const SidebarToggleIcon = sidebarExpanded ? PanelLeftClose : PanelLeftOpen;
   const advancedActive = advancedNavItems.some(([key]) => key === tab);
@@ -3588,6 +3633,24 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           >
             <FileText className="h-4 w-4 shrink-0" />
             {sidebarExpanded && <span className="truncate">How to Use</span>}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (authEnabled && !session) {
+                onOpenLogin();
+                return;
+              }
+              setAccountSettingsOpen(true);
+            }}
+            title="Settings"
+            aria-label="Open account settings"
+            className={`flex items-center rounded-lg text-sm text-muted-foreground transition hover:bg-white/5 hover:text-foreground ${
+              sidebarExpanded ? 'w-full gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
+            }`}
+          >
+            <Settings className="h-4 w-4 shrink-0" />
+            {sidebarExpanded && <span className="truncate">Settings</span>}
           </button>
         </nav>
         <div className={`border-t border-white/5 p-3 ${sidebarExpanded ? '' : 'flex flex-col items-center'}`}>
@@ -4992,7 +5055,7 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
           <div className="grid grid-cols-2 gap-2 border-t border-white/10 p-2">
             {[
               ['graph', 'Graph view'],
-              ['settings', 'Settings'],
+              ['settings', 'BYOK'],
             ].map(([key, label]) => (
               <button
                 key={key}
