@@ -30,6 +30,158 @@ test('API responses include a restrictive content security policy', async () => 
   }
 });
 
+test('CORS does not allow arbitrary origins when allowlist is empty', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { corsOrigins: [] } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/credit-packages`, {
+      headers: { Origin: 'https://evil.example' },
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), null);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CORS allows explicitly configured origins', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { corsOrigins: ['https://app.example'] } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/credit-packages`, {
+      headers: { Origin: 'https://app.example' },
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), 'https://app.example');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('account deletion request is user-scoped, deduplicated, and blocks risky activity', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}/api`;
+    const headers = { 'Content-Type': 'application/json', 'x-user-id': 'delete-user', 'x-user-email': 'delete@example.com' };
+
+    const first = await fetch(`${base}/account/deletion`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ reason: 'testing', exportConfirmed: true }),
+    });
+    const firstBody = await first.json();
+    assert.equal(first.status, 201);
+    assert.equal(firstBody.deletion.request.status, 'pending_approval');
+
+    const second = await fetch(`${base}/account/deletion`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ reason: 'testing again', exportConfirmed: true }),
+    });
+    const secondBody = await second.json();
+    assert.equal(second.status, 201);
+    assert.equal(secondBody.deletion.request.id, firstBody.deletion.request.id);
+
+    const blocked = await fetch(`${base}/saves/link`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ url: 'https://example.com/post', title: 'Blocked save' }),
+    });
+    assert.equal(blocked.status, 423);
+
+    const exportResponse = await fetch(`${base}/privacy-export`, { headers });
+    const exportBody = await exportResponse.json();
+    assert.equal(exportResponse.status, 200);
+    assert.ok(Array.isArray(exportBody.export.items));
+
+    const cancel = await fetch(`${base}/account/deletion/cancel`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({}),
+    });
+    const cancelBody = await cancel.json();
+    assert.equal(cancel.status, 200);
+    assert.equal(cancelBody.deletion.request.status, 'canceled');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('admin approval and deletion processing are idempotent and prevent account recreation', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { adminApiKey: 'admin-secret' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}/api`;
+    const userHeaders = { 'Content-Type': 'application/json', 'x-user-id': 'delete-user', 'x-user-email': 'delete@example.com' };
+    const adminHeaders = { 'Content-Type': 'application/json', 'x-admin-api-key': 'admin-secret', 'x-admin-actor': 'security-admin' };
+
+    const created = await fetch(`${base}/account/deletion`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: JSON.stringify({ exportConfirmed: true }),
+    });
+    const createdBody = await created.json();
+    const requestId = createdBody.deletion.request.id;
+
+    const approve = await fetch(`${base}/admin/deletion-requests/${requestId}/approve`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({}),
+    });
+    const approveBody = await approve.json();
+    assert.equal(approve.status, 200);
+    assert.equal(approveBody.deletion.request.status, 'approved');
+
+    const process = await fetch(`${base}/admin/deletion-requests/${requestId}/process`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ maxSteps: 7 }),
+    });
+    const processBody = await process.json();
+    assert.equal(process.status, 200);
+    assert.equal(processBody.complete, true);
+    assert.equal(processBody.request.status, 'completed');
+
+    const repeat = await fetch(`${base}/admin/deletion-requests/${requestId}/process`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ maxSteps: 7 }),
+    });
+    const repeatBody = await repeat.json();
+    assert.equal(repeat.status, 200);
+    assert.equal(repeatBody.complete, true);
+    assert.equal(repeatBody.executed.length, 0);
+
+    const recreation = await fetch(`${base}/account/deletion`, { headers: userHeaders });
+    assert.equal(recreation.status, 410);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/imports adds uploaded export files and queues indexing jobs', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

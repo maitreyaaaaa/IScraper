@@ -7,7 +7,7 @@ It may process:
 - Current page URL, title, Open Graph metadata, and an optional note when saving a page.
 - Selected text when the user starts Lens search with text selected.
 - A small screenshot crop when the user drags an area for Lens image search.
-- A limited IScraper Lens token stored in browser sync storage.
+- A limited IScraper Lens token stored in browser local extension storage.
 
 It does not:
 

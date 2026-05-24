@@ -12,6 +12,7 @@ const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require(
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
 const { PAUSED_JOB_STATUSES } = require('../services/queue');
+const { ACTIVE_DELETION_STATUSES, hashDeletionValue } = require('../services/accountDeletion');
 
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
 const IMPORT_INSERT_BATCH_SIZE = 500;
@@ -40,11 +41,327 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return { id: data.user.id, email: data.user.email };
     },
     async ensureUser(userId, email) {
+      await this.assertUserNotDeleted(userId, email);
       await client.from('users').upsert({ id: userId, email }, { onConflict: 'id' }).throwOnError();
       await client
         .from('user_credit_accounts')
         .upsert({ user_id: userId, free_items_limit: FREE_ITEMS_LIMIT }, { onConflict: 'user_id' })
         .throwOnError();
+    },
+    async assertUserNotDeleted(userId, email) {
+      const userIdHash = hashDeletionValue(userId);
+      const emailHash = hashDeletionValue(email);
+      const { data: auditRows, error } = await client
+        .from('account_deletion_audit')
+        .select('id')
+        .eq('status', 'completed')
+        .or(`user_id_hash.eq.${userIdHash},email_hash.eq.${emailHash}`)
+        .limit(1);
+      if (error && error.code === '42P01') return;
+      if (error) throw error;
+      if (auditRows?.length) {
+        const deleted = new Error('This account has been deleted. Contact support if this looks wrong.');
+        deleted.statusCode = 410;
+        throw deleted;
+      }
+      const { data: detachedRequests, error: requestError } = await client
+        .from('account_deletion_requests')
+        .select('id,status')
+        .is('user_id', null)
+        .in('status', [...ACTIVE_DELETION_STATUSES, 'completed'])
+        .or(`user_id_hash.eq.${userIdHash},email_hash.eq.${emailHash}`)
+        .limit(1);
+      if (requestError && requestError.code === '42P01') return;
+      if (requestError) throw requestError;
+      if (detachedRequests?.length) {
+        const deleted = new Error('This account is pending deletion or has been deleted. Contact support if this looks wrong.');
+        deleted.statusCode = detachedRequests[0].status === 'completed' ? 410 : 423;
+        throw deleted;
+      }
+    },
+    async getActiveDeletionRequest(userId) {
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .select('*, account_deletion_steps(*)')
+        .eq('user_id', userId)
+        .in('status', [...ACTIVE_DELETION_STATUSES])
+        .order('requested_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error && error.code === '42P01') return null;
+      if (error) throw error;
+      return data ? mapDeletionRequest(data) : null;
+    },
+    async getDeletionRequestById(id) {
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .select('*, account_deletion_steps(*)')
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapDeletionRequest(data) : null;
+    },
+    async createDeletionRequest({ userId, email, reason = '', exportConfirmed = false }) {
+      const active = await this.getActiveDeletionRequest(userId);
+      if (active) return active;
+      const row = {
+        user_id: userId,
+        user_id_hash: hashDeletionValue(userId),
+        email_hash: hashDeletionValue(email),
+        status: 'pending_approval',
+        reason: String(reason || '').trim().slice(0, 500),
+        export_confirmed: Boolean(exportConfirmed),
+        status_message: 'Deletion request is waiting for admin review.',
+      };
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .insert(row)
+        .select('*, account_deletion_steps(*)')
+        .single();
+      if (error?.code === '23505') return this.getActiveDeletionRequest(userId);
+      if (error) throw error;
+      return mapDeletionRequest(data);
+    },
+    async cancelDeletionRequestForUser(userId) {
+      const active = await this.getActiveDeletionRequest(userId);
+      if (!active || !['requested', 'pending_approval'].includes(active.status)) return null;
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .update({
+          status: 'canceled',
+          canceled_at: new Date().toISOString(),
+          status_message: 'Deletion request canceled by user.',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', active.id)
+        .select('*, account_deletion_steps(*)')
+        .single();
+      if (error) throw error;
+      return mapDeletionRequest(data);
+    },
+    async listDeletionRequests({ limit = 50 } = {}) {
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .select('*, account_deletion_steps(*)')
+        .order('requested_at', { ascending: false })
+        .limit(Math.max(1, Math.min(Number(limit) || 50, 100)));
+      if (error) throw error;
+      return (data || []).map(mapDeletionRequest);
+    },
+    async approveDeletionRequest({ id, adminActor }) {
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .update({
+          status: 'approved',
+          approved_at: new Date().toISOString(),
+          admin_actor: adminActor,
+          status_message: 'Deletion request approved. Waiting for execution.',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .in('status', ['requested', 'pending_approval', 'partially_failed'])
+        .select('*, account_deletion_steps(*)')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapDeletionRequest(data) : this.getDeletionRequestById(id);
+    },
+    async cancelDeletionRequestAsAdmin({ id, adminActor, reason = '' }) {
+      const existing = await this.getDeletionRequestById(id);
+      if (!existing) return null;
+      if (['executing', 'completed'].includes(existing.status)) return existing;
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .update({
+          status: 'canceled',
+          canceled_at: new Date().toISOString(),
+          admin_actor: adminActor,
+          status_message: String(reason || 'Deletion request canceled by admin.').slice(0, 500),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select('*, account_deletion_steps(*)')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapDeletionRequest(data) : this.getDeletionRequestById(id);
+    },
+    async markDeletionRequestExecuting(id) {
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .update({
+          status: 'executing',
+          executing_at: new Date().toISOString(),
+          status_message: 'Deletion is executing.',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select('*, account_deletion_steps(*)')
+        .single();
+      if (error) throw error;
+      return mapDeletionRequest(data);
+    },
+    async markDeletionRequestPartiallyFailed(id, message) {
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .update({
+          status: 'partially_failed',
+          status_message: String(message || 'Deletion partially failed. Admin retry is required.').slice(0, 500),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select('*, account_deletion_steps(*)')
+        .single();
+      if (error) throw error;
+      return mapDeletionRequest(data);
+    },
+    async recordDeletionStep({ requestId, stepKey, status, error = '', metadata = {} }) {
+      const nowIso = new Date().toISOString();
+      const row = {
+        request_id: requestId,
+        step_key: stepKey,
+        status,
+        redacted_error: error || null,
+        metadata,
+        updated_at: nowIso,
+      };
+      if (status === 'running') row.started_at = nowIso;
+      if (['completed', 'failed', 'skipped'].includes(status)) row.finished_at = nowIso;
+      const { data: existing, error: existingError } = await client
+        .from('account_deletion_steps')
+        .select('attempts,metadata')
+        .eq('request_id', requestId)
+        .eq('step_key', stepKey)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      row.attempts = Number(existing?.attempts || 0) + (status === 'running' ? 1 : 0);
+      row.metadata = { ...(existing?.metadata || {}), ...(metadata || {}) };
+      const { data, error: upsertError } = await client
+        .from('account_deletion_steps')
+        .upsert(row, { onConflict: 'request_id,step_key' })
+        .select('*')
+        .single();
+      if (upsertError) throw upsertError;
+      return mapDeletionStep(data);
+    },
+    async freezeUserForDeletion(userId) {
+      const timestamp = new Date().toISOString();
+      const [tokenResult, credentialResult, jobResult] = await Promise.all([
+        client.from('extension_tokens').update({ revoked_at: timestamp }).eq('user_id', userId).is('revoked_at', null).select('id'),
+        client.from('user_provider_credentials').update({ status: 'disabled', updated_at: timestamp }).eq('user_id', userId).neq('status', 'disabled').select('id'),
+        client
+          .from('processing_jobs')
+          .update({ status: 'failed', error: 'Account deletion requested.', lease_owner: null, lease_token: null, lease_expires_at: null, updated_at: timestamp })
+          .eq('user_id', userId)
+          .in('status', ['queued', 'downloading', 'analyzing', ...PAUSED_JOB_STATUSES])
+          .select('id'),
+      ]);
+      [tokenResult, credentialResult, jobResult].forEach(({ error }) => {
+        if (error) throw error;
+      });
+      return {
+        revokedTokens: tokenResult.data?.length || 0,
+        disabledCredentials: credentialResult.data?.length || 0,
+        canceledJobs: jobResult.data?.length || 0,
+      };
+    },
+    async deleteUserStorageObjects(userId) {
+      if (!client.storage) return { deletedObjects: 0, buckets: [], skipped: true };
+      const buckets = ['import-uploads', 'instagram-assets'];
+      let deletedObjects = 0;
+      const bucketResults = [];
+      for (const bucket of buckets) {
+        const paths = await listStoragePathsForPrefix(client, bucket, userId);
+        for (let index = 0; index < paths.length; index += 100) {
+          const batch = paths.slice(index, index + 100);
+          if (!batch.length) continue;
+          const { error } = await client.storage.from(bucket).remove(batch);
+          if (error) throw error;
+          deletedObjects += batch.length;
+        }
+        bucketResults.push({ bucket, deletedObjects: paths.length });
+      }
+      return { deletedObjects, buckets: bucketResults };
+    },
+    async deleteUserContentData(userId) {
+      const tables = ['processing_jobs', 'item_embeddings', 'item_analysis', 'item_assets', 'saved_items', 'collections', 'imports', 'lens_search_events'];
+      return deleteUserRowsFromTables(client, userId, tables);
+    },
+    async deleteUserAccessData(userId) {
+      return deleteUserRowsFromTables(client, userId, ['user_provider_credentials', 'extension_tokens', 'user_ai_keys']);
+    },
+    async deleteUserProfileData(userId) {
+      const retainedPurchases = await retainCompletedCreditPurchases(client, userId);
+      const deleted = await deleteUserRowsFromTables(client, userId, [
+        'user_profiles',
+        'user_admin_states',
+        'user_activity_events',
+        'analysis_usage_events',
+        'credit_transactions',
+        'admin_credit_adjustments',
+        'user_credit_accounts',
+      ]);
+      const pendingPurchases = await deleteUserRowsFromTables(client, userId, ['credit_purchases']);
+      return { ...deleted, credit_purchases: pendingPurchases.credit_purchases || 0, retainedCreditPurchases: retainedPurchases };
+    },
+    async deleteAuthUser(userId) {
+      const { error } = await client.auth.admin.deleteUser(userId);
+      if (error && !/not found/i.test(error.message || '')) throw error;
+      return { deleted: true };
+    },
+    async completeDeletionRequest(id, { actor, retentionSummary }) {
+      const request = await this.getDeletionRequestById(id);
+      if (!request) return null;
+      await client
+        .from('account_deletion_audit')
+        .insert({
+          request_id: request.id,
+          user_id_hash: request.userIdHash,
+          email_hash: request.emailHash,
+          status: 'completed',
+          actor,
+          retained_categories: retentionSummary?.retained || [],
+          summary: retentionSummary || {},
+        })
+        .throwOnError();
+      if (request.userId) {
+        await client.from('users').delete().eq('id', request.userId).throwOnError();
+      }
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .update({
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          status_message: 'Account deletion completed.',
+          retention_summary: retentionSummary || {},
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select('*, account_deletion_steps(*)')
+        .single();
+      if (error) throw error;
+      return mapDeletionRequest(data);
+    },
+    async getPrivacyExport(userId) {
+      const [items, imports, collections, credentials, extensionTokens, profile, credits, deletionRequest] = await Promise.all([
+        this.getItems(userId),
+        selectAllUserRows(client, 'imports', userId, '*', (query) => query.order('created_at', { ascending: false })),
+        selectAllUserRows(client, 'collections', userId, '*', (query) => query.order('created_at', { ascending: false })),
+        this.listProviderCredentials(userId),
+        this.listExtensionTokens(userId),
+        this.getProfile(userId),
+        this.getCredits(userId),
+        this.getActiveDeletionRequest(userId),
+      ]);
+      return {
+        exportedAt: new Date().toISOString(),
+        items,
+        imports: imports.map(mapImport),
+        collections,
+        credits,
+        providerCredentials: credentials,
+        extensionTokens,
+        profile,
+        deletion: deletionRequest,
+      };
     },
     async getUserAdminState(userId) {
       const { data, error } = await client
@@ -901,6 +1218,48 @@ function mapImport(row) {
   };
 }
 
+function mapDeletionRequest(row) {
+  const steps = Array.isArray(row.account_deletion_steps)
+    ? row.account_deletion_steps.map(mapDeletionStep).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+    : [];
+  return {
+    id: row.id,
+    userId: row.user_id,
+    userIdHash: row.user_id_hash,
+    emailHash: row.email_hash,
+    status: row.status,
+    reason: row.reason || '',
+    exportConfirmed: Boolean(row.export_confirmed),
+    requestedAt: row.requested_at,
+    approvedAt: row.approved_at,
+    executingAt: row.executing_at,
+    completedAt: row.completed_at,
+    canceledAt: row.canceled_at,
+    adminActor: row.admin_actor,
+    statusMessage: row.status_message || '',
+    retentionSummary: row.retention_summary || {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    steps,
+  };
+}
+
+function mapDeletionStep(row) {
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    stepKey: row.step_key,
+    status: row.status,
+    attempts: row.attempts || 0,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    redactedError: row.redacted_error || '',
+    metadata: row.metadata || {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function chunkValues(values, size = EXISTING_ITEM_LOOKUP_BATCH_SIZE) {
   const chunks = [];
   for (let index = 0; index < values.length; index += size) {
@@ -992,6 +1351,86 @@ async function selectAllUserSavedItems(client, userId) {
   }
 
   return rows;
+}
+
+async function selectAllUserRows(client, table, userId, columns = '*', apply = null) {
+  const pageSize = 1000;
+  const rows = [];
+
+  for (let from = 0; ; from += pageSize) {
+    let query = client
+      .from(table)
+      .select(columns)
+      .eq('user_id', userId)
+      .range(from, from + pageSize - 1);
+    if (apply) query = apply(query);
+    const { data, error } = await query;
+    if (error && error.code === '42P01') return rows;
+    if (error) throw error;
+
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+
+  return rows;
+}
+
+async function deleteUserRowsFromTables(client, userId, tables) {
+  const deleted = {};
+  for (const table of tables) {
+    const { data, error } = await client.from(table).delete().eq('user_id', userId).select('user_id');
+    if (error && error.code === '42P01') {
+      deleted[table] = 0;
+      continue;
+    }
+    if (error) throw error;
+    deleted[table] = data?.length || 0;
+  }
+  return deleted;
+}
+
+async function retainCompletedCreditPurchases(client, userId) {
+  const { data, error } = await client
+    .from('credit_purchases')
+    .update({
+      user_id: null,
+      metadata: {
+        accountDeleted: true,
+        retentionReason: 'payment_accounting',
+      },
+      updated_at: new Date().toISOString(),
+    })
+    .eq('user_id', userId)
+    .in('status', ['completed', 'refunded'])
+    .select('id');
+  if (error && error.code === '42P01') return 0;
+  if (error) throw error;
+  return data?.length || 0;
+}
+
+async function listStoragePathsForPrefix(client, bucket, prefix) {
+  const paths = [];
+
+  async function walk(folder) {
+    const { data, error } = await client.storage.from(bucket).list(folder, { limit: 1000 });
+    if (error) {
+      if (/not found/i.test(error.message || '')) return;
+      throw error;
+    }
+    for (const entry of data || []) {
+      const name = entry.name || '';
+      if (!name) continue;
+      const fullPath = folder ? `${folder}/${name}` : name;
+      if (entry.id || entry.metadata || entry.updated_at || entry.created_at) {
+        paths.push(fullPath);
+      } else {
+        await walk(fullPath);
+      }
+    }
+  }
+
+  await walk(String(prefix || '').replace(/^\/+|\/+$/g, ''));
+  return paths;
 }
 
 async function selectRows(client, table, columns = '*', limit = 1000, apply = null) {

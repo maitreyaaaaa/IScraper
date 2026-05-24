@@ -66,6 +66,30 @@ export function getItems() {
   return request('/items');
 }
 
+export function getPrivacyExportData() {
+  return request('/privacy-export');
+}
+
+export function getAccountDeletion() {
+  return request('/account/deletion');
+}
+
+export function requestAccountDeletion(payload) {
+  return request('/account/deletion', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function cancelAccountDeletion() {
+  return request('/account/deletion/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
 export function getIndexingSummary() {
   return request('/indexing/summary');
 }

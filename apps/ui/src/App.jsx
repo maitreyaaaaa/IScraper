@@ -43,13 +43,16 @@ import {
 } from 'lucide-react';
 import {
   approveReviewItem,
+  cancelAccountDeletion,
   deleteProviderCredential,
   downloadObsidianGraph,
+  getAccountDeletion,
   getItem,
   getItems,
   getCredits,
   getKnowledgeGraph,
   getProfile,
+  getPrivacyExportData,
   getPublicFeedback,
   getProviderCredentials,
   importInstagramExport,
@@ -57,6 +60,7 @@ import {
   enrichIntentBatch,
   enrichItem,
   revealProviderCredential,
+  requestAccountDeletion,
   saveLink,
   saveProfile,
   saveProviderCredential,
@@ -408,6 +412,30 @@ function formatUsageDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'No saves yet';
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function deletionStatusLabel(status) {
+  return ({
+    requested: 'Request received',
+    pending_approval: 'Waiting for review',
+    approved: 'Approved for deletion',
+    executing: 'Deletion in progress',
+    completed: 'Account deleted',
+    partially_failed: 'Needs admin retry',
+    canceled: 'Request canceled',
+  })[status] || 'Deletion request';
+}
+
+function deletionStatusCopy(status) {
+  return ({
+    requested: 'Your request has been received and risky account activity is frozen.',
+    pending_approval: 'Your request is waiting for admin review. You can still cancel it from this screen.',
+    approved: 'An admin approved this request. Execution can start at any time.',
+    executing: 'Deletion is running. This state is read-only.',
+    completed: 'Deletion is complete. Only minimal audit and retention records remain.',
+    partially_failed: 'Some deletion steps failed. An admin can retry the executor.',
+    canceled: 'This deletion request was canceled.',
+  })[status] || 'Deletion status is available here.';
 }
 
 function buildDataUsage(items = [], credits = null) {
@@ -3493,6 +3521,9 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
   const [healthByGroup, setHealthByGroup] = useState({});
   const [revealedByGroup, setRevealedByGroup] = useState({});
   const [confirmRevealGroup, setConfirmRevealGroup] = useState(null);
+  const [deletionState, setDeletionState] = useState(null);
+  const [deletionLoading, setDeletionLoading] = useState(false);
+  const [deletionForm, setDeletionForm] = useState({ reason: '', exportConfirmed: false });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -3524,7 +3555,29 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
         if (!cancelled) setCredentials(body.credentials || []);
       })
       .catch((err) => {
-        if (!cancelled) setError(err.message);
+        if (!cancelled && err.status !== 423) setError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => {
+        if (!cancelled) setDeletionLoading(true);
+        return getAccountDeletion();
+      })
+      .then((body) => {
+        if (!cancelled) setDeletionState(body.deletion || null);
+      })
+      .catch((err) => {
+        if (!cancelled && err.status !== 423) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setDeletionLoading(false);
       });
     return () => {
       cancelled = true;
@@ -3636,6 +3689,68 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     }
   };
 
+  const handlePrivacyExport = async () => {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const body = await getPrivacyExportData();
+      const exportData = body.export || {};
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `iscraper-privacy-export-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setMessage(`Privacy export downloaded with ${exportData.items?.length || 0} saves and ${exportData.imports?.length || 0} imports.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refreshDeletionState = async () => {
+    const body = await getAccountDeletion();
+    setDeletionState(body.deletion || null);
+    return body.deletion || null;
+  };
+
+  const handleDeletionRequest = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const body = await requestAccountDeletion(deletionForm);
+      setDeletionState(body.deletion || null);
+      setMessage('Deletion request submitted. Risky account activity is now frozen while it waits for review.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeletionCancel = async () => {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const body = await cancelAccountDeletion();
+      setDeletionState(body.deletion || null);
+      setMessage('Deletion request canceled.');
+    } catch (err) {
+      setError(err.message);
+      await refreshDeletionState().catch(() => null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleLogout = async () => {
     setBusy(true);
     setError('');
@@ -3691,6 +3806,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
               ['usage', Database, 'Data & usage'],
               ['profile', Settings, 'Profile'],
               ['api', KeyRound, 'API Health'],
+              ['requests', AlertCircle, 'Requests'],
             ].map(([key, Icon, label]) => (
               <button
                 key={key}
@@ -3951,6 +4067,141 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                       );
                     })}
                   </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'requests' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Account requests</div>
+                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Data and account deletion</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    Deletion is reviewed before execution. Once execution starts, it cannot be canceled from the app.
+                  </p>
+                </div>
+
+                <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Privacy export</div>
+                      <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                        Download a complete JSON export before requesting deletion. It includes all saved items and all imports returned by the backend export endpoint.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handlePrivacyExport}
+                      disabled={busy}
+                      className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+                    >
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                      Export data
+                    </button>
+                  </div>
+                </section>
+
+                {deletionLoading ? (
+                  <div className="grid min-h-36 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] text-sm text-muted-foreground">
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      Loading deletion status...
+                    </span>
+                  </div>
+                ) : deletionState?.request ? (
+                  <section className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Request {deletionState.request.id}</div>
+                        <h4 className="mt-2 font-display text-2xl font-bold tracking-tight">{deletionStatusLabel(deletionState.request.status)}</h4>
+                        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                          {deletionState.request.statusMessage || deletionStatusCopy(deletionState.request.status)}
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-primary">
+                        {deletionState.request.status}
+                      </span>
+                    </div>
+
+                    <div className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
+                      {[
+                        ['Requested', deletionState.request.requestedAt],
+                        ['Approved', deletionState.request.approvedAt],
+                        ['Executing', deletionState.request.executingAt],
+                        ['Completed', deletionState.request.completedAt],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-xl border border-white/10 bg-black/50 p-3">
+                          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{label}</div>
+                          <div className="mt-1 font-semibold">{value ? formatUsageDate(value) : 'Not yet'}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {deletionState.request.steps?.length > 0 && (
+                      <div className="mt-5 space-y-2">
+                        {deletionState.request.steps.map((step) => (
+                          <div key={step.stepKey} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/50 px-3 py-2 text-xs">
+                            <span className="font-mono uppercase tracking-[0.16em]">{step.stepKey.replaceAll('_', ' ')}</span>
+                            <span className={step.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}>{step.status}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {deletionState.request.retentionSummary?.retained?.length > 0 && (
+                      <p className="mt-5 text-xs leading-5 text-muted-foreground">
+                        Retained categories: {deletionState.request.retentionSummary.retained.join(', ')}.
+                      </p>
+                    )}
+
+                    {deletionState.canCancel && (
+                      <button
+                        type="button"
+                        onClick={handleDeletionCancel}
+                        disabled={busy}
+                        className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold transition hover:bg-white/5 disabled:opacity-60"
+                      >
+                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                        Cancel deletion request
+                      </button>
+                    )}
+                  </section>
+                ) : (
+                  <form onSubmit={handleDeletionRequest} className="space-y-4 rounded-2xl border border-destructive/40 bg-destructive/5 p-5">
+                    <div>
+                      <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-destructive">Deletion request</div>
+                      <h4 className="mt-2 font-display text-2xl font-bold tracking-tight">Request account deletion</h4>
+                      <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                        This will freeze imports, search enrichment, API keys, extension access, checkout, and Lens while the request is reviewed.
+                        Some security, accounting, backup, log, Stripe, PostHog, email, and AI-provider records may remain outside IScraper.
+                      </p>
+                    </div>
+                    <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-black/50 p-3 text-sm leading-6 text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={deletionForm.exportConfirmed}
+                        onChange={(event) => setDeletionForm((current) => ({ ...current, exportConfirmed: event.target.checked }))}
+                        className="mt-1 h-4 w-4 accent-primary"
+                        required
+                      />
+                      <span>I have exported my data or I understand deletion may remove my saved library permanently.</span>
+                    </label>
+                    <textarea
+                      value={deletionForm.reason}
+                      onChange={(event) => setDeletionForm((current) => ({ ...current, reason: event.target.value }))}
+                      maxLength={500}
+                      placeholder="Optional reason for support review"
+                      className="min-h-28 w-full resize-none rounded-xl border border-white/10 bg-black px-4 py-3 text-sm leading-6 outline-none focus:border-destructive"
+                    />
+                    <button
+                      type="submit"
+                      disabled={busy || !deletionForm.exportConfirmed}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-destructive px-5 py-3 text-sm font-semibold text-white transition hover:scale-[1.01] disabled:opacity-60"
+                    >
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <AlertCircle className="h-4 w-4" />}
+                      Submit deletion request
+                    </button>
+                  </form>
                 )}
               </div>
             )}

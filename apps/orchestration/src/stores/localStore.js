@@ -14,6 +14,7 @@ const {
 const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
+const { ACTIVE_DELETION_STATUSES, hashDeletionValue } = require('../services/accountDeletion');
 
 const DEFAULT_USER_ID = 'local-dev-user';
 
@@ -55,6 +56,10 @@ function seedFromLegacyIndex(dataPath) {
     profiles: [],
     extensionTokens: [],
     lensSearchEvents: [],
+    accountDeletionRequests: [],
+    accountDeletionSteps: [],
+    accountDeletionAudit: [],
+    accountDeletionTombstones: [],
     items: legacy.map((item) => ({
       ...item,
       userId: DEFAULT_USER_ID,
@@ -107,6 +112,10 @@ function emptyState() {
     profiles: [],
     extensionTokens: [],
     lensSearchEvents: [],
+    accountDeletionRequests: [],
+    accountDeletionSteps: [],
+    accountDeletionAudit: [],
+    accountDeletionTombstones: [],
   };
 }
 
@@ -126,6 +135,10 @@ function normalizeState(state) {
     profiles: state.profiles || [],
     extensionTokens: state.extensionTokens || [],
     lensSearchEvents: state.lensSearchEvents || [],
+    accountDeletionRequests: state.accountDeletionRequests || [],
+    accountDeletionSteps: state.accountDeletionSteps || [],
+    accountDeletionAudit: state.accountDeletionAudit || [],
+    accountDeletionTombstones: state.accountDeletionTombstones || [],
   };
 }
 
@@ -173,14 +186,319 @@ function createLocalStore({ dataPath }) {
   }
 
   function ensureUser(userId, email) {
+    assertUserNotDeleted(userId, email);
     if (!state.users.find((user) => user.id === userId)) {
       state.users.push({ id: userId, email, createdAt: now() });
       save();
     }
   }
 
+  function assertUserNotDeleted(userId, email) {
+    const userIdHash = hashDeletionValue(userId);
+    const emailHash = hashDeletionValue(email);
+    const tombstone = state.accountDeletionTombstones.find((entry) => (
+      entry.userIdHash === userIdHash || (email && entry.emailHash === emailHash)
+    ));
+    if (tombstone) {
+      const error = new Error('This account has been deleted. Contact support if this looks wrong.');
+      error.statusCode = 410;
+      throw error;
+    }
+  }
+
+  function mapDeletionRequest(request) {
+    if (!request) return null;
+    const steps = state.accountDeletionSteps
+      .filter((step) => step.requestId === request.id)
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    return { ...request, steps };
+  }
+
+  function activeDeletionRequestForUser(userId) {
+    return state.accountDeletionRequests
+      .filter((request) => request.userId === userId && ACTIVE_DELETION_STATUSES.has(request.status))
+      .sort((a, b) => String(b.requestedAt).localeCompare(String(a.requestedAt)))[0] || null;
+  }
+
+  function deleteFromArrayByUser(key, userId) {
+    const before = state[key].length;
+    state[key] = state[key].filter((entry) => entry.userId !== userId);
+    return before - state[key].length;
+  }
+
   return {
     ensureUser,
+    assertUserNotDeleted,
+
+    getActiveDeletionRequest(userId) {
+      return mapDeletionRequest(activeDeletionRequestForUser(userId));
+    },
+
+    getDeletionRequestById(id) {
+      return mapDeletionRequest(state.accountDeletionRequests.find((request) => request.id === id) || null);
+    },
+
+    createDeletionRequest({ userId, email, reason = '', exportConfirmed = false }) {
+      const active = activeDeletionRequestForUser(userId);
+      if (active) return mapDeletionRequest(active);
+      const request = {
+        id: `deletion-${Date.now()}-${state.accountDeletionRequests.length + 1}`,
+        userId,
+        userIdHash: hashDeletionValue(userId),
+        emailHash: hashDeletionValue(email),
+        status: 'pending_approval',
+        reason: String(reason || '').trim().slice(0, 500),
+        exportConfirmed: Boolean(exportConfirmed),
+        requestedAt: now(),
+        approvedAt: null,
+        executingAt: null,
+        completedAt: null,
+        canceledAt: null,
+        adminActor: null,
+        statusMessage: 'Deletion request is waiting for admin review.',
+        retentionSummary: {},
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      state.accountDeletionRequests.push(request);
+      save();
+      return mapDeletionRequest(request);
+    },
+
+    cancelDeletionRequestForUser(userId) {
+      const request = activeDeletionRequestForUser(userId);
+      if (!request || !['requested', 'pending_approval'].includes(request.status)) return null;
+      Object.assign(request, {
+        status: 'canceled',
+        canceledAt: now(),
+        statusMessage: 'Deletion request canceled by user.',
+        updatedAt: now(),
+      });
+      save();
+      return mapDeletionRequest(request);
+    },
+
+    listDeletionRequests({ limit = 50 } = {}) {
+      return [...state.accountDeletionRequests]
+        .sort((a, b) => String(b.requestedAt).localeCompare(String(a.requestedAt)))
+        .slice(0, Math.max(1, Math.min(Number(limit) || 50, 100)))
+        .map((request) => mapDeletionRequest(request));
+    },
+
+    approveDeletionRequest({ id, adminActor }) {
+      const request = state.accountDeletionRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      if (!['requested', 'pending_approval', 'partially_failed'].includes(request.status)) return mapDeletionRequest(request);
+      Object.assign(request, {
+        status: 'approved',
+        approvedAt: now(),
+        adminActor,
+        statusMessage: 'Deletion request approved. Waiting for execution.',
+        updatedAt: now(),
+      });
+      save();
+      return mapDeletionRequest(request);
+    },
+
+    cancelDeletionRequestAsAdmin({ id, adminActor, reason = '' }) {
+      const request = state.accountDeletionRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      if (['executing', 'completed'].includes(request.status)) return mapDeletionRequest(request);
+      Object.assign(request, {
+        status: 'canceled',
+        canceledAt: now(),
+        adminActor,
+        statusMessage: reason || 'Deletion request canceled by admin.',
+        updatedAt: now(),
+      });
+      save();
+      return mapDeletionRequest(request);
+    },
+
+    markDeletionRequestExecuting(id) {
+      const request = state.accountDeletionRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      Object.assign(request, {
+        status: 'executing',
+        executingAt: request.executingAt || now(),
+        statusMessage: 'Deletion is executing.',
+        updatedAt: now(),
+      });
+      save();
+      return mapDeletionRequest(request);
+    },
+
+    markDeletionRequestPartiallyFailed(id, message) {
+      const request = state.accountDeletionRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      Object.assign(request, {
+        status: 'partially_failed',
+        statusMessage: message || 'Deletion partially failed. Admin retry is required.',
+        updatedAt: now(),
+      });
+      save();
+      return mapDeletionRequest(request);
+    },
+
+    recordDeletionStep({ requestId, stepKey, status, error = '', metadata = {} }) {
+      let step = state.accountDeletionSteps.find((entry) => entry.requestId === requestId && entry.stepKey === stepKey);
+      if (!step) {
+        step = {
+          id: `deletion-step-${Date.now()}-${state.accountDeletionSteps.length + 1}`,
+          requestId,
+          stepKey,
+          status: 'pending',
+          attempts: 0,
+          startedAt: null,
+          finishedAt: null,
+          redactedError: '',
+          metadata: {},
+          createdAt: now(),
+          updatedAt: now(),
+        };
+        state.accountDeletionSteps.push(step);
+      }
+      if (status === 'running') {
+        step.attempts += 1;
+        step.startedAt = now();
+        step.finishedAt = null;
+      }
+      if (['completed', 'failed', 'skipped'].includes(status)) {
+        step.finishedAt = now();
+      }
+      Object.assign(step, {
+        status,
+        redactedError: error || '',
+        metadata: { ...(step.metadata || {}), ...(metadata || {}) },
+        updatedAt: now(),
+      });
+      save();
+      return step;
+    },
+
+    freezeUserForDeletion(userId) {
+      let revokedTokens = 0;
+      state.extensionTokens.forEach((token) => {
+        if (token.userId === userId && !token.revokedAt) {
+          token.revokedAt = now();
+          revokedTokens += 1;
+        }
+      });
+      let disabledCredentials = 0;
+      state.providerCredentials.forEach((credential) => {
+        if (credential.userId === userId && credential.status !== 'disabled') {
+          credential.status = 'disabled';
+          credential.updatedAt = now();
+          disabledCredentials += 1;
+        }
+      });
+      let canceledJobs = 0;
+      state.jobs.forEach((job) => {
+        if (job.userId === userId && ['queued', 'downloading', 'analyzing', ...PAUSED_JOB_STATUSES].includes(job.status)) {
+          Object.assign(job, {
+            status: 'failed',
+            error: 'Account deletion requested.',
+            leaseOwner: null,
+            leaseToken: null,
+            leaseExpiresAt: null,
+            updatedAt: now(),
+          });
+          canceledJobs += 1;
+        }
+      });
+      save();
+      return { revokedTokens, disabledCredentials, canceledJobs };
+    },
+
+    deleteUserStorageObjects(_userId) {
+      return { deletedObjects: 0, buckets: [], skipped: true };
+    },
+
+    deleteUserContentData(userId) {
+      const deleted = {
+        jobs: deleteFromArrayByUser('jobs', userId),
+        items: deleteFromArrayByUser('items', userId),
+        collections: deleteFromArrayByUser('collections', userId),
+        imports: deleteFromArrayByUser('imports', userId),
+        lensSearchEvents: deleteFromArrayByUser('lensSearchEvents', userId),
+      };
+      save();
+      return deleted;
+    },
+
+    deleteUserAccessData(userId) {
+      const deleted = {
+        providerCredentials: deleteFromArrayByUser('providerCredentials', userId),
+        extensionTokens: deleteFromArrayByUser('extensionTokens', userId),
+      };
+      save();
+      return deleted;
+    },
+
+    deleteUserProfileData(userId) {
+      const deleted = {
+        profiles: deleteFromArrayByUser('profiles', userId),
+        userAdminStates: deleteFromArrayByUser('userAdminStates', userId),
+        userActivityEvents: deleteFromArrayByUser('userActivityEvents', userId),
+        analysisUsageEvents: deleteFromArrayByUser('analysisUsageEvents', userId),
+        creditTransactions: deleteFromArrayByUser('creditTransactions', userId),
+        creditPurchases: deleteFromArrayByUser('creditPurchases', userId),
+        adminCreditAdjustments: deleteFromArrayByUser('adminCreditAdjustments', userId),
+      };
+      save();
+      return deleted;
+    },
+
+    deleteAuthUser(_userId) {
+      return { deleted: true, mode: 'local' };
+    },
+
+    completeDeletionRequest(id, { actor, retentionSummary }) {
+      const request = state.accountDeletionRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      state.accountDeletionAudit.push({
+        id: `deletion-audit-${Date.now()}-${state.accountDeletionAudit.length + 1}`,
+        requestId: request.id,
+        userIdHash: request.userIdHash,
+        emailHash: request.emailHash,
+        status: 'completed',
+        actor,
+        retainedCategories: retentionSummary?.retained || [],
+        summary: retentionSummary || {},
+        createdAt: now(),
+      });
+      state.accountDeletionTombstones.push({
+        userIdHash: request.userIdHash,
+        emailHash: request.emailHash,
+        requestId: request.id,
+        createdAt: now(),
+      });
+      state.users = state.users.filter((user) => user.id !== request.userId);
+      Object.assign(request, {
+        userId: null,
+        status: 'completed',
+        completedAt: now(),
+        statusMessage: 'Account deletion completed.',
+        retentionSummary: retentionSummary || {},
+        updatedAt: now(),
+      });
+      save();
+      return mapDeletionRequest(request);
+    },
+
+    getPrivacyExport(userId) {
+      return {
+        exportedAt: now(),
+        items: this.getItems(userId),
+        imports: state.imports.filter((entry) => entry.userId === userId),
+        collections: state.collections.filter((entry) => entry.userId === userId),
+        credits: this.getCredits(userId),
+        providerCredentials: this.listProviderCredentials(userId),
+        extensionTokens: state.extensionTokens.filter((entry) => entry.userId === userId).map(publicExtensionToken),
+        profile: this.getProfile(userId),
+        deletion: mapDeletionRequest(activeDeletionRequestForUser(userId)),
+      };
+    },
 
     getUserAdminState(userId) {
       return state.userAdminStates.find((entry) => entry.userId === userId) || { userId, status: 'active' };

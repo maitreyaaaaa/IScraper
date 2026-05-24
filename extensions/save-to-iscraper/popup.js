@@ -27,8 +27,22 @@ async function getAppUrl() {
 }
 
 async function getLensToken() {
-  const stored = await chrome.storage.sync.get({ lensToken: '' });
-  return String(stored.lensToken || '').trim();
+  const local = await chrome.storage.local.get({ lensToken: '' });
+  const localToken = String(local.lensToken || '').trim();
+  if (localToken) return localToken;
+
+  const synced = await chrome.storage.sync.get({ lensToken: '' });
+  const legacyToken = String(synced.lensToken || '').trim();
+  if (legacyToken) {
+    await chrome.storage.local.set({ lensToken: legacyToken });
+    await chrome.storage.sync.remove('lensToken');
+  }
+  return legacyToken;
+}
+
+async function saveLensToken(value) {
+  await chrome.storage.local.set({ lensToken: value });
+  await chrome.storage.sync.remove('lensToken');
 }
 
 function detectPlatform(url) {
@@ -153,7 +167,7 @@ saveTokenEl.addEventListener('click', async () => {
     statusEl.textContent = 'Paste a valid IScraper Lens token.';
     return;
   }
-  await chrome.storage.sync.set({ lensToken: value });
+  await saveLensToken(value);
   statusEl.textContent = 'Lens token saved.';
 });
 

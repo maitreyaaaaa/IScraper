@@ -23,6 +23,11 @@ const {
   hashExtensionToken,
 } = require('./services/extensionTokens');
 const { cleanLensText, describeLensCrop } = require('./services/lensSearch');
+const {
+  isDeletionBlockingStatus,
+  processAccountDeletionRequest,
+  publicDeletionRequest,
+} = require('./services/accountDeletion');
 
 const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv']);
 const EXPORT_UPLOAD_MIME_TYPES = new Set([
@@ -153,6 +158,17 @@ async function requireCompletedProfile(req, store) {
   if (!profile?.username) {
     const error = new Error('Create your username before importing saved posts.');
     error.statusCode = 428;
+    throw error;
+  }
+}
+
+async function requireAccountNotDeleting(req, store) {
+  if (typeof store.getActiveDeletionRequest !== 'function') return;
+  const deletion = await store.getActiveDeletionRequest(req.user.id);
+  if (deletion && isDeletionBlockingStatus(deletion.status)) {
+    const error = new Error('Account deletion is pending. You can export data, check deletion status, cancel while allowed, or log out.');
+    error.statusCode = 423;
+    error.deletion = publicDeletionRequest(deletion);
     throw error;
   }
 }
@@ -712,7 +728,7 @@ function createApp({ store, config = {}, observability = createObservability(con
   app.use(cors({
     exposedHeaders: ['X-Request-ID'],
     origin(origin, callback) {
-      if (!origin || !allowedOrigins.size || allowedOrigins.has(String(origin).replace(/\/$/, ''))) {
+      if (!origin || allowedOrigins.has(String(origin).replace(/\/$/, ''))) {
         return callback(null, true);
       }
       return callback(null, false);
@@ -903,11 +919,69 @@ function createApp({ store, config = {}, observability = createObservability(con
     return res.status(201).json(result);
   }));
 
+  app.get('/api/admin/deletion-requests', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof store.listDeletionRequests !== 'function') return res.status(501).json({ error: 'Account deletion requests are not available.' });
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 50), 100));
+    res.json({ requests: await store.listDeletionRequests({ limit }) });
+  }));
+
+  app.post('/api/admin/deletion-requests/:id/approve', adminRateLimit, asyncRoute(async (req, res) => {
+    const adminUser = await assertAdmin(req, config, store);
+    if (typeof store.approveDeletionRequest !== 'function') return res.status(501).json({ error: 'Account deletion requests are not available.' });
+    const request = await store.approveDeletionRequest({
+      id: req.params.id,
+      adminActor: String(req.header('x-admin-actor') || adminUser.email || 'admin').slice(0, 160),
+    });
+    if (!request) return res.status(404).json({ error: 'Deletion request not found.' });
+    captureWorkflow(req, 'admin deletion request approved', { deletionRequestId: req.params.id, actorType: 'admin' });
+    res.json({ deletion: publicDeletionRequest(request) });
+  }));
+
+  app.post('/api/admin/deletion-requests/:id/cancel', adminRateLimit, asyncRoute(async (req, res) => {
+    const adminUser = await assertAdmin(req, config, store);
+    if (typeof store.cancelDeletionRequestAsAdmin !== 'function') return res.status(501).json({ error: 'Account deletion requests are not available.' });
+    const request = await store.cancelDeletionRequestAsAdmin({
+      id: req.params.id,
+      adminActor: String(req.header('x-admin-actor') || adminUser.email || 'admin').slice(0, 160),
+      reason: cleanText(req.body?.reason || 'Canceled by admin', 500),
+    });
+    if (!request) return res.status(404).json({ error: 'Deletion request not found.' });
+    captureWorkflow(req, 'admin deletion request canceled', { deletionRequestId: req.params.id, actorType: 'admin' });
+    res.json({ deletion: publicDeletionRequest(request) });
+  }));
+
+  app.post('/api/admin/deletion-requests/:id/process', adminRateLimit, asyncRoute(async (req, res) => {
+    const adminUser = await assertAdmin(req, config, store);
+    const result = await processAccountDeletionRequest({
+      store,
+      requestId: req.params.id,
+      actor: String(req.header('x-admin-actor') || adminUser.email || 'admin').slice(0, 160),
+      maxSteps: Number(req.body?.maxSteps || req.query?.maxSteps) || 7,
+    });
+    captureWorkflow(req, 'admin deletion request processed', {
+      deletionRequestId: req.params.id,
+      executedCount: result.executed.length,
+      complete: result.complete,
+      failedStep: result.failedStep || null,
+    });
+    res.json(result);
+  }));
+
   app.get('/api/worker/process', workerRateLimit, workerProcessHandler);
   app.post('/api/worker/process', workerRateLimit, workerProcessHandler);
 
   app.post('/api/lens/search', searchRateLimit, asyncRoute(async (req, res) => {
     const user = await getExtensionUser(req, store, 'lens:search');
+    if (typeof store.getActiveDeletionRequest === 'function') {
+      const deletion = await store.getActiveDeletionRequest(user.id);
+      if (deletion && isDeletionBlockingStatus(deletion.status)) {
+        return res.status(423).json({
+          error: 'Account deletion is pending. Lens search is disabled for this account.',
+          deletion: publicDeletionRequest(deletion),
+        });
+      }
+    }
     const type = req.body?.type === 'image' ? 'image' : 'text';
     let query = cleanLensText(req.body?.query, type === 'image' ? 500 : 240);
     let imageAnalysis = null;
@@ -960,6 +1034,54 @@ function createApp({ store, config = {}, observability = createObservability(con
     const user = await getUser(req, store);
     await store.ensureUser(user.id, user.email);
     req.user = user;
+    next();
+  }));
+
+  app.get('/api/account/deletion', asyncRoute(async (req, res) => {
+    const deletion = typeof store.getActiveDeletionRequest === 'function'
+      ? await store.getActiveDeletionRequest(req.user.id)
+      : null;
+    res.json({ deletion: publicDeletionRequest(deletion) });
+  }));
+
+  app.post('/api/account/deletion', asyncRoute(async (req, res) => {
+    if (typeof store.createDeletionRequest !== 'function') return res.status(501).json({ error: 'Account deletion requests are not available.' });
+    if (req.body?.exportConfirmed !== true) {
+      return res.status(400).json({ error: 'Confirm that you exported or intentionally skipped exporting your data first.' });
+    }
+    const request = await store.createDeletionRequest({
+      userId: req.user.id,
+      email: req.user.email,
+      reason: cleanText(req.body?.reason || '', 500),
+      exportConfirmed: true,
+    });
+    if (typeof store.freezeUserForDeletion === 'function') {
+      await store.freezeUserForDeletion(req.user.id, { requestId: request.id, actor: 'user-request' });
+    }
+    captureWorkflow(req, 'account deletion requested', { deletionRequestId: request.id });
+    res.status(201).json({ deletion: publicDeletionRequest(request) });
+  }));
+
+  app.post('/api/account/deletion/cancel', asyncRoute(async (req, res) => {
+    if (typeof store.cancelDeletionRequestForUser !== 'function') return res.status(501).json({ error: 'Account deletion requests are not available.' });
+    const request = await store.cancelDeletionRequestForUser(req.user.id);
+    if (!request) return res.status(409).json({ error: 'This deletion request can no longer be canceled.' });
+    captureWorkflow(req, 'account deletion canceled', { deletionRequestId: request.id });
+    res.json({ deletion: publicDeletionRequest(request) });
+  }));
+
+  app.get('/api/privacy-export', asyncRoute(async (req, res) => {
+    if (typeof store.getPrivacyExport !== 'function') return res.status(501).json({ error: 'Privacy export is not available.' });
+    const exportData = await store.getPrivacyExport(req.user.id);
+    captureWorkflow(req, 'privacy export generated', {
+      itemCount: exportData.items?.length || 0,
+      importCount: exportData.imports?.length || 0,
+    });
+    res.json({ export: exportData });
+  }));
+
+  app.use(asyncRoute(async (req, _res, next) => {
+    await requireAccountNotDeleting(req, store);
     next();
   }));
 
@@ -1484,7 +1606,11 @@ function createApp({ store, config = {}, observability = createObservability(con
     } else {
       warnWorkflow(req, 'api request rejected', { statusCode, errorCategory: error.name || 'request_error' });
     }
-    res.status(statusCode).json({ error: error.message, requestId: req.context?.requestId });
+    res.status(statusCode).json({
+      error: error.message,
+      requestId: req.context?.requestId,
+      ...(error.deletion ? { deletion: error.deletion } : {}),
+    });
   });
 
   return app;
