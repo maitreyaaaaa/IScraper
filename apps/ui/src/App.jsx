@@ -2984,7 +2984,16 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
 
   const loadItems = useCallback(async () => {
     const body = await getItems();
-    setItems((body.items || []).map(mapItem));
+    const nextItems = (body.items || []).map(mapItem);
+    const itemsById = new Map(nextItems.map((item) => [item.id, item]));
+    setItems(nextItems);
+    setSelected((current) => (current ? itemsById.get(current.id) || current : current));
+    setSearchResults((current) => (current
+      ? current.map((entry) => {
+          const updated = itemsById.get(entry.id);
+          return updated ? { ...updated, searchMatch: entry.searchMatch } : entry;
+        })
+      : current));
   }, []);
 
   const loadControls = useCallback(async () => {

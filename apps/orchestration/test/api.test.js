@@ -1096,7 +1096,7 @@ test('GET /api/indexing/summary returns aggregate indexing counts', async () => 
   }
 });
 
-test('POST /api/worker/process requires a worker key and processes queued scopes', async () => {
+test('worker process endpoints require a worker key and process bounded queued scopes', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const app = createApp({
@@ -1123,6 +1123,7 @@ test('POST /api/worker/process requires a worker key and processes queued scopes
         collections: [],
         items: [
           { id: 'worker-a', url: 'https://example.com/queued', contentType: 'unknown', caption: 'Queued', hashtags: [], collections: [] },
+          { id: 'worker-b', url: 'https://example.com/queued-b', contentType: 'unknown', caption: 'Queued B', hashtags: [], collections: [] },
         ],
       },
     });
@@ -1134,18 +1135,20 @@ test('POST /api/worker/process requires a worker key and processes queued scopes
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ maxJobs: 1 }),
     });
-    const allowed = await fetch(`http://127.0.0.1:${port}/api/worker/process`, {
+    const allowed = await fetch(`http://127.0.0.1:${port}/api/worker/process-one`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-worker-api-key': 'worker-secret' },
-      body: JSON.stringify({ maxJobs: 1, download: false }),
+      body: JSON.stringify({ maxJobs: 5, download: false }),
     });
     const body = await allowed.json();
-    const job = store.getJobs('local-dev-user', importEntry.id)[0];
+    const jobs = store.getJobs('local-dev-user', importEntry.id);
 
     assert.equal(denied.status, 403);
     assert.equal(allowed.status, 200);
     assert.equal(body.scopeCount, 1);
-    assert.equal(job.status, 'paused_missing_provider');
+    assert.equal(body.processedCount, 0);
+    assert.equal(jobs.filter((job) => job.status === 'paused_missing_provider').length, 1);
+    assert.equal(jobs.filter((job) => job.status === 'queued').length, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });

@@ -748,7 +748,8 @@ function createApp({ store, config = {}, observability = createObservability(con
     if (typeof store.getProcessableJobScopes !== 'function') return res.status(501).json({ error: 'Worker job discovery is not available.' });
 
     const workerBatchCap = Math.max(1, Math.min(Number(config.workerBatchSize) || 2, 5));
-    const requestedMaxJobs = Number(req.body?.maxJobs || req.query?.maxJobs) || workerBatchCap;
+    const oneJobRoute = req.path === '/api/worker/process-one';
+    const requestedMaxJobs = oneJobRoute ? 1 : Number(req.body?.maxJobs || req.query?.maxJobs) || workerBatchCap;
     const maxJobs = Math.max(1, Math.min(requestedMaxJobs, workerBatchCap));
     const downloadValue = req.body?.download ?? req.query?.download;
     const scopes = await store.getProcessableJobScopes({
@@ -1073,6 +1074,8 @@ function createApp({ store, config = {}, observability = createObservability(con
 
   app.get('/api/worker/process', workerRateLimit, workerProcessHandler);
   app.post('/api/worker/process', workerRateLimit, workerProcessHandler);
+  app.get('/api/worker/process-one', workerRateLimit, workerProcessHandler);
+  app.post('/api/worker/process-one', workerRateLimit, workerProcessHandler);
 
   app.post('/api/lens/search', searchRateLimit, asyncRoute(async (req, res) => {
     const user = await getExtensionUser(req, store, 'lens:search');
