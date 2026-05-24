@@ -3585,7 +3585,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     indexingActivity={indexingActivity}
                     activationState={activationState}
                     onOpenAdd={() => selectTab('upload')}
-                    onTrySearch={tryActivationSearch}
                     searchAi={searchMeta.ai}
                     searchFeedback={searchMeta.feedback}
                     onSearchFeedback={handleSearchFeedback}
@@ -4649,117 +4648,6 @@ function IndexingProgressCard({ activity }) {
   );
 }
 
-function FirstRunActivationCard({ activation, onOpenAdd, onTrySearch }) {
-  const steps = [
-    {
-      key: 'add',
-      title: 'Add',
-      copy: activation.total ? `${formatUsageNumber(activation.total)} saved` : 'Paste a link or upload an export',
-      icon: Upload,
-      state: activation.total > 0 ? 'done' : 'current',
-    },
-    {
-      key: 'approve',
-      title: 'Approve',
-      copy: activation.needsReview ? `${formatUsageNumber(activation.needsReview)} waiting` : 'Ready for search',
-      icon: CheckCircle2,
-      state: activation.total === 0 ? 'upcoming' : activation.needsReview > 0 ? 'current' : 'done',
-    },
-    {
-      key: 'search',
-      title: 'Search',
-      copy: activation.searchable ? `${formatUsageNumber(activation.searchable)} searchable now` : 'Appears after approval',
-      icon: Search,
-      state: activation.searchable > 0 ? 'done' : 'upcoming',
-    },
-  ];
-  const cta = activation.total === 0
-    ? { label: 'Add a save', action: onOpenAdd, icon: Upload }
-    : activation.needsReview > 0 && activation.searchable === 0
-      ? { label: 'Review saves', action: onOpenAdd, icon: CheckCircle2 }
-      : activation.searchable > 0
-        ? { label: activation.searchQuery ? `Search "${activation.searchQuery}"` : 'Search library', action: () => onTrySearch(activation.searchQuery), icon: Search }
-        : { label: 'Add a save', action: onOpenAdd, icon: Upload };
-  const CtaIcon = cta.icon;
-
-  return (
-    <section className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">First run</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Save, approve, then search.</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            Approved saves are searchable from metadata right away. Opening a save adds richer visual, OCR, and transcript signals as indexing finishes.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={cta.action}
-          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]"
-        >
-          <CtaIcon className="h-4 w-4" /> {cta.label}
-        </button>
-      </div>
-      <div className="mt-5 grid gap-3 md:grid-cols-3">
-        {steps.map(({ key, title, copy, icon: Icon, state }) => (
-          <div
-            key={key}
-            className={`rounded-xl border p-4 ${
-              state === 'done'
-                ? 'border-primary/30 bg-black/40'
-                : state === 'current'
-                  ? 'border-accent/50 bg-accent/10'
-                  : 'border-white/10 bg-black/30'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <span className={`grid h-9 w-9 place-items-center rounded-full ${state === 'upcoming' ? 'bg-white/10 text-muted-foreground' : 'bg-primary text-primary-foreground'}`}>
-                <Icon className="h-4 w-4" />
-              </span>
-              <div className="min-w-0">
-                <div className="text-sm font-semibold">{title}</div>
-                <div className="truncate text-xs text-muted-foreground">{copy}</div>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function SearchabilityStatusCard({ activation }) {
-  const statuses = [
-    ['Searchable now', activation.searchable, 'Captions, notes, titles, collections, and source metadata.'],
-    ['Still indexing', activation.indexing, 'Visual descriptions, OCR, and transcripts are being added.'],
-    ['Needs approval', activation.needsReview, 'These stay out of search until you approve them.'],
-    ['Enriched', activation.enriched, 'These have text or visual indexing beyond basic metadata.'],
-  ];
-
-  return (
-    <section className="mt-5 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
-      <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Search readiness</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">What can show up right now</h2>
-        </div>
-        <p className="max-w-xl text-sm leading-6 text-muted-foreground">
-          Metadata search is available after approval. Enrichment improves ranking and citations as each save is opened and indexed.
-        </p>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {statuses.map(([label, value, copy]) => (
-          <div key={label} className="rounded-xl border border-white/10 bg-black/40 p-4">
-            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">{label}</div>
-            <div className="mt-2 font-display text-3xl font-bold">{formatUsageNumber(value)}</div>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">{copy}</p>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function ImportHealthPanel({ health, pendingReviewCount, indexingActivity }) {
   const healthMeta = {
     waiting: { icon: FileText, color: 'text-muted-foreground', label: 'Waiting' },
@@ -4834,7 +4722,6 @@ function LibraryTab({
   indexingActivity,
   activationState,
   onOpenAdd,
-  onTrySearch,
   onSearchFeedback,
 }) {
   const boardRef = useRef(null);
@@ -4870,10 +4757,6 @@ function LibraryTab({
 
   return (
     <div className="mx-auto max-w-[1480px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
-      <div className="mb-5">
-        <FirstRunActivationCard activation={activationState} onOpenAdd={onOpenAdd} onTrySearch={onTrySearch} />
-      </div>
-
       <div className="mb-7">
         <form
           onSubmit={(event) => {
@@ -4947,8 +4830,6 @@ function LibraryTab({
       </div>
 
       <IndexingProgressCard activity={indexingActivity} />
-
-      <SearchabilityStatusCard activation={activationState} />
 
       {searchActive && (
         <SearchAiPanel ai={searchAi} items={items} onSelect={onSelect} />
@@ -5322,8 +5203,6 @@ function UploadTab({
           <FileText className="h-4 w-4" /> How to Use
         </button>
       </div>
-
-      <FirstRunActivationCard activation={activationState} onOpenAdd={() => linkInputRef.current?.focus()} onTrySearch={onTrySearch} />
 
       <form onSubmit={onCreateNote} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
