@@ -3225,6 +3225,172 @@ function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, ico
   );
 }
 
+function LibraryFilterGroup({ label, value, options, onChange, active, onOpen, onClose }) {
+  return (
+    <section className="relative">
+      <button
+        type="button"
+        aria-expanded={active}
+        onClick={onOpen}
+        onFocus={onOpen}
+        onMouseEnter={onOpen}
+        className={`flex min-h-12 w-full items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left transition ${
+          active
+            ? 'border-primary/70 bg-white/[0.04] text-foreground'
+            : 'border-white/10 text-muted-foreground hover:border-primary/60 hover:bg-white/[0.03] hover:text-foreground'
+        }`}
+      >
+        <span className="min-w-0">
+          <span className="block font-mono text-[9px] uppercase tracking-[0.18em] text-primary/80">{label}</span>
+          <span className="mt-1 block truncate text-xs font-semibold">{filterLabel(value)}</span>
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 transition ${active ? 'rotate-90 text-primary' : ''}`} />
+      </button>
+
+      <div
+        className={`absolute right-[calc(100%+0.55rem)] top-0 z-[240] max-h-72 w-56 overflow-y-auto rounded-2xl border border-primary/30 bg-black/95 p-2 shadow-[0_24px_80px_rgba(0,0,0,0.75)] backdrop-blur transition duration-150 ${
+          active ? 'pointer-events-auto translate-x-0 opacity-100' : 'pointer-events-none translate-x-2 opacity-0'
+        }`}
+      >
+        <div className="mb-1 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.18em] text-primary">{label}</div>
+        <div className="grid gap-1">
+          {options.map((option) => {
+            const selected = option === value;
+            return (
+              <button
+                key={option}
+                type="button"
+                onClick={() => {
+                  onChange(option);
+                  onClose();
+                }}
+                className={`flex min-h-9 items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-xs font-semibold transition ${
+                  selected ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                }`}
+              >
+                <span className="truncate">{filterLabel(option)}</span>
+                {selected && <Check className="h-3.5 w-3.5 shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function LibraryFilterMenu({
+  activeFilters,
+  typeFilter,
+  setTypeFilter,
+  stateFilter,
+  setStateFilter,
+  platformFilter,
+  setPlatformFilter,
+  platforms,
+  collectionFilter,
+  setCollectionFilter,
+  collections,
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeGroup, setActiveGroup] = useState('');
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOnOutside = (event) => {
+      if (!menuRef.current?.contains(event.target)) {
+        setActiveGroup('');
+        setOpen(false);
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        setActiveGroup('');
+        setOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  const filterGroups = [
+    { id: 'type', label: 'Type', value: typeFilter, options: TYPE_FILTERS, onChange: setTypeFilter },
+    { id: 'status', label: 'Status', value: stateFilter, options: STATE_FILTERS, onChange: setStateFilter },
+    { id: 'platform', label: 'Platform', value: platformFilter, options: platforms, onChange: setPlatformFilter },
+    { id: 'collection', label: 'Collection', value: collectionFilter, options: collections, onChange: setCollectionFilter },
+  ];
+
+  const clearFilters = () => {
+    setTypeFilter('all');
+    setStateFilter('all');
+    setPlatformFilter('all');
+    setCollectionFilter('all');
+  };
+
+  const toggleMenu = () => {
+    if (open) setActiveGroup('');
+    setOpen((current) => !current);
+  };
+
+  return (
+    <div ref={menuRef} className="relative z-[120]">
+      <button
+        type="button"
+        aria-label="Open library filters"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={toggleMenu}
+        className={`relative grid h-11 w-11 place-items-center rounded-full border bg-black transition ${
+          open || activeFilters > 0 ? 'border-primary text-primary' : 'border-white/10 text-muted-foreground hover:border-primary/70 hover:text-primary'
+        }`}
+      >
+        <Filter className="h-4 w-4" />
+        {activeFilters > 0 && (
+          <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+            {activeFilters}
+          </span>
+        )}
+      </button>
+
+      <div
+        role="dialog"
+        aria-label="Library filters"
+        className={`absolute right-0 top-[calc(100%+0.6rem)] z-[220] w-64 rounded-2xl border border-white/10 bg-black/95 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.75)] backdrop-blur transition duration-200 ${
+          open ? 'pointer-events-auto translate-y-0 scale-100 opacity-100' : 'pointer-events-none -translate-y-2 scale-[0.98] opacity-0'
+        }`}
+      >
+        <div className="mb-3 flex items-center justify-between gap-3 border-b border-white/10 pb-3">
+          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-primary">Filters</div>
+          {activeFilters > 0 && (
+            <button type="button" onClick={clearFilters} className="text-xs font-semibold text-muted-foreground transition hover:text-foreground">
+              Clear
+            </button>
+          )}
+        </div>
+        <div className="grid gap-2">
+          {filterGroups.map((group) => (
+            <LibraryFilterGroup
+              key={group.id}
+              label={group.label}
+              value={group.value}
+              options={group.options}
+              onChange={group.onChange}
+              active={activeGroup === group.id}
+              onOpen={() => setActiveGroup(group.id)}
+              onClose={() => setActiveGroup('')}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [tab, setTab] = useState(() => dashboardTabFromLocation());
   const [query, setQuery] = useState('');
@@ -6837,7 +7003,7 @@ function LibraryTab({
         </div>
       )}
 
-      <div className="mx-auto mt-4 max-w-[760px] rounded-2xl border border-white/10 bg-black/75 px-3 py-3 backdrop-blur">
+      <div className="mt-4 w-full">
         <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
           <span className="shrink-0 leading-5">
             {items.length} shown from {totalCount || items.length} saves
@@ -6851,45 +7017,20 @@ function LibraryTab({
             <Filter className="h-4 w-4 text-primary" />
             Filters {activeFilters > 0 ? `(${activeFilters})` : ''}
           </button>
-          <div className="hidden max-w-[560px] flex-wrap justify-end gap-2 md:flex">
+          <div className="hidden items-center justify-end gap-2 md:ml-auto md:flex">
             <LibraryLayoutControl value={libraryLayout} onChange={setLibraryLayout} />
-            <DashboardFilterSelect
-              label="Type"
-              ariaLabel="Filter by content type"
-              icon={Filter}
-              value={typeFilter}
-              options={TYPE_FILTERS}
-              onChange={(nextType) => {
-                  setTypeFilter(nextType);
-                }}
-            />
-            <DashboardFilterSelect
-              label="Status"
-              ariaLabel="Filter by status"
-              icon={CheckCircle2}
-              value={stateFilter}
-              options={STATE_FILTERS}
-              onChange={(nextState) => {
-                  setStateFilter(nextState);
-                }}
-            />
-            <DashboardFilterSelect
-              label="Platform"
-              ariaLabel="Filter by platform"
-              value={platformFilter}
-              options={platforms}
-              onChange={(nextPlatform) => {
-                  setPlatformFilter(nextPlatform);
-                }}
-            />
-            <DashboardFilterSelect
-              label="Collection"
-              ariaLabel="Filter by collection"
-              value={collectionFilter}
-              options={collections}
-              onChange={(nextCollection) => {
-                  setCollectionFilter(nextCollection);
-                }}
+            <LibraryFilterMenu
+              activeFilters={activeFilters}
+              typeFilter={typeFilter}
+              setTypeFilter={setTypeFilter}
+              stateFilter={stateFilter}
+              setStateFilter={setStateFilter}
+              platformFilter={platformFilter}
+              setPlatformFilter={setPlatformFilter}
+              platforms={platforms}
+              collectionFilter={collectionFilter}
+              setCollectionFilter={setCollectionFilter}
+              collections={collections}
             />
             <DashboardFilterSelect
               label="Sort"
@@ -6901,7 +7042,6 @@ function LibraryTab({
                   setSortOrder(nextSort);
                 }}
             />
-            {activeFilters > 0 && <span className="rounded-full bg-primary px-3 py-2 text-primary-foreground">{activeFilters} active</span>}
           </div>
         </div>
       </div>
