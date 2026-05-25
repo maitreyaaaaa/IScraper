@@ -12,6 +12,8 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  Columns2,
+  Columns3,
   Copy,
   Database,
   Download,
@@ -24,6 +26,7 @@ import {
   Hash,
   KeyRound,
   LifeBuoy,
+  List,
   Loader2,
   Lock,
   Mail,
@@ -110,6 +113,13 @@ const STALE_ENRICHMENT_UI_MS = 15 * 60 * 1000;
 const TYPE_FILTERS = ['all', 'uploaded', 'links', 'notes'];
 const STATE_FILTERS = ['all', 'needs_review', 'searchable', 'enriched', 'failed'];
 const SORT_OPTIONS = ['newest', 'oldest', 'updated', 'title'];
+const LIBRARY_LAYOUT_STORAGE_KEY = 'iscraper.libraryLayout.v1';
+const LIBRARY_LAYOUT_OPTIONS = ['grid-2', 'grid-3', 'list'];
+const LIBRARY_LAYOUT_ITEMS = [
+  { value: 'grid-2', label: '2 columns', shortLabel: '2', icon: Columns2 },
+  { value: 'grid-3', label: '3 columns', shortLabel: '3', icon: Columns3 },
+  { value: 'list', label: 'List', shortLabel: 'List', icon: List },
+];
 const NOTE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const MAX_NOTE_IMAGES = 5;
 const MAX_NOTE_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -567,8 +577,23 @@ function filterLabel(value) {
     oldest: 'Oldest',
     updated: 'Recently updated',
     title: 'Title',
+    'grid-2': '2 columns',
+    'grid-3': '3 columns',
+    list: 'List',
   };
   return labels[value] || String(value || '').replace(/_/g, ' ');
+}
+
+function normalizeLibraryLayout(value) {
+  return LIBRARY_LAYOUT_OPTIONS.includes(value) ? value : 'grid-3';
+}
+
+function readStoredLibraryLayout() {
+  try {
+    return normalizeLibraryLayout(window.localStorage.getItem(LIBRARY_LAYOUT_STORAGE_KEY));
+  } catch {
+    return 'grid-3';
+  }
 }
 
 function firstLine(value = '') {
@@ -3046,6 +3071,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [sortOrder, setSortOrder] = useState('newest');
   const [collectionFilter, setCollectionFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
+  const [libraryLayout, setLibraryLayout] = useState(() => readStoredLibraryLayout());
   const [items, setItems] = useState([]);
   const [libraryItems, setLibraryItems] = useState([]);
   const [libraryTotalCount, setLibraryTotalCount] = useState(0);
@@ -3111,6 +3137,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setNotice('');
     return false;
   }, [authEnabled, profileRequired, session]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LIBRARY_LAYOUT_STORAGE_KEY, normalizeLibraryLayout(libraryLayout));
+    } catch {
+      // Layout preference is cosmetic; ignore private-mode storage failures.
+    }
+  }, [libraryLayout]);
 
   const loadItems = useCallback(async () => {
     const body = await getItems();
@@ -4026,6 +4060,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     platformFilter={platformFilter}
                     setPlatformFilter={setPlatformFilter}
                     platforms={platforms}
+                    libraryLayout={libraryLayout}
+                    setLibraryLayout={setLibraryLayout}
                     onSelect={openDetail}
                     indexingActivity={indexingActivity}
                     activationState={activationState}
@@ -5813,6 +5849,31 @@ function MobileFiltersSheet({ open, onClose, groups, activeFilters }) {
   );
 }
 
+function LibraryLayoutControl({ value, onChange }) {
+  return (
+    <div className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-black p-1" aria-label="Library layout">
+      {LIBRARY_LAYOUT_ITEMS.map(({ value: option, shortLabel, icon: Icon }) => {
+        const selected = value === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={selected}
+            title={filterLabel(option)}
+            onClick={() => onChange(option)}
+            className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full px-3 text-xs font-semibold transition ${
+              selected ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/10 hover:text-foreground'
+            }`}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            <span>{shortLabel}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function LibraryTab({
   items,
   totalCount,
@@ -5837,6 +5898,8 @@ function LibraryTab({
   platformFilter,
   setPlatformFilter,
   platforms,
+  libraryLayout,
+  setLibraryLayout,
   onSelect,
   indexingActivity,
   activationState,
@@ -5858,7 +5921,8 @@ function LibraryTab({
     { label: 'Platform', value: platformFilter, options: platforms, onChange: updateFilter(setPlatformFilter) },
     { label: 'Collection', value: collectionFilter, options: collections, onChange: updateFilter(setCollectionFilter) },
     { label: 'Sort', value: sortOrder, options: SORT_OPTIONS, onChange: updateFilter(setSortOrder) },
-  ], [collectionFilter, collections, platformFilter, platforms, sortOrder, stateFilter, typeFilter, updateFilter, setCollectionFilter, setPlatformFilter, setSortOrder, setStateFilter, setTypeFilter]);
+    { label: 'Layout', value: libraryLayout, options: LIBRARY_LAYOUT_OPTIONS, onChange: updateFilter(setLibraryLayout) },
+  ], [collectionFilter, collections, libraryLayout, platformFilter, platforms, sortOrder, stateFilter, typeFilter, updateFilter, setCollectionFilter, setLibraryLayout, setPlatformFilter, setSortOrder, setStateFilter, setTypeFilter]);
 
   return (
     <div className="mx-auto max-w-[1480px] px-4 pb-28 pt-8 sm:px-6 md:px-10 md:py-12">
@@ -5942,6 +6006,7 @@ function LibraryTab({
             Filters {activeFilters > 0 ? `(${activeFilters})` : ''}
           </button>
           <div className="hidden flex-wrap gap-2 md:flex">
+            <LibraryLayoutControl value={libraryLayout} onChange={setLibraryLayout} />
             <DashboardFilterSelect
               label="Type"
               ariaLabel="Filter by content type"
@@ -6046,20 +6111,33 @@ function LibraryTab({
           <VirtualLibraryGrid
             items={items}
             scrollRef={scrollRef}
+            layoutMode={libraryLayout}
             hasMore={hasMore}
             loadingMore={loadingMore}
             onLoadMore={onLoadMore}
             renderItem={(item, index, cardHeight) => (
-              <PinCard
-                key={item.id}
-                item={item}
-                index={index}
-                height={cardHeight}
-                onClick={onSelect}
-                searchActive={searchActive}
-                feedback={searchFeedback?.[item.id]}
-                onSearchFeedback={onSearchFeedback}
-              />
+              libraryLayout === 'list' ? (
+                <LibraryListRow
+                  key={item.id}
+                  item={item}
+                  height={cardHeight}
+                  onClick={onSelect}
+                  searchActive={searchActive}
+                  feedback={searchFeedback?.[item.id]}
+                  onSearchFeedback={onSearchFeedback}
+                />
+              ) : (
+                <PinCard
+                  key={item.id}
+                  item={item}
+                  index={index}
+                  height={cardHeight}
+                  onClick={onSelect}
+                  searchActive={searchActive}
+                  feedback={searchFeedback?.[item.id]}
+                  onSearchFeedback={onSearchFeedback}
+                />
+              )
             )}
           />
         )}
@@ -6184,6 +6262,113 @@ function SearchResultFeedback({ itemId, value, onVote }) {
     </div>
   );
 }
+
+function CompactSearchResultFeedback({ itemId, value, onVote }) {
+  const saving = value?.status === 'saving';
+  const saved = value?.status === 'saved';
+  const failed = value?.status === 'failed';
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <span className={`hidden text-[11px] sm:inline ${failed ? 'text-destructive' : 'text-muted-foreground'}`}>
+        {saving ? 'Saving' : saved ? 'Saved' : failed ? 'Failed' : 'Result'}
+      </span>
+      <div className="flex gap-1">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onVote(itemId, 'helpful');
+          }}
+          disabled={saving}
+          className={`grid h-8 w-8 place-items-center rounded-full border border-white/10 transition hover:border-primary hover:text-primary ${value?.rating === 'helpful' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
+          aria-label="Mark this result helpful"
+        >
+          <ThumbsUp className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onVote(itemId, 'not_helpful');
+          }}
+          disabled={saving}
+          className={`grid h-8 w-8 place-items-center rounded-full border border-white/10 transition hover:border-destructive hover:text-destructive ${value?.rating === 'not_helpful' ? 'bg-destructive text-white' : 'text-muted-foreground'}`}
+          aria-label="Mark this result not helpful"
+        >
+          <ThumbsDown className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const LibraryListRow = memo(function LibraryListRow({ item, height = 172, onClick, searchActive = false, feedback = null, onSearchFeedback = null }) {
+  const card = item.card || cardViewForItem(item);
+  const { capture, note, meta } = card;
+  const Icon = meta.icon;
+  const searchReason = searchActive ? firstSearchReason(item) : '';
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onClick(item)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onClick(item);
+        }
+      }}
+      className="group grid w-full grid-cols-[1fr_auto] gap-4 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-left shadow-[0_10px_28px_rgba(0,0,0,0.20)] transition-colors hover:border-primary/60 hover:bg-white/[0.055]"
+      style={{ height, contain: 'layout paint style' }}
+      data-library-list-row="true"
+    >
+      <div className="min-w-0">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="rounded-full border border-white/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-primary">
+            {capture ? 'Screen Capture' : note ? 'My Note' : item.platform}
+          </span>
+          {card.chip && (
+            <span className="max-w-[11rem] truncate rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-muted-foreground">
+              {card.chip}
+            </span>
+          )}
+          {card.statusLabel && (
+            <span className={`inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider ${meta.color}`}>
+              <Icon className={`h-3 w-3 ${item.indexingStage === 'visual_indexing' ? 'animate-spin' : ''}`} />
+              {card.statusLabel}
+            </span>
+          )}
+        </div>
+        <h3 className="truncate font-display text-xl font-bold tracking-tight text-foreground md:text-2xl">{card.title}</h3>
+        <div className="mt-1 truncate font-mono text-xs text-primary">{card.source}</div>
+        <p className="mt-2 line-clamp-2 text-sm leading-5 text-muted-foreground">{searchReason || card.preview}</p>
+      </div>
+      <div className="flex min-w-0 shrink-0 flex-col items-end justify-between gap-3">
+        {item.thumbnailUrl ? (
+          <img
+            src={item.thumbnailUrl}
+            alt=""
+            className="h-16 w-16 rounded-xl object-cover opacity-85 sm:h-20 sm:w-20"
+            loading="lazy"
+            decoding="async"
+            width="96"
+            height="96"
+          />
+        ) : (
+          <div className="grid h-16 w-16 place-items-center rounded-xl border border-white/10 bg-white/[0.035] text-muted-foreground sm:h-20 sm:w-20">
+            {note ? <FileText className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+          </div>
+        )}
+        {searchActive && onSearchFeedback ? (
+          <CompactSearchResultFeedback itemId={item.id} value={feedback} onVote={onSearchFeedback} />
+        ) : (
+          <ExternalLink className="h-3.5 w-3.5 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
+        )}
+      </div>
+    </div>
+  );
+});
 
 const PinCard = memo(function PinCard({ item, index, height = 420, onClick, searchActive = false, feedback = null, onSearchFeedback = null }) {
   const card = item.card || cardViewForItem(item);

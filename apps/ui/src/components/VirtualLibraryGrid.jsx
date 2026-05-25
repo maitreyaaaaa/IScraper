@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
-function columnCountForWidth(width) {
+function columnCountForWidth(width, layoutMode) {
+  if (layoutMode === 'list') return 1;
+  if (layoutMode === 'grid-2') return width >= 640 ? 2 : 1;
   if (width >= 1536) return 4;
   if (width >= 1024) return 3;
   if (width >= 640) return 2;
   return 1;
 }
 
-function cardHeightForColumns(columns) {
+function cardHeightForLayout(layoutMode, columns) {
+  if (layoutMode === 'list') return 172;
+  if (layoutMode === 'grid-2' && columns === 2) return 500;
   if (columns >= 3) return 430;
   if (columns === 2) return 410;
   return 380;
@@ -18,6 +22,7 @@ export default function VirtualLibraryGrid({
   items,
   scrollRef,
   renderItem,
+  layoutMode = 'grid-3',
   hasMore = false,
   loadingMore = false,
   onLoadMore,
@@ -36,9 +41,9 @@ export default function VirtualLibraryGrid({
     return () => observer.disconnect();
   }, []);
 
-  const columns = columnCountForWidth(width);
-  const rowGap = 20;
-  const cardHeight = cardHeightForColumns(columns);
+  const columns = columnCountForWidth(width, layoutMode);
+  const rowGap = layoutMode === 'list' ? 12 : 20;
+  const cardHeight = cardHeightForLayout(layoutMode, columns);
   const rowHeight = cardHeight + rowGap;
   const rowCount = Math.ceil(items.length / columns);
 
@@ -63,12 +68,12 @@ export default function VirtualLibraryGrid({
   }, [hasMore, loadingMore, onLoadMore, rowCount, virtualRows]);
 
   return (
-    <div ref={parentRef} className="relative w-full" data-mounted-card-count={virtualRows.length * columns}>
+    <div ref={parentRef} className="relative w-full" data-mounted-card-count={virtualRows.length * columns} data-library-layout={layoutMode}>
       <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
         {virtualRows.map((virtualRow) => (
           <div
             key={virtualRow.key}
-            className="absolute left-0 top-0 grid w-full gap-5"
+            className={`absolute left-0 top-0 grid w-full ${layoutMode === 'list' ? 'gap-3' : 'gap-5'}`}
             style={{
               gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
               height: cardHeight,
