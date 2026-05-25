@@ -27,6 +27,12 @@ const { publicExtensionToken } = require('../services/extensionTokens');
 const { ACTIVE_DELETION_STATUSES, hashDeletionValue } = require('../services/accountDeletion');
 const { publicNoteAsset } = require('../services/notes');
 const { listItemsPageFromItems } = require('../services/itemList');
+const {
+  DEFAULT_VISIBLE_COLLECTIONS_LIMIT,
+  generateSmartCollectionCandidates,
+  publicSmartCollection,
+  sortSmartCollections,
+} = require('../services/smartCollections');
 
 const DEFAULT_USER_ID = 'local-dev-user';
 
@@ -71,6 +77,8 @@ function seedFromLegacyIndex(dataPath) {
     extensionTokens: [],
     lensSearchEvents: [],
     itemAssets: [],
+    smartCollections: [],
+    smartCollectionItems: [],
     accountDeletionRequests: [],
     accountDeletionSteps: [],
     accountDeletionAudit: [],
@@ -130,6 +138,8 @@ function emptyState() {
     extensionTokens: [],
     lensSearchEvents: [],
     itemAssets: [],
+    smartCollections: [],
+    smartCollectionItems: [],
     accountDeletionRequests: [],
     accountDeletionSteps: [],
     accountDeletionAudit: [],
@@ -157,6 +167,8 @@ function normalizeState(state) {
     extensionTokens: state.extensionTokens || [],
     lensSearchEvents: state.lensSearchEvents || [],
     itemAssets: state.itemAssets || [],
+    smartCollections: state.smartCollections || [],
+    smartCollectionItems: state.smartCollectionItems || [],
     accountDeletionRequests: state.accountDeletionRequests || [],
     accountDeletionSteps: state.accountDeletionSteps || [],
     accountDeletionAudit: state.accountDeletionAudit || [],
@@ -251,6 +263,31 @@ function createLocalStore({ dataPath }) {
       error.statusCode = 410;
       throw error;
     }
+  }
+
+  function smartCollectionItemMap(userId) {
+    return new Map(state.items
+      .filter((item) => item.userId === userId)
+      .map((item) => [item.id, hydrateLocalItem(state, item)]));
+  }
+
+  function publicLocalSmartCollection(collection) {
+    const memberships = state.smartCollectionItems.filter((entry) => (
+      entry.userId === collection.userId && entry.collectionId === collection.id
+    ));
+    return publicSmartCollection(collection, memberships, smartCollectionItemMap(collection.userId));
+  }
+
+  function activeSmartCollectionItemIds(userId, collectionId) {
+    const active = new Set();
+    const excluded = new Set();
+    for (const entry of state.smartCollectionItems) {
+      if (entry.userId !== userId || entry.collectionId !== collectionId) continue;
+      if (entry.source === 'manual_exclude') excluded.add(entry.itemId);
+      else active.add(entry.itemId);
+    }
+    for (const itemId of excluded) active.delete(itemId);
+    return active;
   }
 
   function mapDeletionRequest(request) {
@@ -467,6 +504,8 @@ function createLocalStore({ dataPath }) {
         jobs: deleteFromArrayByUser('jobs', userId),
         items: deleteFromArrayByUser('items', userId),
         collections: deleteFromArrayByUser('collections', userId),
+        smartCollections: deleteFromArrayByUser('smartCollections', userId),
+        smartCollectionItems: deleteFromArrayByUser('smartCollectionItems', userId),
         imports: deleteFromArrayByUser('imports', userId),
         lensSearchEvents: deleteFromArrayByUser('lensSearchEvents', userId),
         searchEvents: deleteFromArrayByUser('searchEvents', userId),
@@ -542,6 +581,8 @@ function createLocalStore({ dataPath }) {
         items: this.getItems(userId),
         imports: state.imports.filter((entry) => entry.userId === userId),
         collections: state.collections.filter((entry) => entry.userId === userId),
+        smartCollections: state.smartCollections.filter((entry) => entry.userId === userId),
+        smartCollectionItems: state.smartCollectionItems.filter((entry) => entry.userId === userId),
         credits: this.getCredits(userId),
         providerCredentials: this.listProviderCredentials(userId),
         extensionTokens: state.extensionTokens.filter((entry) => entry.userId === userId).map(publicExtensionToken),
@@ -923,6 +964,7 @@ function createLocalStore({ dataPath }) {
       state.jobs = state.jobs.filter((job) => !(job.userId === userId && job.itemId === id));
       state.searchFeedback = state.searchFeedback.filter((entry) => !(entry.userId === userId && entry.itemId === id));
       state.itemAssets = state.itemAssets.filter((asset) => !(asset.userId === userId && asset.itemId === id));
+      state.smartCollectionItems = state.smartCollectionItems.filter((entry) => !(entry.userId === userId && entry.itemId === id));
       save();
       return hydrateLocalItem(state, removed);
     },
@@ -941,6 +983,139 @@ function createLocalStore({ dataPath }) {
 
     listItemsPage(userId, options = {}) {
       return listItemsPageFromItems(this.getItems(userId), options);
+    },
+
+    refreshSmartCollections(userId) {
+      const generatedAt = now();
+      const candidates = generateSmartCollectionCandidates(this.getItems(userId));
+      const collectionIds = [];
+
+      for (const candidate of candidates) {
+        let collection = state.smartCollections.find((entry) => entry.userId === userId && entry.slug === candidate.slug);
+        if (!collection) {
+          collection = {
+            id: `smart-${crypto.randomUUID()}`,
+            userId,
+            name: candidate.name,
+            description: candidate.description,
+            slug: candidate.slug,
+            sourceType: candidate.sourceType,
+            pinned: false,
+            hidden: false,
+            generationMetadata: candidate.generationMetadata || {},
+            createdAt: generatedAt,
+            updatedAt: generatedAt,
+          };
+          state.smartCollections.push(collection);
+        } else {
+          collection.sourceType = candidate.sourceType;
+          collection.generationMetadata = candidate.generationMetadata || {};
+          collection.updatedAt = generatedAt;
+        }
+        collectionIds.push(collection.id);
+      }
+
+      if (collectionIds.length) {
+        const collectionIdSet = new Set(collectionIds);
+        state.smartCollectionItems = state.smartCollectionItems.filter((entry) => (
+          !(entry.userId === userId && collectionIdSet.has(entry.collectionId) && entry.source === 'auto')
+        ));
+      }
+
+      const manualExcludes = new Set(state.smartCollectionItems
+        .filter((entry) => entry.userId === userId && entry.source === 'manual_exclude')
+        .map((entry) => `${entry.collectionId}:${entry.itemId}`));
+      const existingMemberships = new Set(state.smartCollectionItems
+        .filter((entry) => entry.userId === userId)
+        .map((entry) => `${entry.collectionId}:${entry.itemId}:${entry.source}`));
+
+      for (const candidate of candidates) {
+        const collection = state.smartCollections.find((entry) => entry.userId === userId && entry.slug === candidate.slug);
+        if (!collection) continue;
+        for (const item of candidate.items) {
+          if (manualExcludes.has(`${collection.id}:${item.itemId}`)) continue;
+          const key = `${collection.id}:${item.itemId}:auto`;
+          if (existingMemberships.has(key)) continue;
+          existingMemberships.add(key);
+          state.smartCollectionItems.push({
+            id: `smart-item-${crypto.randomUUID()}`,
+            userId,
+            collectionId: collection.id,
+            itemId: item.itemId,
+            confidence: item.confidence,
+            reason: item.reason,
+            source: 'auto',
+            createdAt: generatedAt,
+            updatedAt: generatedAt,
+          });
+        }
+      }
+
+      save();
+      return this.listSmartCollections(userId);
+    },
+
+    listSmartCollections(userId, { limit = DEFAULT_VISIBLE_COLLECTIONS_LIMIT, includeHidden = false } = {}) {
+      const visible = state.smartCollections
+        .filter((collection) => collection.userId === userId && (includeHidden || !collection.hidden))
+        .map(publicLocalSmartCollection)
+        .filter((collection) => collection.itemCount > 0);
+      return sortSmartCollections(visible).slice(0, Math.max(1, Math.min(Number(limit) || DEFAULT_VISIBLE_COLLECTIONS_LIMIT, 100)));
+    },
+
+    listSmartCollectionItems(userId, collectionId, options = {}) {
+      const collection = state.smartCollections.find((entry) => entry.userId === userId && entry.id === collectionId);
+      if (!collection) return null;
+      const itemIds = activeSmartCollectionItemIds(userId, collectionId);
+      const items = this.getItems(userId).filter((item) => itemIds.has(item.id));
+      const page = listItemsPageFromItems(items, options);
+      return {
+        collection: publicLocalSmartCollection(collection),
+        ...page,
+      };
+    },
+
+    updateSmartCollection(userId, id, patch = {}) {
+      const collection = state.smartCollections.find((entry) => entry.userId === userId && entry.id === id);
+      if (!collection) return null;
+      if (Object.prototype.hasOwnProperty.call(patch, 'name')) {
+        const name = String(patch.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        if (name) collection.name = name;
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'description')) {
+        collection.description = String(patch.description || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'pinned')) collection.pinned = Boolean(patch.pinned);
+      if (Object.prototype.hasOwnProperty.call(patch, 'hidden')) collection.hidden = Boolean(patch.hidden);
+      collection.updatedAt = now();
+      save();
+      return publicLocalSmartCollection(collection);
+    },
+
+    setSmartCollectionItemOverride(userId, collectionId, itemId, action = 'exclude') {
+      const collection = state.smartCollections.find((entry) => entry.userId === userId && entry.id === collectionId);
+      const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
+      if (!collection || !item) return null;
+      const normalizedAction = ['include', 'exclude', 'auto'].includes(action) ? action : 'exclude';
+      state.smartCollectionItems = state.smartCollectionItems.filter((entry) => (
+        !(entry.userId === userId && entry.collectionId === collectionId && entry.itemId === itemId && entry.source !== 'auto')
+      ));
+      if (normalizedAction !== 'auto') {
+        const source = normalizedAction === 'include' ? 'manual_include' : 'manual_exclude';
+        state.smartCollectionItems.push({
+          id: `smart-item-${crypto.randomUUID()}`,
+          userId,
+          collectionId,
+          itemId,
+          confidence: 1,
+          reason: normalizedAction === 'include' ? 'Added by you.' : 'Removed by you.',
+          source,
+          createdAt: now(),
+          updatedAt: now(),
+        });
+      }
+      save();
+      return publicLocalSmartCollection(collection);
     },
 
     getItem(userId, id) {
@@ -1108,6 +1283,7 @@ function createLocalStore({ dataPath }) {
       item.status = 'done';
       item.updatedAt = now();
       save();
+      this.refreshSmartCollections(userId);
       return item;
     },
 

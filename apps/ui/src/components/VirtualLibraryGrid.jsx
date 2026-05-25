@@ -3,6 +3,13 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 
 function columnCountForWidth(width, layoutMode) {
   if (layoutMode === 'list') return 1;
+  if (layoutMode === 'gallery') {
+    if (width >= 1536) return 5;
+    if (width >= 1180) return 4;
+    if (width >= 820) return 3;
+    if (width >= 560) return 2;
+    return 1;
+  }
   if (layoutMode === 'grid-2') return width >= 640 ? 2 : 1;
   if (width >= 1536) return 4;
   if (width >= 900) return 3;
@@ -12,6 +19,12 @@ function columnCountForWidth(width, layoutMode) {
 
 function cardHeightForLayout(layoutMode, columns) {
   if (layoutMode === 'list') return 172;
+  if (layoutMode === 'gallery') {
+    if (columns >= 5) return 360;
+    if (columns >= 3) return 380;
+    if (columns === 2) return 400;
+    return 420;
+  }
   if (layoutMode === 'grid-2' && columns === 2) return 500;
   if (columns >= 3) return 430;
   if (columns === 2) return 410;

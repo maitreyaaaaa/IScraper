@@ -76,6 +76,48 @@ export function getItemsPage(params = {}) {
   return getItems({ limit: 60, ...params });
 }
 
+export function getSmartCollections(params = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === '' || value === false) continue;
+    query.set(key, String(value));
+  }
+  return request(`/smart-collections${query.toString() ? `?${query}` : ''}`);
+}
+
+export function refreshSmartCollections() {
+  return request('/smart-collections/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
+export function getSmartCollectionItems(id, params = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === '' || value === 'all') continue;
+    query.set(key, String(value));
+  }
+  return request(`/smart-collections/${id}/items${query.toString() ? `?${query}` : ''}`);
+}
+
+export function updateSmartCollection(id, payload) {
+  return request(`/smart-collections/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function setSmartCollectionItemOverride(id, itemId, action) {
+  return request(`/smart-collections/${id}/items/${itemId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  });
+}
+
 export function getPrivacyExportData() {
   return request('/privacy-export');
 }

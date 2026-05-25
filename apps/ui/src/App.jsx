@@ -22,8 +22,10 @@ import {
   Eye,
   FileText,
   Filter,
+  Folder,
   GitBranch,
   Hash,
+  Images,
   KeyRound,
   LifeBuoy,
   List,
@@ -73,16 +75,22 @@ import {
   enrichItem,
   revealProviderCredential,
   requestAccountDeletion,
+  getSmartCollectionItems,
+  getSmartCollections,
+  refreshSmartCollections,
   saveLink,
   saveProfile,
   saveProviderCredential,
   searchItems,
+  setSmartCollectionItemOverride,
   setApiAccessToken,
   submitSearchFeedback,
   submitPublicFeedback,
   testProviderCredential,
+  updateSmartCollection,
   updateReviewItem,
 } from './api';
+import SmartCollectionsView from './components/SmartCollectionsView';
 import VirtualLibraryGrid from './components/VirtualLibraryGrid';
 import { identifyPostHogUser, resetPostHogUser } from './posthog';
 import { supabase } from './supabaseClient';
@@ -114,10 +122,11 @@ const TYPE_FILTERS = ['all', 'uploaded', 'links', 'notes'];
 const STATE_FILTERS = ['all', 'needs_review', 'searchable', 'enriched', 'failed'];
 const SORT_OPTIONS = ['newest', 'oldest'];
 const LIBRARY_LAYOUT_STORAGE_KEY = 'iscraper.libraryLayout.v1';
-const LIBRARY_LAYOUT_OPTIONS = ['grid-2', 'grid-3', 'list'];
+const LIBRARY_LAYOUT_OPTIONS = ['grid-2', 'grid-3', 'gallery', 'list'];
 const LIBRARY_LAYOUT_ITEMS = [
   { value: 'grid-2', label: '2 columns', shortLabel: '2', icon: Columns2 },
   { value: 'grid-3', label: '3 columns', shortLabel: '3', icon: Columns3 },
+  { value: 'gallery', label: 'Gallery', shortLabel: 'Gallery', icon: Images },
   { value: 'list', label: 'List', shortLabel: 'List', icon: List },
 ];
 const NOTE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
@@ -579,6 +588,7 @@ function filterLabel(value) {
     title: 'Title',
     'grid-2': '2 columns',
     'grid-3': '3 columns',
+    gallery: 'Gallery',
     list: 'List',
   };
   return labels[value] || String(value || '').replace(/_/g, ' ');
@@ -891,7 +901,7 @@ function itemIdFromLocation() {
 
 function dashboardTabFromLocation() {
   const tab = appParamsFromLocation().get('tab');
-  return ['library', 'graph', 'upload', 'settings'].includes(tab) ? tab : 'library';
+  return ['library', 'gallery', 'smart', 'graph', 'upload', 'settings'].includes(tab) ? tab : 'library';
 }
 
 function cleanAuthCallbackUrl() {
@@ -3049,6 +3059,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [libraryNextCursor, setLibraryNextCursor] = useState(null);
   const [libraryFacets, setLibraryFacets] = useState({ collections: ['all'], platforms: ['all'] });
   const [libraryLoading, setLibraryLoading] = useState(false);
+  const [smartCollections, setSmartCollections] = useState([]);
+  const [smartCollectionsLoading, setSmartCollectionsLoading] = useState(false);
+  const [selectedSmartCollection, setSelectedSmartCollection] = useState(null);
+  const [smartCollectionItems, setSmartCollectionItems] = useState([]);
+  const [smartCollectionItemsLoading, setSmartCollectionItemsLoading] = useState(false);
   const [indexingSummary, setIndexingSummary] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
   const [searchMeta, setSearchMeta] = useState({ eventId: '', ai: null, feedback: {} });
@@ -3164,6 +3179,48 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   }, [collectionFilter, platformFilter, sortOrder, stateFilter, typeFilter]);
 
+  const mapSmartCollection = useCallback((collection) => ({
+    ...collection,
+    previewItems: (collection.previewItems || []).map(mapItem),
+  }), []);
+
+  const loadSmartCollections = useCallback(async () => {
+    setSmartCollectionsLoading(true);
+    try {
+      const body = await getSmartCollections();
+      const nextCollections = (body.collections || []).map(mapSmartCollection);
+      setSmartCollections(nextCollections);
+      setSelectedSmartCollection((current) => {
+        if (!current) return nextCollections[0] || null;
+        return nextCollections.find((collection) => collection.id === current.id) || nextCollections[0] || null;
+      });
+      return nextCollections;
+    } catch (err) {
+      setError(err.message);
+      return [];
+    } finally {
+      setSmartCollectionsLoading(false);
+    }
+  }, [mapSmartCollection]);
+
+  const loadSmartCollectionItems = useCallback(async (collectionId) => {
+    if (!collectionId) {
+      setSmartCollectionItems([]);
+      return;
+    }
+    setSmartCollectionItemsLoading(true);
+    try {
+      const body = await getSmartCollectionItems(collectionId, { limit: 60 });
+      setSmartCollectionItems((body.items || []).map(mapItem));
+      if (body.collection) setSelectedSmartCollection(mapSmartCollection(body.collection));
+    } catch (err) {
+      setError(err.message);
+      setSmartCollectionItems([]);
+    } finally {
+      setSmartCollectionItemsLoading(false);
+    }
+  }, [mapSmartCollection]);
+
   const loadControls = useCallback(async () => {
     const credentialBody = await getProviderCredentials();
     setCredentials(credentialBody.credentials || []);
@@ -3235,6 +3292,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setLibraryItems([]);
           setLibraryTotalCount(0);
           setLibraryNextCursor(null);
+          setSmartCollections([]);
+          setSelectedSmartCollection(null);
+          setSmartCollectionItems([]);
           setSearchResults(null);
           setCredentials([]);
           setLoading(false);
@@ -3252,6 +3312,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setLibraryItems([]);
         setLibraryTotalCount(0);
         setLibraryNextCursor(null);
+        setSmartCollections([]);
+        setSelectedSmartCollection(null);
+        setSmartCollectionItems([]);
         setSearchResults(null);
         setCredentials([]);
         setProfile(null);
@@ -3288,6 +3351,16 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (!canUsePrivateActions || searchResults !== null) return;
     loadLibraryPage({ reset: true });
   }, [canUsePrivateActions, loadLibraryPage, searchResults]);
+
+  useEffect(() => {
+    if (!canUsePrivateActions || tab !== 'smart') return;
+    loadSmartCollections();
+  }, [canUsePrivateActions, loadSmartCollections, tab]);
+
+  useEffect(() => {
+    if (!canUsePrivateActions || tab !== 'smart') return;
+    loadSmartCollectionItems(selectedSmartCollection?.id);
+  }, [canUsePrivateActions, loadSmartCollectionItems, selectedSmartCollection?.id, tab]);
 
   useEffect(() => {
     if (!canUsePrivateActions || pendingExtensionConnectHandledRef.current) return;
@@ -3494,7 +3567,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setNotice(duplicate ? 'That link was already in your library.' : queued ? 'Link saved to your Library and queued for indexing.' : 'Link saved to your Library.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
-      await Promise.all([loadItems(), loadLibraryPage({ reset: true })]);
+      await Promise.all([loadItems(), loadLibraryPage({ reset: true }), loadSmartCollections()]);
       options.onSuccess?.();
       return true;
     } catch (err) {
@@ -3503,7 +3576,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     } finally {
       setBusy(false);
     }
-  }, [linkForm, loadItems, loadLibraryPage, requireProfile, requireSignIn]);
+  }, [linkForm, loadItems, loadLibraryPage, loadSmartCollections, requireProfile, requireSignIn]);
 
   const handleCreateNote = useCallback(async (event, options = {}) => {
     event.preventDefault();
@@ -3529,6 +3602,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       replaceAppTabUrl('library');
       setTypeFilter('notes');
       setNotice('Note saved to Library.');
+      await loadSmartCollections();
       options.onSuccess?.();
       return true;
     } catch (err) {
@@ -3537,7 +3611,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     } finally {
       setBusy(false);
     }
-  }, [noteForm, requireProfile, requireSignIn]);
+  }, [loadSmartCollections, noteForm, requireProfile, requireSignIn]);
 
   useEffect(() => {
     if (pendingSaveHandledRef.current || loading || (authEnabled && (!session || profileRequired))) return;
@@ -3614,7 +3688,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         const skippedCount = result.skippedDuplicateCount ?? 0;
         setNotice(`Added ${newCount} new saves. ${skippedCount} already existed.`);
       }
-      await Promise.all([loadItems(), loadLibraryPage({ reset: true })]);
+      await Promise.all([loadItems(), loadLibraryPage({ reset: true }), loadSmartCollections()]);
       return true;
     } catch (err) {
       setError(err.message);
@@ -3657,6 +3731,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
       setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
       setNotice('Added to Library.');
+      await loadSmartCollections();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -3726,8 +3801,71 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   };
 
+  const handleSmartRefresh = useCallback(async () => {
+    if (!requireSignIn('refresh Smart Collections')) return;
+    if (!requireProfile('refresh Smart Collections')) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await refreshSmartCollections();
+      const nextCollections = (body.collections || []).map(mapSmartCollection);
+      setSmartCollections(nextCollections);
+      setSelectedSmartCollection((current) => (
+        current ? nextCollections.find((collection) => collection.id === current.id) || nextCollections[0] || null : nextCollections[0] || null
+      ));
+      setNotice('Smart Collections refreshed.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [mapSmartCollection, requireProfile, requireSignIn]);
+
+  const handleSmartUpdate = useCallback(async (id, patch) => {
+    if (!requireSignIn('edit Smart Collections')) return;
+    if (!requireProfile('edit Smart Collections')) return;
+    setBusy(true);
+    setError('');
+    try {
+      const body = await updateSmartCollection(id, patch);
+      const nextCollection = mapSmartCollection(body.collection);
+      setSmartCollections((current) => {
+        const next = current
+          .map((collection) => (collection.id === id ? nextCollection : collection))
+          .filter((collection) => !collection.hidden);
+        return next.length ? next : current.filter((collection) => collection.id !== id);
+      });
+      setSelectedSmartCollection((current) => (current?.id === id ? (nextCollection.hidden ? null : nextCollection) : current));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [mapSmartCollection, requireProfile, requireSignIn]);
+
+  const handleSmartRemoveItem = useCallback(async (collectionId, itemId) => {
+    if (!requireSignIn('edit Smart Collections')) return;
+    if (!requireProfile('edit Smart Collections')) return;
+    setBusy(true);
+    setError('');
+    try {
+      const body = await setSmartCollectionItemOverride(collectionId, itemId, 'exclude');
+      const nextCollection = mapSmartCollection(body.collection);
+      setSmartCollections((current) => current.map((collection) => (collection.id === collectionId ? nextCollection : collection)));
+      setSelectedSmartCollection((current) => (current?.id === collectionId ? nextCollection : current));
+      await loadSmartCollectionItems(collectionId);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [loadSmartCollectionItems, mapSmartCollection, requireProfile, requireSignIn]);
+
   const navItems = [
     ['library', 'Saved library', Brain],
+    ['gallery', 'Gallery', Images],
+    ['smart', 'Smart Collections', Folder],
     ['upload', 'Add saves', Upload],
   ];
   const advancedNavItems = [
@@ -3740,7 +3878,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const advancedExpanded = sidebarVisibleExpanded && (advancedOpen || advancedActive);
 
   const selectTab = useCallback((nextTab) => {
-    if (!['library', 'graph', 'upload', 'settings'].includes(nextTab)) return;
+    if (!['library', 'gallery', 'smart', 'graph', 'upload', 'settings'].includes(nextTab)) return;
     setTab(nextTab);
     replaceAppTabUrl(nextTab);
     resetPageScroll();
@@ -4075,6 +4213,93 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     onLoadMore={() => {
                       if (!libraryLoading && libraryNextCursor) loadLibraryPage({ cursor: libraryNextCursor });
                     }}
+                  />
+                )}
+                {authEnabled && !session && tab === 'gallery' && (
+                  <AuthRequiredPanel
+                    title="Sign in to view Gallery."
+                    copy="Gallery is a private visual view of your saved library."
+                    busy={busy}
+                    onSignIn={onOpenLogin}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'gallery' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'gallery' && (
+                  <GalleryTab
+                    items={filtered}
+                    totalCount={searchActive ? items.length : libraryTotalCount}
+                    searchActive={searchActive}
+                    searchResultCount={boardItems.length}
+                    query={query}
+                    onClearSearch={() => {
+                      activeSearchRef.current += 1;
+                      setSearchResults(null);
+                      setSearchMeta({ eventId: '', ai: null, feedback: {} });
+                      setQuery('');
+                    }}
+                    typeFilter={typeFilter}
+                    setTypeFilter={setTypeFilter}
+                    stateFilter={stateFilter}
+                    setStateFilter={setStateFilter}
+                    sortOrder={sortOrder}
+                    setSortOrder={setSortOrder}
+                    collectionFilter={collectionFilter}
+                    setCollectionFilter={setCollectionFilter}
+                    collections={collections}
+                    platformFilter={platformFilter}
+                    setPlatformFilter={setPlatformFilter}
+                    platforms={platforms}
+                    onSelect={openDetail}
+                    indexingActivity={indexingActivity}
+                    activationState={activationState}
+                    onOpenAdd={() => selectTab('upload')}
+                    onOpenLibrarySearch={() => selectTab('library')}
+                    scrollRef={dashPanelRef}
+                    hasMore={!searchActive && Boolean(libraryNextCursor)}
+                    loadingMore={libraryLoading}
+                    onLoadMore={() => {
+                      if (!libraryLoading && libraryNextCursor) loadLibraryPage({ cursor: libraryNextCursor });
+                    }}
+                  />
+                )}
+                {authEnabled && !session && tab === 'smart' && (
+                  <AuthRequiredPanel
+                    title="Sign in to view Smart Collections."
+                    copy="Smart Collections are built from your private saved library."
+                    busy={busy}
+                    onSignIn={onOpenLogin}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'smart' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'smart' && (
+                  <SmartCollectionsView
+                    collections={smartCollections}
+                    selectedCollection={selectedSmartCollection}
+                    items={smartCollectionItems}
+                    loading={smartCollectionsLoading}
+                    itemsLoading={smartCollectionItemsLoading}
+                    busy={busy}
+                    onRefresh={handleSmartRefresh}
+                    onSelectCollection={setSelectedSmartCollection}
+                    onUpdateCollection={handleSmartUpdate}
+                    onRemoveItem={handleSmartRemoveItem}
+                    onOpenItem={openDetail}
                   />
                 )}
                 {authEnabled && !session && tab === 'graph' && (
@@ -5536,14 +5761,17 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
           </button>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {[
           ['library', 'Library'],
-          ['upload', 'Add saves'],
+          ['gallery', 'Gallery'],
+          ['smart', 'Smart'],
+          ['upload', 'Add'],
         ].map(([key, label]) => (
           <button
             key={key}
             onClick={() => setTab(key)}
+            aria-current={tab === key ? 'page' : undefined}
             className={`rounded-lg px-3 py-2 text-xs ${tab === key ? 'bg-primary text-primary-foreground' : 'border border-white/10 text-muted-foreground'}`}
           >
             {label}
@@ -6119,6 +6347,16 @@ function LibraryTab({
                   feedback={searchFeedback?.[item.id]}
                   onSearchFeedback={onSearchFeedback}
                 />
+              ) : libraryLayout === 'gallery' ? (
+                <GalleryCard
+                  key={item.id}
+                  item={item}
+                  height={cardHeight}
+                  onClick={onSelect}
+                  searchActive={searchActive}
+                  feedback={searchFeedback?.[item.id]}
+                  onSearchFeedback={onSearchFeedback}
+                />
               ) : (
                 <PinCard
                   key={item.id}
@@ -6131,6 +6369,218 @@ function LibraryTab({
                   onSearchFeedback={onSearchFeedback}
                 />
               )
+            )}
+          />
+        )}
+      </div>
+
+      {hasMore && (
+        <div className="mt-4 flex justify-center">
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="rounded-full border border-white/10 bg-white/[0.04] px-6 py-3 text-sm font-semibold transition hover:border-primary hover:text-primary"
+          >
+            {loadingMore ? 'Loading...' : 'Show more saves'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GalleryTab({
+  items,
+  totalCount,
+  searchActive,
+  searchResultCount,
+  query,
+  onClearSearch,
+  typeFilter,
+  setTypeFilter,
+  stateFilter,
+  setStateFilter,
+  sortOrder,
+  setSortOrder,
+  collectionFilter,
+  setCollectionFilter,
+  collections,
+  platformFilter,
+  setPlatformFilter,
+  platforms,
+  onSelect,
+  indexingActivity,
+  activationState,
+  onOpenAdd,
+  onOpenLibrarySearch,
+  scrollRef,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
+}) {
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeFilters = (typeFilter !== 'all' ? 1 : 0) + (stateFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
+  const visualPreviewCount = items.filter((item) => Boolean(item.thumbnailUrl)).length;
+  const pendingPreviewCount = Math.max(0, items.length - visualPreviewCount);
+  const updateFilter = useCallback((setter) => (value) => {
+    setter(value);
+  }, []);
+  const mobileFilterGroups = useMemo(() => [
+    { label: 'Type', value: typeFilter, options: TYPE_FILTERS, onChange: updateFilter(setTypeFilter) },
+    { label: 'Status', value: stateFilter, options: STATE_FILTERS, onChange: updateFilter(setStateFilter) },
+    { label: 'Platform', value: platformFilter, options: platforms, onChange: updateFilter(setPlatformFilter) },
+    { label: 'Collection', value: collectionFilter, options: collections, onChange: updateFilter(setCollectionFilter) },
+    { label: 'Sort', value: sortOrder, options: SORT_OPTIONS, onChange: updateFilter(setSortOrder) },
+  ], [collectionFilter, collections, platformFilter, platforms, sortOrder, stateFilter, typeFilter, updateFilter, setCollectionFilter, setPlatformFilter, setSortOrder, setStateFilter, setTypeFilter]);
+
+  return (
+    <div className="mx-auto max-w-[1520px] px-4 pb-28 pt-8 sm:px-6 md:px-10 md:py-12">
+      <div className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+        <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="p-6 md:p-8">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+              <Images className="h-3.5 w-3.5" />
+              Private visual view
+            </div>
+            <h1 className="font-display text-4xl font-bold tracking-tight md:text-5xl">Gallery</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+              A visual board for screenshots, products, memes, UI references, and image-heavy saves from the same private library.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2 text-xs">
+              <span className="rounded-full border border-white/10 bg-black px-3 py-2 text-muted-foreground">
+                {items.length} shown from {totalCount || items.length} saves
+              </span>
+              <span className="rounded-full border border-white/10 bg-black px-3 py-2 text-muted-foreground">
+                {visualPreviewCount} with previews
+              </span>
+              {pendingPreviewCount > 0 && (
+                <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-amber-200">
+                  {pendingPreviewCount} preview pending
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="border-t border-white/10 bg-black/30 p-6 md:p-8 lg:border-l lg:border-t-0">
+            <div className="flex h-full flex-col justify-between gap-5">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Creator board</div>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Open a card to inspect the original save, source, notes, collection, status, and full image preview.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenAdd}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+                >
+                  <Plus className="h-4 w-4" /> Add saves
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenLibrarySearch}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold text-foreground transition hover:border-primary"
+                >
+                  <Search className="h-4 w-4" /> Search library
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <IndexingProgressCard activity={indexingActivity} />
+
+      {searchActive && (
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/25 bg-primary/5 p-4 text-sm">
+          <span className="min-w-0 text-muted-foreground">
+            Showing Library search results{query ? ` for "${query}"` : ''}: {searchResultCount} matches.
+          </span>
+          <button
+            type="button"
+            onClick={onClearSearch}
+            className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-foreground transition hover:bg-white/5"
+          >
+            <X className="h-3.5 w-3.5" /> Clear search
+          </button>
+        </div>
+      )}
+
+      <div className="sticky top-0 z-20 -mx-4 mt-5 border-y border-white/5 bg-black/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:-mx-10 md:px-10">
+        <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
+          <span>
+            Visual board | {items.length} shown{activeFilters > 0 ? ` | ${activeFilters} filters active` : ''}
+          </span>
+          <button
+            type="button"
+            onClick={() => setFiltersOpen(true)}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-white/10 px-4 py-2 font-sans text-sm font-semibold text-foreground transition hover:border-primary md:hidden"
+          >
+            <Filter className="h-4 w-4 text-primary" />
+            Filters {activeFilters > 0 ? `(${activeFilters})` : ''}
+          </button>
+          <div className="hidden flex-wrap gap-2 md:flex">
+            <DashboardFilterSelect label="Type" ariaLabel="Filter by content type" icon={Filter} value={typeFilter} options={TYPE_FILTERS} onChange={setTypeFilter} />
+            <DashboardFilterSelect label="Status" ariaLabel="Filter by status" icon={CheckCircle2} value={stateFilter} options={STATE_FILTERS} onChange={setStateFilter} />
+            <DashboardFilterSelect label="Platform" ariaLabel="Filter by platform" value={platformFilter} options={platforms} onChange={setPlatformFilter} />
+            <DashboardFilterSelect label="Collection" ariaLabel="Filter by collection" value={collectionFilter} options={collections} onChange={setCollectionFilter} />
+            <DashboardFilterSelect label="Sort" ariaLabel="Sort gallery" icon={ChevronDown} value={sortOrder} options={SORT_OPTIONS} onChange={setSortOrder} />
+            {activeFilters > 0 && <span className="rounded-full bg-primary px-3 py-2 text-primary-foreground">{activeFilters} active</span>}
+          </div>
+        </div>
+      </div>
+
+      <MobileFiltersSheet open={filtersOpen} onClose={() => setFiltersOpen(false)} groups={mobileFilterGroups} activeFilters={activeFilters} />
+
+      <div className="mt-8">
+        {items.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center md:p-14">
+            <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary">
+              <Images className="h-5 w-5" />
+            </div>
+            <h3 className="mt-4 font-display text-2xl font-bold tracking-tight">
+              {searchActive && searchResultCount === 0
+                ? 'No visual matches yet'
+                : activeFilters > 0
+                  ? 'No saves match these filters'
+                  : activationState.needsReview
+                    ? 'Check one save to build your Gallery'
+                    : 'Add visual saves to start'}
+            </h3>
+            <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+              {searchActive && searchResultCount === 0
+                ? 'Clear the Library search or try another term from the Saved library tab.'
+                : activeFilters > 0
+                  ? 'Clear filters or switch back to All to see your visual board.'
+                  : activationState.needsReview
+                    ? 'Open Add saves, check one saved link, and add it to your Library.'
+                    : 'Paste a link, upload Instagram or Pinterest files, or create a note with images.'}
+            </p>
+            <button
+              type="button"
+              onClick={onOpenAdd}
+              className="mt-5 inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
+            >
+              <Upload className="h-4 w-4" /> Add saves
+            </button>
+          </div>
+        ) : (
+          <VirtualLibraryGrid
+            items={items}
+            scrollRef={scrollRef}
+            layoutMode="gallery"
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={onLoadMore}
+            renderItem={(item, index, cardHeight) => (
+              <GalleryCard
+                key={item.id}
+                item={item}
+                height={cardHeight}
+                onClick={onSelect}
+                searchActive={searchActive}
+              />
             )}
           />
         )}
@@ -6358,6 +6808,91 @@ const LibraryListRow = memo(function LibraryListRow({ item, height = 172, onClic
         ) : (
           <ExternalLink className="h-3.5 w-3.5 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
         )}
+      </div>
+    </div>
+  );
+});
+
+const GalleryCard = memo(function GalleryCard({ item, height = 380, onClick, searchActive = false, feedback = null, onSearchFeedback = null }) {
+  const card = item.card || cardViewForItem(item);
+  const { capture, note, meta } = card;
+  const Icon = meta.icon;
+  const searchReason = searchActive ? firstSearchReason(item) : '';
+  const hasPreview = Boolean(item.thumbnailUrl);
+  const statusText = item.sourceStatus === 'needs_review' ? 'Needs check' : card.statusLabel || (hasPreview ? 'Preview ready' : 'Preview pending');
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${card.title || 'saved item'} in Gallery`}
+      onClick={() => onClick(item)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onClick(item);
+        }
+      }}
+      className="group flex w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] text-left shadow-[0_12px_32px_rgba(0,0,0,0.24)] outline-none transition hover:border-primary/60 hover:bg-white/[0.055] focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/40"
+      style={{ height, contain: 'layout paint style' }}
+    >
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-[#10100f]">
+        {hasPreview ? (
+          <img
+            src={item.thumbnailUrl}
+            alt=""
+            className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.025]"
+            loading="lazy"
+            decoding="async"
+            width="420"
+            height="300"
+          />
+        ) : (
+          <div className="grid h-full place-items-center bg-[linear-gradient(135deg,#141414_0%,#20201d_48%,#111_100%)] p-6">
+            <div className="text-center">
+              <span className="mx-auto grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.045] text-primary">
+                {note ? <FileText className="h-5 w-5" /> : <Images className="h-5 w-5" />}
+              </span>
+              <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Preview pending</div>
+              <p className="mt-2 line-clamp-3 text-sm leading-5 text-foreground">{card.preview}</p>
+            </div>
+          </div>
+        )}
+        <div className="absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-wrap gap-2">
+          <span className="max-w-full rounded-full bg-black/75 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-white backdrop-blur">
+            <span className="block truncate">{capture ? 'Screen capture' : note ? 'My note' : item.platform}</span>
+          </span>
+          {card.imageCount > 1 && (
+            <span className="rounded-full bg-black/75 px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-white backdrop-blur">
+              {card.imageCount} images
+            </span>
+          )}
+        </div>
+        <div className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-white/85 text-black shadow-lg shadow-black/30">
+          <Icon className={`h-4 w-4 ${meta.icon === Loader2 ? 'animate-spin' : ''}`} />
+        </div>
+      </div>
+      <div className="flex min-h-[132px] flex-col p-4">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <span className="min-w-0 truncate font-mono text-[11px] uppercase tracking-[0.18em] text-primary">{card.source}</span>
+          <span className={`shrink-0 rounded-full border border-white/10 px-2 py-1 text-[10px] ${item.sourceStatus === 'needs_review' ? 'text-accent' : 'text-muted-foreground'}`}>
+            {statusText}
+          </span>
+        </div>
+        <h3 className="line-clamp-2 font-display text-xl font-bold leading-tight tracking-tight">{card.title}</h3>
+        <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{searchReason || card.preview}</p>
+        <div className="mt-auto flex items-center justify-between gap-3 pt-3">
+          {card.chip ? (
+            <span className="min-w-0 truncate rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-muted-foreground">{card.chip}</span>
+          ) : (
+            <span />
+          )}
+          {searchActive && onSearchFeedback ? (
+            <CompactSearchResultFeedback itemId={item.id} value={feedback} onVote={onSearchFeedback} />
+          ) : (
+            <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
+          )}
+        </div>
       </div>
     </div>
   );

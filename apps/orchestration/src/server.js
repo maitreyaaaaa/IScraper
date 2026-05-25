@@ -893,6 +893,16 @@ function createApp({ store, config = {}, observability = createObservability(con
     return { item: responseItem, enriched: false, queued: Boolean(jobs.length), queuedJobCount: jobs.length, jobs, indexing, reason };
   }
 
+  async function refreshSmartCollectionsForUser(userId) {
+    if (typeof store.refreshSmartCollections !== 'function') return [];
+    try {
+      return await store.refreshSmartCollections(userId);
+    } catch (error) {
+      console.warn('Smart Collections refresh failed:', error.message);
+      return [];
+    }
+  }
+
   app.locals.observability = observability;
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
@@ -1249,7 +1259,8 @@ function createApp({ store, config = {}, observability = createObservability(con
       newItemCount: items.length,
     });
 
-    res.status(201).json({
+    await refreshSmartCollectionsForUser(user.id);
+    return res.status(201).json({
       import: importEntry,
       item: items[0] || parsed.items[0],
       newItemCount: items.length,
@@ -1276,6 +1287,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       itemId: existing.id,
       importId: existing.importId,
     });
+    await refreshSmartCollectionsForUser(user.id);
     return res.json({ deleted: Boolean(deleted), itemId: existing.id });
   }));
 
@@ -1345,6 +1357,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       imageCount: item.assets?.length || 0,
       hasImageAnalysis: Boolean(item.analysis),
     });
+    await refreshSmartCollectionsForUser(user.id);
     return res.status(201).json({ item });
   }));
 
@@ -1363,6 +1376,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       itemId: existing.id,
       imageCount: assets.length,
     });
+    await refreshSmartCollectionsForUser(user.id);
     return res.json({ deleted: Boolean(deleted), itemId: existing.id });
   }));
 
@@ -1444,6 +1458,60 @@ function createApp({ store, config = {}, observability = createObservability(con
     return res.json({ items });
   }));
 
+  app.get('/api/smart-collections', asyncRoute(async (req, res) => {
+    if (typeof store.listSmartCollections !== 'function') return res.json({ collections: [] });
+    const collections = await store.listSmartCollections(req.user.id, {
+      limit: req.query.limit,
+      includeHidden: req.query.includeHidden === 'true',
+    });
+    return res.json({ collections });
+  }));
+
+  app.post('/api/smart-collections/refresh', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    const collections = await refreshSmartCollectionsForUser(req.user.id);
+    captureWorkflow(req, 'smart collections refreshed', { collectionCount: collections.length });
+    return res.json({ collections });
+  }));
+
+  app.get('/api/smart-collections/:id/items', asyncRoute(async (req, res) => {
+    if (typeof store.listSmartCollectionItems !== 'function') return res.status(501).json({ error: 'Smart Collections are not available.' });
+    const page = await store.listSmartCollectionItems(req.user.id, req.params.id, {
+      limit: req.query.limit,
+      cursor: req.query.cursor,
+      sort: req.query.sort,
+      type: req.query.type,
+      state: req.query.state,
+      collection: req.query.collection,
+      platform: req.query.platform,
+    });
+    if (!page) return res.status(404).json({ error: 'Smart Collection not found.' });
+    return res.json(page);
+  }));
+
+  app.patch('/api/smart-collections/:id', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.updateSmartCollection !== 'function') return res.status(501).json({ error: 'Smart Collections are not available.' });
+    const collection = await store.updateSmartCollection(req.user.id, req.params.id, req.body || {});
+    if (!collection) return res.status(404).json({ error: 'Smart Collection not found.' });
+    captureWorkflow(req, 'smart collection updated', { collectionId: req.params.id });
+    return res.json({ collection });
+  }));
+
+  app.post('/api/smart-collections/:id/items/:itemId', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.setSmartCollectionItemOverride !== 'function') return res.status(501).json({ error: 'Smart Collections are not available.' });
+    const collection = await store.setSmartCollectionItemOverride(
+      req.user.id,
+      req.params.id,
+      req.params.itemId,
+      req.body?.action,
+    );
+    if (!collection) return res.status(404).json({ error: 'Smart Collection or item not found.' });
+    captureWorkflow(req, 'smart collection item override updated', { collectionId: req.params.id, itemId: req.params.itemId, action: req.body?.action || 'exclude' });
+    return res.json({ collection });
+  }));
+
   app.post('/api/notes', noteUpload.array('images', MAX_NOTE_IMAGES), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     if (typeof store.createNoteItem !== 'function' || typeof store.addItemAsset !== 'function') {
@@ -1470,6 +1538,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       linkCount: input.links.length,
       imageCount: item.assets?.length || 0,
     });
+    await refreshSmartCollectionsForUser(req.user.id);
     return res.status(201).json({ item });
   }));
 
@@ -1523,6 +1592,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       imageCount: item.assets?.length || 0,
       removedImageCount: removedAssets.length,
     });
+    await refreshSmartCollectionsForUser(req.user.id);
     return res.json({ item });
   }));
 
@@ -1535,6 +1605,7 @@ function createApp({ store, config = {}, observability = createObservability(con
     const deleted = await store.deleteSavedItem(req.user.id, existing.id);
     await removeNoteAssetObjects({ store, config, assets });
     captureWorkflow(req, 'note deleted', { itemId: existing.id, imageCount: assets.length });
+    await refreshSmartCollectionsForUser(req.user.id);
     return res.json({ deleted: Boolean(deleted), itemId: existing.id });
   }));
 
@@ -1589,6 +1660,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       });
     }
 
+    await refreshSmartCollectionsForUser(req.user.id);
     return res.json({ item, queuedJobCount: jobs.length, jobs, indexing });
   }));
 
@@ -1627,6 +1699,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       });
     }
 
+    await refreshSmartCollectionsForUser(req.user.id);
     return res.json({
       message: jobs.length ? 'Saves queued for batch indexing.' : 'No saves are waiting for indexing.',
       approvedCount: items.length,
@@ -1853,7 +1926,8 @@ function createApp({ store, config = {}, observability = createObservability(con
       newItemCount: result.newItemCount,
       queuedJobCount: result.queuedJobCount,
     });
-    res.json(result);
+    await refreshSmartCollectionsForUser(req.user.id);
+    return res.json(result);
   }));
 
   app.post('/api/imports/upload-urls', importRateLimit, asyncRoute(async (req, res) => {
@@ -1943,7 +2017,8 @@ function createApp({ store, config = {}, observability = createObservability(con
       newItemCount: result.newItemCount,
       queuedJobCount: result.queuedJobCount,
     });
-    res.json(result);
+    await refreshSmartCollectionsForUser(req.user.id);
+    return res.json(result);
   }));
 
   app.post('/api/saves/link', importRateLimit, asyncRoute(async (req, res) => {
@@ -1974,7 +2049,8 @@ function createApp({ store, config = {}, observability = createObservability(con
       initialStatus,
     });
 
-    res.status(201).json({
+    await refreshSmartCollectionsForUser(req.user.id);
+    return res.status(201).json({
       import: importEntry,
       item: items[0] || parsed.items[0],
       newItemCount: items.length,
