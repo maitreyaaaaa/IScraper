@@ -118,6 +118,34 @@ export function setSmartCollectionItemOverride(id, itemId, action) {
   });
 }
 
+export function getLibraryCare() {
+  return request('/library-care');
+}
+
+export function checkLibraryLinks(limit = 20) {
+  return request('/library-care/check-links', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit }),
+  });
+}
+
+export function createItemReminder(id, payload) {
+  return request(`/items/${id}/reminders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateItemReminder(id, payload) {
+  return request(`/reminders/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getPrivacyExportData() {
   return request('/privacy-export');
 }
@@ -160,6 +188,14 @@ export function submitPublicFeedback(payload) {
 
 export function getItem(id) {
   return request(`/items/${id}`);
+}
+
+export function archiveItem(id) {
+  return request(`/items/${id}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
 }
 
 export function updateReviewItem(id, payload) {

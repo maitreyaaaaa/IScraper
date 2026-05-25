@@ -12,6 +12,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  Clock,
   Columns2,
   Columns3,
   Copy,
@@ -52,6 +53,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import {
+  archiveItem,
   approveReviewItem,
   cancelAccountDeletion,
   createExtensionToken,
@@ -89,6 +91,10 @@ import {
   testProviderCredential,
   updateSmartCollection,
   updateReviewItem,
+  checkLibraryLinks,
+  createItemReminder,
+  getLibraryCare,
+  updateItemReminder,
 } from './api';
 import SmartCollectionsView from './components/SmartCollectionsView';
 import VirtualLibraryGrid from './components/VirtualLibraryGrid';
@@ -468,6 +474,7 @@ function mapItem(item) {
     sourceDescription: item.sourceDescription || '',
     thumbnailUrl: item.thumbnailUrl || firstImageAsset?.url || '',
     assets: item.assets || [],
+    archive: normalizeArchive(item.archive),
     note: item.note || null,
     saved: item.savedAt || '',
     status: normalizeStatus(item.status || 'queued'),
@@ -483,6 +490,23 @@ function mapItem(item) {
   };
   mapped.card = cardViewForItem(mapped);
   return mapped;
+}
+
+function normalizeArchive(archive) {
+  if (!archive) return null;
+  return {
+    ...archive,
+    status: archive.status || 'failed',
+    title: archive.title || '',
+    siteName: archive.siteName || '',
+    excerpt: archive.excerpt || '',
+    contentText: archive.contentText || '',
+    errorCode: archive.errorCode || '',
+    errorMessage: archive.errorMessage || '',
+    capturedAt: archive.capturedAt || null,
+    textLength: Number(archive.textLength || 0),
+    byteSize: Number(archive.byteSize || 0),
+  };
 }
 
 function unique(values) {
@@ -901,7 +925,7 @@ function itemIdFromLocation() {
 
 function dashboardTabFromLocation() {
   const tab = appParamsFromLocation().get('tab');
-  return ['library', 'gallery', 'smart', 'graph', 'upload', 'settings'].includes(tab) ? tab : 'library';
+  return ['library', 'gallery', 'smart', 'care', 'graph', 'upload', 'settings'].includes(tab) ? tab : 'library';
 }
 
 function cleanAuthCallbackUrl() {
@@ -3064,6 +3088,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [selectedSmartCollection, setSelectedSmartCollection] = useState(null);
   const [smartCollectionItems, setSmartCollectionItems] = useState([]);
   const [smartCollectionItemsLoading, setSmartCollectionItemsLoading] = useState(false);
+  const [libraryCare, setLibraryCare] = useState(null);
+  const [libraryCareLoading, setLibraryCareLoading] = useState(false);
   const [indexingSummary, setIndexingSummary] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
   const [searchMeta, setSearchMeta] = useState({ eventId: '', ai: null, feedback: {} });
@@ -3221,6 +3247,20 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   }, [mapSmartCollection]);
 
+  const loadLibraryCare = useCallback(async () => {
+    setLibraryCareLoading(true);
+    try {
+      const body = await getLibraryCare();
+      setLibraryCare(body);
+      return body;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      setLibraryCareLoading(false);
+    }
+  }, []);
+
   const loadControls = useCallback(async () => {
     const credentialBody = await getProviderCredentials();
     setCredentials(credentialBody.credentials || []);
@@ -3245,6 +3285,81 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       return null;
     }
   }, [mergeUpdatedItem]);
+
+  const handleArchiveRetry = useCallback(async (item) => {
+    if (!item || !requireSignIn('save a readable copy')) return null;
+    if (!requireProfile('save a readable copy')) return null;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await archiveItem(item.id);
+      const nextItem = body.item ? mergeUpdatedItem(body.item) : null;
+      setNotice(body.archive?.status === 'ready' ? 'Readable copy saved.' : 'Could not save a readable copy for this site.');
+      return nextItem;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }, [mergeUpdatedItem, requireProfile, requireSignIn]);
+
+  const handleCheckLibraryLinks = useCallback(async () => {
+    if (!requireSignIn('check your library')) return;
+    if (!requireProfile('check your library')) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await checkLibraryLinks(20);
+      setLibraryCare(body);
+      const checked = body.checked?.length || 0;
+      setNotice(checked ? `Checked ${checked} saved links.` : 'Your recent link checks are up to date.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [requireProfile, requireSignIn]);
+
+  const handleCreateReminder = useCallback(async (item, preset = 'week') => {
+    if (!item || !requireSignIn('set reminders')) return null;
+    if (!requireProfile('set reminders')) return null;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await createItemReminder(item.id, { preset });
+      setNotice(preset === 'tomorrow' ? 'Reminder set for tomorrow.' : preset === 'month' ? 'Reminder set for next month.' : 'Reminder set for next week.');
+      await loadLibraryCare();
+      return body.reminder;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }, [loadLibraryCare, requireProfile, requireSignIn]);
+
+  const handleUpdateReminder = useCallback(async (reminderId, status = 'done') => {
+    if (!requireSignIn('update reminders')) return null;
+    if (!requireProfile('update reminders')) return null;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await updateItemReminder(reminderId, { status });
+      await loadLibraryCare();
+      setNotice(status === 'dismissed' ? 'Reminder hidden.' : 'Reminder completed.');
+      return body.reminder;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }, [loadLibraryCare, requireProfile, requireSignIn]);
 
   const applyProfileState = (nextProfile, required) => {
     setProfile(nextProfile || null);
@@ -3295,6 +3410,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setSmartCollections([]);
           setSelectedSmartCollection(null);
           setSmartCollectionItems([]);
+          setLibraryCare(null);
           setSearchResults(null);
           setCredentials([]);
           setLoading(false);
@@ -3315,6 +3431,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setSmartCollections([]);
         setSelectedSmartCollection(null);
         setSmartCollectionItems([]);
+        setLibraryCare(null);
         setSearchResults(null);
         setCredentials([]);
         setProfile(null);
@@ -3361,6 +3478,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (!canUsePrivateActions || tab !== 'smart') return;
     loadSmartCollectionItems(selectedSmartCollection?.id);
   }, [canUsePrivateActions, loadSmartCollectionItems, selectedSmartCollection?.id, tab]);
+
+  useEffect(() => {
+    if (!canUsePrivateActions || tab !== 'care') return;
+    loadLibraryCare();
+  }, [canUsePrivateActions, loadLibraryCare, tab]);
 
   useEffect(() => {
     if (!canUsePrivateActions || pendingExtensionConnectHandledRef.current) return;
@@ -3564,7 +3686,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const result = await saveLink({ ...payload, review: options.review === true, startProcessing: false });
       const duplicate = result.skippedDuplicateCount > 0;
       const queued = result.item?.status === 'queued' || result.queuedJobCount > 0;
-      setNotice(duplicate ? 'That link was already in your library.' : queued ? 'Link saved to your Library and queued for indexing.' : 'Link saved to your Library.');
+      const backingUp = result.item?.archive?.status === 'pending';
+      setNotice(duplicate
+        ? 'That link was already in your library.'
+        : backingUp
+          ? 'Link saved to your Library. Readable copy is saving in the background.'
+          : queued
+            ? 'Link saved to your Library and queued for indexing.'
+            : 'Link saved to your Library.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
       await Promise.all([loadItems(), loadLibraryPage({ reset: true }), loadSmartCollections()]);
@@ -3866,6 +3995,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     ['library', 'Saved library', Brain],
     ['gallery', 'Gallery', Images],
     ['smart', 'Smart Collections', Folder],
+    ['care', 'Library checkup', ShieldCheck],
     ['upload', 'Add saves', Upload],
   ];
   const advancedNavItems = [
@@ -3878,7 +4008,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const advancedExpanded = sidebarVisibleExpanded && (advancedOpen || advancedActive);
 
   const selectTab = useCallback((nextTab) => {
-    if (!['library', 'gallery', 'smart', 'graph', 'upload', 'settings'].includes(nextTab)) return;
+    if (!['library', 'gallery', 'smart', 'care', 'graph', 'upload', 'settings'].includes(nextTab)) return;
     setTab(nextTab);
     replaceAppTabUrl(nextTab);
     resetPageScroll();
@@ -4302,6 +4432,34 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     onOpenItem={openDetail}
                   />
                 )}
+                {authEnabled && !session && tab === 'care' && (
+                  <AuthRequiredPanel
+                    title="Sign in to check your library."
+                    copy="Library checkup works on your private saved links and reminders."
+                    busy={busy}
+                    onSignIn={onOpenLogin}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'care' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'care' && (
+                  <LibraryCheckupTab
+                    care={libraryCare}
+                    loading={libraryCareLoading}
+                    busy={busy}
+                    onCheckLinks={handleCheckLibraryLinks}
+                    onOpenItem={openDetail}
+                    onRemind={handleCreateReminder}
+                    onUpdateReminder={handleUpdateReminder}
+                  />
+                )}
                 {authEnabled && !session && tab === 'graph' && (
                   <AuthRequiredPanel
                     title="Sign in to view your graph."
@@ -4441,7 +4599,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           onError={setError}
         />
       )}
-      {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} busy={busy} />}
+      {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} onArchiveRetry={handleArchiveRetry} onRemind={handleCreateReminder} busy={busy} />}
       {accountSettingsOpen && (
         <AccountSettingsModal
           open
@@ -5738,6 +5896,203 @@ function QuickAddModal({
   );
 }
 
+function LibraryCheckupTab({ care, loading, busy, onCheckLinks, onOpenItem, onRemind, onUpdateReminder }) {
+  const cleanup = care?.cleanup || { duplicateGroups: [], brokenLinks: [], duplicateGroupCount: 0, brokenLinkCount: 0, checkedLinkCount: 0 };
+  const resurface = care?.resurface || { dueReminders: [], oldItems: [], weeklyItems: [], randomItem: null };
+  const oldSaves = resurface.oldItems || [];
+  const weeklyItems = resurface.weeklyItems || [];
+  const duplicateGroups = cleanup.duplicateGroups || [];
+  const brokenLinks = cleanup.brokenLinks || [];
+  const hasCleanResults = duplicateGroups.length > 0 || brokenLinks.length > 0;
+  return (
+    <div className="mx-auto max-w-[1320px] px-4 pb-28 pt-8 sm:px-6 md:px-10 md:py-12">
+      <div className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+        <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="p-6 md:p-8">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Library checkup
+            </div>
+            <h1 className="font-display text-4xl font-bold tracking-tight md:text-5xl">Clean up and rediscover</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+              Find possible duplicates, links that may not open, and older saves worth revisiting. Nothing changes unless you choose what to do.
+            </p>
+          </div>
+          <div className="border-t border-white/10 bg-black/30 p-6 md:p-8 lg:border-l lg:border-t-0">
+            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              <CheckupMetric icon={Copy} label="Possible duplicates" value={cleanup.duplicateGroupCount || 0} />
+              <CheckupMetric icon={ExternalLink} label="Links that may not open" value={cleanup.brokenLinkCount || 0} />
+              <CheckupMetric icon={Clock} label="Reminders ready" value={resurface.dueReminders?.length || 0} />
+            </div>
+            <button
+              type="button"
+              onClick={onCheckLinks}
+              disabled={busy || loading}
+              className="mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+            >
+              {busy || loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+              Check my library
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1fr_0.95fr]">
+        <section className="space-y-5">
+          <SectionHeader icon={ShieldCheck} title="Clean up your saved links" copy="Review possible duplicates and original links that may not open." />
+          {!hasCleanResults && (
+            <EmptyCheckup icon={CheckCircle2} title="Your library looks clean for now." copy="Run a check whenever you want to look for possible duplicates or links that may not open." />
+          )}
+          {duplicateGroups.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-foreground">Possible duplicates</h3>
+              {duplicateGroups.slice(0, 8).map((group) => (
+                <div key={group.id} className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-foreground">{group.title}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{group.duplicateCount + 1} saves from {group.host}</div>
+                    </div>
+                    <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-xs text-amber-200">Review first</span>
+                  </div>
+                  <div className="mt-4 grid gap-2">
+                    {group.items.map((item) => (
+                      <CareItemRow key={item.id} item={item} reason={item.id === group.keepItemId ? 'Oldest saved copy' : 'Possible extra copy'} onOpen={onOpenItem} onRemind={onRemind} busy={busy} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {brokenLinks.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-foreground">Links that may not open</h3>
+              {brokenLinks.slice(0, 10).map((entry) => (
+                <CareItemRow
+                  key={entry.itemId}
+                  item={entry.item}
+                  reason={entry.httpStatus ? `Original returned ${entry.httpStatus}` : 'The original page may be unavailable'}
+                  onOpen={onOpenItem}
+                  onRemind={onRemind}
+                  busy={busy}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-5">
+          <SectionHeader icon={Clock} title="Rediscover old saves" copy="Bring back useful things you saved but have not opened lately." />
+          {resurface.dueReminders?.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-foreground">Reminders ready</h3>
+              {resurface.dueReminders.map((entry) => (
+                <CareItemRow
+                  key={entry.id}
+                  item={entry.item}
+                  reason={`Reminder for ${formatUsageDate(entry.remindAt)}`}
+                  onOpen={onOpenItem}
+                  onRemind={onRemind}
+                  busy={busy}
+                  extraAction={(
+                    <button type="button" onClick={() => onUpdateReminder(entry.id, 'done')} disabled={busy} className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-foreground hover:border-primary disabled:opacity-60">
+                      Done
+                    </button>
+                  )}
+                />
+              ))}
+            </div>
+          )}
+          {resurface.randomItem && (
+            <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-primary">
+                <Zap className="h-4 w-4" /> Surprise me with an old save
+              </div>
+              <CareItemRow item={resurface.randomItem} reason="Picked for today" onOpen={onOpenItem} onRemind={onRemind} busy={busy} />
+            </div>
+          )}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-foreground">Saved 3+ months ago</h3>
+            {oldSaves.length ? oldSaves.map((item) => (
+              <CareItemRow key={item.id} item={item} reason="Saved 3+ months ago" onOpen={onOpenItem} onRemind={onRemind} busy={busy} />
+            )) : <EmptyCheckup icon={Clock} title="No older saves yet." copy="This section fills in as your library grows." />}
+          </div>
+          {weeklyItems.length > 0 && (
+            <details className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground">
+                <span>Show me a few old saves each week</span>
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              </summary>
+              <div className="mt-4 grid gap-2">
+                {weeklyItems.map((item) => (
+                  <CareItemRow key={item.id} item={item} reason="This week's rediscovery" onOpen={onOpenItem} onRemind={onRemind} busy={busy} />
+                ))}
+              </div>
+            </details>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function CheckupMetric({ icon: Icon, label, value }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/35 p-4">
+      <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+        <Icon className="h-3.5 w-3.5" /> {label}
+      </div>
+      <div className="font-display text-2xl font-bold text-foreground">{formatUsageNumber(value)}</div>
+    </div>
+  );
+}
+
+function SectionHeader({ icon: Icon, title, copy }) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-primary">
+        <Icon className="h-3.5 w-3.5" /> {title}
+      </div>
+      <p className="text-sm leading-6 text-muted-foreground">{copy}</p>
+    </div>
+  );
+}
+
+function EmptyCheckup({ icon: Icon, title, copy }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-white/10 p-6 text-center">
+      <Icon className="mx-auto h-5 w-5 text-primary" />
+      <div className="mt-3 text-sm font-semibold text-foreground">{title}</div>
+      <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">{copy}</p>
+    </div>
+  );
+}
+
+function CareItemRow({ item, reason, onOpen, onRemind, busy, extraAction = null }) {
+  if (!item) return null;
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/35 p-3 sm:flex-row sm:items-center">
+      <button type="button" onClick={() => onOpen?.(item)} className="min-w-0 flex-1 text-left">
+        <div className="truncate text-sm font-semibold text-foreground">{item.title || 'Untitled save'}</div>
+        <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+          <span>{reason}</span>
+          {item.collection ? <span>{item.collection}</span> : null}
+          {item.createdAt ? <span>Saved {formatUsageDate(item.createdAt)}</span> : null}
+        </div>
+      </button>
+      <div className="flex shrink-0 flex-wrap gap-2">
+        {extraAction}
+        <button type="button" onClick={() => onRemind?.(item, 'week')} disabled={busy} className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-foreground hover:border-primary disabled:opacity-60">
+          <Clock className="h-3 w-3" /> Remind me later
+        </button>
+        <button type="button" onClick={() => onOpen?.(item)} className="inline-flex items-center gap-2 rounded-full bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground">
+          Open <ArrowRight className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOpenAccount }) {
   const avatarUrl = avatarUrlForSession(session, profile);
   const initial = initialForSession(session, profile);
@@ -5761,11 +6116,12 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
           </button>
         )}
       </div>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-5 gap-2">
         {[
           ['library', 'Library'],
           ['gallery', 'Gallery'],
           ['smart', 'Smart'],
+          ['care', 'Check'],
           ['upload', 'Add'],
         ].map(([key, label]) => (
           <button
@@ -8368,7 +8724,7 @@ function buildDetailInsight(item) {
   };
 }
 
-function DetailDrawer({ item, onClose, onApprove, busy }) {
+function DetailDrawer({ item, onClose, onApprove, onArchiveRetry, onRemind, busy }) {
   const ref = useRef(null);
   const [assetPreview, setAssetPreview] = useState(null);
   const indexingMeta = INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
@@ -8424,6 +8780,8 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
                 Open original save <ExternalLink className="h-3 w-3" />
               </a>
             )}
+            {!note && <ArchivePanel item={item} busy={busy} onRetry={onArchiveRetry} />}
+            <ReminderPanel item={item} busy={busy} onRemind={onRemind} />
             {item.sourceStatus === 'needs_review' && (
               <button
                 type="button"
@@ -8479,6 +8837,121 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
           <img src={assetPreview.url} alt={assetPreview.label} className="max-h-[88vh] max-w-[92vw] rounded-2xl border border-white/10 object-contain shadow-2xl shadow-black" />
         </div>
       )}
+    </div>
+  );
+}
+
+function ArchivePanel({ item, busy, onRetry }) {
+  const archive = item.archive;
+  const status = archive?.status || 'none';
+  const blocked = ['blocked_host', 'blocked_port', 'unsupported_content_type', 'no_readable_content', 'unsupported_protocol'].includes(archive?.errorCode);
+  const ready = status === 'ready';
+  const pending = status === 'pending';
+  const failed = status === 'failed' || status === 'skipped';
+  const label = ready
+    ? 'Readable copy saved'
+    : pending
+      ? 'Saving readable copy...'
+      : failed && blocked
+        ? 'This site blocked page backup'
+        : failed
+          ? 'Could not save copy'
+          : 'No saved copy yet';
+  const help = ready
+    ? 'Article text and readable page content are saved in case the original link breaks later.'
+    : pending
+      ? 'The link is saved now. Page backup runs in the background.'
+      : 'Page backup saves article text and readable page content when the site allows it.';
+
+  return (
+    <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
+            {ready ? <CheckCircle2 className="h-3.5 w-3.5 text-primary" /> : pending ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : <FileText className="h-3.5 w-3.5" />}
+            Page backup
+          </div>
+          <div className="text-sm font-semibold text-foreground">{label}</div>
+          <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">{help}</p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {item.url && (
+            <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs text-muted-foreground hover:border-primary hover:text-primary">
+              Open original <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+          {!pending && !ready && (
+            <button
+              type="button"
+              onClick={() => onRetry?.(item)}
+              disabled={busy}
+              className="inline-flex items-center gap-2 rounded-full bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+              Try again
+            </button>
+          )}
+        </div>
+      </div>
+      {ready && (
+        <details className="mt-5 rounded-xl border border-white/10 bg-black/30 p-4">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground">
+            <span>{archive.title || item.sourceTitle || item.title}</span>
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          </summary>
+          <div className="mt-4 space-y-3">
+            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+              {archive.siteName ? <span>{archive.siteName}</span> : null}
+              {archive.capturedAt ? <span>Saved {new Date(archive.capturedAt).toLocaleDateString()}</span> : null}
+              {archive.textLength ? <span>{archive.textLength.toLocaleString()} characters</span> : null}
+            </div>
+            {archive.excerpt ? <p className="text-sm leading-relaxed text-foreground">{archive.excerpt}</p> : null}
+            {archive.contentText ? (
+              <div className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded-xl border border-white/10 bg-black/40 p-4 text-sm leading-relaxed text-muted-foreground">
+                {archive.contentText}
+              </div>
+            ) : null}
+          </div>
+        </details>
+      )}
+      {failed && archive?.errorMessage ? (
+        <p className="mt-3 text-xs text-muted-foreground">{archive.errorMessage}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function ReminderPanel({ item, busy, onRemind }) {
+  if (!item?.id) return null;
+  return (
+    <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
+            <Clock className="h-3.5 w-3.5" /> Reminder
+          </div>
+          <div className="text-sm font-semibold text-foreground">Bring this back later</div>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Useful for links, references, and ideas you want to revisit.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {[
+            ['tomorrow', 'Tomorrow'],
+            ['week', 'Next week'],
+            ['month', 'Next month'],
+          ].map(([preset, label]) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => onRemind?.(item, preset)}
+              disabled={busy}
+              className="inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Clock className="h-3 w-3" />}
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

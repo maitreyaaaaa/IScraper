@@ -26,6 +26,8 @@ const {
   publicSmartCollection,
   sortSmartCollections,
 } = require('../services/smartCollections');
+const { publicArchive } = require('../services/pageArchive');
+const { publicLinkHealth, publicReminder } = require('../services/libraryCare');
 
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
 const IMPORT_INSERT_BATCH_SIZE = 500;
@@ -295,7 +297,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return { deletedObjects, buckets: bucketResults };
     },
     async deleteUserContentData(userId) {
-      const tables = ['search_result_feedback', 'search_events', 'processing_jobs', 'smart_collection_items', 'smart_collections', 'item_embeddings', 'item_analysis', 'item_assets', 'saved_items', 'collections', 'imports', 'lens_search_events'];
+      const tables = ['search_result_feedback', 'search_events', 'processing_jobs', 'smart_collection_items', 'smart_collections', 'item_embeddings', 'item_analysis', 'item_assets', 'item_archives', 'link_health_checks', 'item_reminders', 'saved_items', 'collections', 'imports', 'lens_search_events'];
       return deleteUserRowsFromTables(client, userId, tables);
     },
     async deleteUserAccessData(userId) {
@@ -354,8 +356,11 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return mapDeletionRequest(data);
     },
     async getPrivacyExport(userId) {
-      const [items, imports, collections, smartCollections, smartCollectionItems, credentials, extensionTokens, searchEvents, searchFeedback, profile, credits, deletionRequest] = await Promise.all([
+      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, credentials, extensionTokens, searchEvents, searchFeedback, profile, credits, deletionRequest] = await Promise.all([
         this.getItems(userId),
+        selectAllUserRows(client, 'item_archives', userId, '*', (query) => query.order('updated_at', { ascending: false })),
+        selectAllUserRows(client, 'link_health_checks', userId, '*', (query) => query.order('checked_at', { ascending: false })),
+        selectAllUserRows(client, 'item_reminders', userId, '*', (query) => query.order('remind_at', { ascending: false })),
         selectAllUserRows(client, 'imports', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'collections', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'smart_collections', userId, '*', (query) => query.order('updated_at', { ascending: false })),
@@ -371,6 +376,9 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return {
         exportedAt: new Date().toISOString(),
         items,
+        itemArchives: itemArchives.map((row) => mapArchiveRow(row, { includeContent: true })),
+        linkHealthChecks: linkHealthChecks.map(mapLinkHealthRow),
+        itemReminders: itemReminders.map(mapReminderRow),
         imports: imports.map(mapImport),
         collections,
         smartCollections,
@@ -962,7 +970,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     async getItem(userId, id) {
       const { data, error } = await client
         .from('saved_items')
-        .select('*, item_analysis(*), item_assets(*)')
+        .select('*, item_analysis(*), item_assets(*), item_archives(*)')
         .eq('user_id', userId)
         .eq('id', id)
         .maybeSingle();
@@ -1022,6 +1030,95 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .order('created_at');
       if (error) throw error;
       return Promise.all((data || []).map((row) => mapAsset(row, client)));
+    },
+    async getItemArchive(userId, itemId) {
+      const { data, error } = await client
+        .from('item_archives')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('item_id', itemId)
+        .maybeSingle();
+      if (error && isMissingTableError(error)) return null;
+      if (error) throw error;
+      return data ? mapArchiveRow(data, { includeContent: true }) : null;
+    },
+    async upsertItemArchive(userId, itemId, archive = {}) {
+      const existing = await this.getItem(userId, itemId);
+      if (!existing) return null;
+      const row = toArchiveRow(userId, itemId, archive, existing.url);
+      const { data, error } = await client
+        .from('item_archives')
+        .upsert(row, { onConflict: 'user_id,item_id' })
+        .select('*')
+        .maybeSingle();
+      if (error && isMissingTableError(error)) return null;
+      if (error) throw error;
+      return data ? mapArchiveRow(data, { includeContent: true }) : null;
+    },
+    async listLinkHealthChecks(userId) {
+      const rows = await selectAllUserRows(client, 'link_health_checks', userId, '*', (query) => query.order('checked_at', { ascending: false }));
+      return rows.map(mapLinkHealthRow);
+    },
+    async upsertLinkHealthCheck(userId, itemId, check = {}) {
+      const existing = await this.getItem(userId, itemId);
+      if (!existing) return null;
+      const row = toLinkHealthRow(userId, itemId, check, existing.url);
+      const { data, error } = await client
+        .from('link_health_checks')
+        .upsert(row, { onConflict: 'user_id,item_id' })
+        .select('*')
+        .maybeSingle();
+      if (error && isMissingTableError(error)) return null;
+      if (error) throw error;
+      return data ? mapLinkHealthRow(data) : null;
+    },
+    async listItemReminders(userId, { status = null } = {}) {
+      let query = client
+        .from('item_reminders')
+        .select('*')
+        .eq('user_id', userId)
+        .order('remind_at', { ascending: true })
+        .limit(500);
+      if (status) query = query.eq('status', status);
+      const { data, error } = await query;
+      if (error && isMissingTableError(error)) return [];
+      if (error) throw error;
+      return (data || []).map(mapReminderRow);
+    },
+    async createItemReminder(userId, itemId, reminder = {}) {
+      const existing = await this.getItem(userId, itemId);
+      if (!existing) return null;
+      const { data, error } = await client
+        .from('item_reminders')
+        .upsert({
+          user_id: userId,
+          item_id: itemId,
+          status: 'pending',
+          remind_at: reminder.remindAt,
+          reason: cleanDbText(reminder.reason || 'remind_later'),
+          note: cleanDbText(reminder.note || ''),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id,item_id,reason,remind_at' })
+        .select('*')
+        .maybeSingle();
+      if (error && isMissingTableError(error)) return null;
+      if (error) throw error;
+      return data ? mapReminderRow(data) : null;
+    },
+    async updateItemReminder(userId, id, patch = {}) {
+      const row = { updated_at: new Date().toISOString() };
+      if (Object.prototype.hasOwnProperty.call(patch, 'status')) row.status = cleanDbText(patch.status);
+      if (Object.prototype.hasOwnProperty.call(patch, 'completedAt')) row.completed_at = patch.completedAt;
+      const { data, error } = await client
+        .from('item_reminders')
+        .update(row)
+        .eq('user_id', userId)
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error && isMissingTableError(error)) return null;
+      if (error) throw error;
+      return data ? mapReminderRow(data) : null;
     },
     async removeItemAssets(userId, itemId, assetIds = []) {
       let query = client
@@ -2085,6 +2182,7 @@ async function mapItemWithAnalysis(row, client = null) {
   const item = mapItem(row);
   const analysis = Array.isArray(row.item_analysis) ? row.item_analysis[0] : row.item_analysis;
   const assets = Array.isArray(row.item_assets) ? row.item_assets : [];
+  const archive = Array.isArray(row.item_archives) ? row.item_archives[0] : row.item_archives;
   item.analysis = analysis ? {
     title: analysis.title,
     summary: analysis.summary,
@@ -2100,7 +2198,111 @@ async function mapItemWithAnalysis(row, client = null) {
     whyUseful: analysis.why_useful,
   } : null;
   item.assets = await Promise.all(assets.map((asset) => mapAsset(asset, client)));
+  item.archive = archive ? mapArchiveRow(archive, { includeContent: Boolean(row.item_archives) }) : null;
   return item;
+}
+
+function mapArchiveRow(row, { includeContent = false } = {}) {
+  const archive = publicArchive({
+    id: row.id,
+    itemId: row.item_id,
+    status: row.status,
+    sourceUrl: row.source_url,
+    finalUrl: row.final_url,
+    canonicalUrl: row.canonical_url,
+    title: row.title,
+    byline: row.byline,
+    siteName: row.site_name,
+    excerpt: row.excerpt,
+    contentText: row.content_text,
+    contentHtml: row.content_html,
+    textLength: row.text_length,
+    byteSize: row.byte_size,
+    contentHash: row.content_hash,
+    httpStatus: row.http_status,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    capturedAt: row.captured_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }, { includeContent });
+  return archive;
+}
+
+function toArchiveRow(userId, itemId, archive = {}, fallbackUrl = '') {
+  const row = {
+    user_id: userId,
+    item_id: itemId,
+    status: cleanDbText(archive.status || 'pending'),
+    source_url: cleanDbText(archive.sourceUrl || fallbackUrl),
+    updated_at: new Date().toISOString(),
+  };
+  const fields = [
+    ['finalUrl', 'final_url'],
+    ['canonicalUrl', 'canonical_url'],
+    ['title', 'title'],
+    ['byline', 'byline'],
+    ['siteName', 'site_name'],
+    ['excerpt', 'excerpt'],
+    ['contentText', 'content_text'],
+    ['contentHtml', 'content_html'],
+    ['contentHash', 'content_hash'],
+    ['errorCode', 'error_code'],
+    ['errorMessage', 'error_message'],
+    ['capturedAt', 'captured_at'],
+  ];
+  for (const [camel, snake] of fields) {
+    if (Object.prototype.hasOwnProperty.call(archive, camel)) row[snake] = cleanDbText(archive[camel]);
+  }
+  if (Object.prototype.hasOwnProperty.call(archive, 'textLength')) row.text_length = Number(archive.textLength || 0);
+  if (Object.prototype.hasOwnProperty.call(archive, 'byteSize')) row.byte_size = Number(archive.byteSize || 0);
+  if (Object.prototype.hasOwnProperty.call(archive, 'httpStatus')) row.http_status = archive.httpStatus == null ? null : Number(archive.httpStatus);
+  return row;
+}
+
+function mapLinkHealthRow(row) {
+  return publicLinkHealth({
+    id: row.id,
+    itemId: row.item_id,
+    status: row.status,
+    url: row.url,
+    finalUrl: row.final_url,
+    httpStatus: row.http_status,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    checkedAt: row.checked_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+}
+
+function toLinkHealthRow(userId, itemId, check = {}, fallbackUrl = '') {
+  return {
+    user_id: userId,
+    item_id: itemId,
+    status: cleanDbText(check.status || 'unknown'),
+    url: cleanDbText(check.sourceUrl || check.url || fallbackUrl),
+    final_url: cleanDbText(check.finalUrl || ''),
+    http_status: check.httpStatus == null ? null : Number(check.httpStatus),
+    error_code: cleanDbText(check.errorCode || ''),
+    error_message: cleanDbText(check.errorMessage || ''),
+    checked_at: check.checkedAt || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function mapReminderRow(row) {
+  return publicReminder({
+    id: row.id,
+    itemId: row.item_id,
+    status: row.status,
+    remindAt: row.remind_at,
+    reason: row.reason,
+    note: row.note,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
 }
 
 function mapJob(row) {

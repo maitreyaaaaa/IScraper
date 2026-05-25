@@ -33,6 +33,8 @@ const {
   publicSmartCollection,
   sortSmartCollections,
 } = require('../services/smartCollections');
+const { publicArchive } = require('../services/pageArchive');
+const { publicLinkHealth, publicReminder } = require('../services/libraryCare');
 
 const DEFAULT_USER_ID = 'local-dev-user';
 
@@ -77,6 +79,9 @@ function seedFromLegacyIndex(dataPath) {
     extensionTokens: [],
     lensSearchEvents: [],
     itemAssets: [],
+    itemArchives: [],
+    linkHealthChecks: [],
+    itemReminders: [],
     smartCollections: [],
     smartCollectionItems: [],
     accountDeletionRequests: [],
@@ -138,6 +143,9 @@ function emptyState() {
     extensionTokens: [],
     lensSearchEvents: [],
     itemAssets: [],
+    itemArchives: [],
+    linkHealthChecks: [],
+    itemReminders: [],
     smartCollections: [],
     smartCollectionItems: [],
     accountDeletionRequests: [],
@@ -167,6 +175,9 @@ function normalizeState(state) {
     extensionTokens: state.extensionTokens || [],
     lensSearchEvents: state.lensSearchEvents || [],
     itemAssets: state.itemAssets || [],
+    itemArchives: state.itemArchives || [],
+    linkHealthChecks: state.linkHealthChecks || [],
+    itemReminders: state.itemReminders || [],
     smartCollections: state.smartCollections || [],
     smartCollectionItems: state.smartCollectionItems || [],
     accountDeletionRequests: state.accountDeletionRequests || [],
@@ -230,10 +241,18 @@ function localItemAssets(state, userId, itemId) {
     .map(publicNoteAsset);
 }
 
-function hydrateLocalItem(state, item) {
+function localItemArchive(state, userId, itemId, { includeContent = false } = {}) {
+  const archive = (state.itemArchives || []).find((entry) => entry.userId === userId && entry.itemId === itemId);
+  return publicArchive(archive, { includeContent });
+}
+
+function hydrateLocalItem(state, item, { includeArchiveContent = false } = {}) {
   if (!item) return null;
-  item.assets = localItemAssets(state, item.userId, item.id);
-  return item;
+  return {
+    ...item,
+    assets: localItemAssets(state, item.userId, item.id),
+    archive: localItemArchive(state, item.userId, item.id, { includeContent: includeArchiveContent }),
+  };
 }
 
 function createLocalStore({ dataPath }) {
@@ -506,6 +525,8 @@ function createLocalStore({ dataPath }) {
         collections: deleteFromArrayByUser('collections', userId),
         smartCollections: deleteFromArrayByUser('smartCollections', userId),
         smartCollectionItems: deleteFromArrayByUser('smartCollectionItems', userId),
+        linkHealthChecks: deleteFromArrayByUser('linkHealthChecks', userId),
+        itemReminders: deleteFromArrayByUser('itemReminders', userId),
         imports: deleteFromArrayByUser('imports', userId),
         lensSearchEvents: deleteFromArrayByUser('lensSearchEvents', userId),
         searchEvents: deleteFromArrayByUser('searchEvents', userId),
@@ -579,6 +600,15 @@ function createLocalStore({ dataPath }) {
       return {
         exportedAt: now(),
         items: this.getItems(userId),
+        itemArchives: state.itemArchives
+          .filter((entry) => entry.userId === userId)
+          .map((entry) => publicArchive(entry, { includeContent: true })),
+        linkHealthChecks: state.linkHealthChecks
+          .filter((entry) => entry.userId === userId)
+          .map(publicLinkHealth),
+        itemReminders: state.itemReminders
+          .filter((entry) => entry.userId === userId)
+          .map(publicReminder),
         imports: state.imports.filter((entry) => entry.userId === userId),
         collections: state.collections.filter((entry) => entry.userId === userId),
         smartCollections: state.smartCollections.filter((entry) => entry.userId === userId),
@@ -945,6 +975,122 @@ function createLocalStore({ dataPath }) {
       return localItemAssets(state, userId, itemId);
     },
 
+    getItemArchive(userId, itemId) {
+      return localItemArchive(state, userId, itemId, { includeContent: true });
+    },
+
+    upsertItemArchive(userId, itemId, archive = {}) {
+      const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
+      if (!item) return null;
+      const existing = state.itemArchives.find((entry) => entry.userId === userId && entry.itemId === itemId);
+      const timestamp = now();
+      const next = {
+        id: existing?.id || `archive-${crypto.randomUUID()}`,
+        userId,
+        itemId,
+        status: archive.status || existing?.status || 'pending',
+        sourceUrl: archive.sourceUrl ?? existing?.sourceUrl ?? item.url,
+        finalUrl: archive.finalUrl ?? existing?.finalUrl ?? '',
+        canonicalUrl: archive.canonicalUrl ?? existing?.canonicalUrl ?? '',
+        title: archive.title ?? existing?.title ?? '',
+        byline: archive.byline ?? existing?.byline ?? '',
+        siteName: archive.siteName ?? existing?.siteName ?? '',
+        excerpt: archive.excerpt ?? existing?.excerpt ?? '',
+        contentText: archive.contentText ?? existing?.contentText ?? '',
+        contentHtml: archive.contentHtml ?? existing?.contentHtml ?? '',
+        textLength: Number(archive.textLength ?? existing?.textLength ?? 0),
+        byteSize: Number(archive.byteSize ?? existing?.byteSize ?? 0),
+        contentHash: archive.contentHash ?? existing?.contentHash ?? '',
+        httpStatus: archive.httpStatus ?? existing?.httpStatus ?? null,
+        errorCode: archive.errorCode ?? existing?.errorCode ?? '',
+        errorMessage: archive.errorMessage ?? existing?.errorMessage ?? '',
+        capturedAt: archive.capturedAt ?? existing?.capturedAt ?? null,
+        createdAt: existing?.createdAt || timestamp,
+        updatedAt: timestamp,
+      };
+      if (existing) Object.assign(existing, next);
+      else state.itemArchives.push(next);
+      save();
+      return publicArchive(next, { includeContent: true });
+    },
+
+    listLinkHealthChecks(userId) {
+      return state.linkHealthChecks
+        .filter((entry) => entry.userId === userId)
+        .map(publicLinkHealth);
+    },
+
+    upsertLinkHealthCheck(userId, itemId, check = {}) {
+      const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
+      if (!item) return null;
+      const existing = state.linkHealthChecks.find((entry) => entry.userId === userId && entry.itemId === itemId);
+      const timestamp = now();
+      const next = {
+        id: existing?.id || `link-health-${crypto.randomUUID()}`,
+        userId,
+        itemId,
+        status: check.status || existing?.status || 'unknown',
+        url: check.sourceUrl || check.url || existing?.url || item.url,
+        finalUrl: check.finalUrl ?? existing?.finalUrl ?? '',
+        httpStatus: check.httpStatus ?? existing?.httpStatus ?? null,
+        errorCode: check.errorCode ?? existing?.errorCode ?? '',
+        errorMessage: check.errorMessage ?? existing?.errorMessage ?? '',
+        checkedAt: check.checkedAt || timestamp,
+        createdAt: existing?.createdAt || timestamp,
+        updatedAt: timestamp,
+      };
+      if (existing) Object.assign(existing, next);
+      else state.linkHealthChecks.push(next);
+      save();
+      return publicLinkHealth(next);
+    },
+
+    listItemReminders(userId, { status = null } = {}) {
+      return state.itemReminders
+        .filter((entry) => entry.userId === userId && (!status || entry.status === status))
+        .sort((a, b) => String(a.remindAt).localeCompare(String(b.remindAt)))
+        .map(publicReminder);
+    },
+
+    createItemReminder(userId, itemId, reminder = {}) {
+      const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
+      if (!item) return null;
+      const existing = state.itemReminders.find((entry) => (
+        entry.userId === userId &&
+        entry.itemId === itemId &&
+        entry.status === 'pending' &&
+        entry.reason === reminder.reason &&
+        entry.remindAt === reminder.remindAt
+      ));
+      if (existing) return publicReminder(existing);
+      const timestamp = now();
+      const created = {
+        id: `reminder-${crypto.randomUUID()}`,
+        userId,
+        itemId,
+        status: 'pending',
+        remindAt: reminder.remindAt,
+        reason: reminder.reason || 'remind_later',
+        note: reminder.note || '',
+        completedAt: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      state.itemReminders.push(created);
+      save();
+      return publicReminder(created);
+    },
+
+    updateItemReminder(userId, id, patch = {}) {
+      const reminder = state.itemReminders.find((entry) => entry.userId === userId && entry.id === id);
+      if (!reminder) return null;
+      if (Object.prototype.hasOwnProperty.call(patch, 'status')) reminder.status = patch.status;
+      if (Object.prototype.hasOwnProperty.call(patch, 'completedAt')) reminder.completedAt = patch.completedAt;
+      reminder.updatedAt = now();
+      save();
+      return publicReminder(reminder);
+    },
+
     removeItemAssets(userId, itemId, assetIds = []) {
       const ids = new Set(assetIds);
       const removed = [];
@@ -964,6 +1110,9 @@ function createLocalStore({ dataPath }) {
       state.jobs = state.jobs.filter((job) => !(job.userId === userId && job.itemId === id));
       state.searchFeedback = state.searchFeedback.filter((entry) => !(entry.userId === userId && entry.itemId === id));
       state.itemAssets = state.itemAssets.filter((asset) => !(asset.userId === userId && asset.itemId === id));
+      state.itemArchives = state.itemArchives.filter((archive) => !(archive.userId === userId && archive.itemId === id));
+      state.linkHealthChecks = state.linkHealthChecks.filter((check) => !(check.userId === userId && check.itemId === id));
+      state.itemReminders = state.itemReminders.filter((reminder) => !(reminder.userId === userId && reminder.itemId === id));
       state.smartCollectionItems = state.smartCollectionItems.filter((entry) => !(entry.userId === userId && entry.itemId === id));
       save();
       return hydrateLocalItem(state, removed);
@@ -1119,7 +1268,7 @@ function createLocalStore({ dataPath }) {
     },
 
     getItem(userId, id) {
-      return hydrateLocalItem(state, state.items.find((item) => item.userId === userId && item.id === id) || null);
+      return hydrateLocalItem(state, state.items.find((item) => item.userId === userId && item.id === id) || null, { includeArchiveContent: true });
     },
 
     getJobs(userId, importId = null) {
@@ -1277,34 +1426,34 @@ function createLocalStore({ dataPath }) {
     },
 
     saveAnalysis(userId, itemId, analysis) {
-      const item = this.getItem(userId, itemId);
+      const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
       if (!item) return null;
       item.analysis = analysis;
       item.status = 'done';
       item.updatedAt = now();
       save();
       this.refreshSmartCollections(userId);
-      return item;
+      return hydrateLocalItem(state, item, { includeArchiveContent: true });
     },
 
     markItemFailed(userId, itemId, error) {
-      const item = this.getItem(userId, itemId);
+      const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
       if (!item) return null;
       item.status = 'failed';
       item.error = error;
       item.updatedAt = now();
       save();
-      return item;
+      return hydrateLocalItem(state, item, { includeArchiveContent: true });
     },
 
     setItemStatus(userId, itemId, status, error = null) {
-      const item = this.getItem(userId, itemId);
+      const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
       if (!item) return null;
       item.status = status;
       item.error = error;
       item.updatedAt = now();
       save();
-      return item;
+      return hydrateLocalItem(state, item, { includeArchiveContent: true });
     },
 
     search(userId, query, filters = {}) {

@@ -14,6 +14,17 @@ const { formatPrice } = require('./services/credits');
 const { buildKnowledgeGraph, buildObsidianFiles } = require('./services/graph');
 const { createDeepSeekSearchAnswer } = require('./services/aiSearch');
 const { parseManualLinkPayload } = require('./services/linkSaver');
+const {
+  PageArchiveError,
+  captureReadableCopy,
+  checkPageReachable,
+  shouldAttemptPageArchive,
+} = require('./services/pageArchive');
+const {
+  buildLibraryCareSummary,
+  linkCheckCandidates,
+  normalizeReminderInput,
+} = require('./services/libraryCare');
 const { validateProfileInput } = require('./services/profiles');
 const { contextForRequest, createObservability } = require('./services/observability');
 const {
@@ -655,6 +666,121 @@ function captureWorkflow(req, event, properties = {}) {
 
 function warnWorkflow(req, event, properties = {}) {
   req.app?.locals?.observability?.warn(event, contextForRequest(req, properties));
+}
+
+function archiveHost(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
+function failedArchivePayload(error) {
+  const archiveError = error instanceof PageArchiveError ? error : null;
+  const errorCode = archiveError?.code || 'capture_failed';
+  return {
+    status: ['unsupported_protocol', 'blocked_host', 'blocked_port', 'unsupported_content_type', 'no_readable_content'].includes(errorCode) ? 'skipped' : 'failed',
+    errorCode,
+    errorMessage: archiveError?.message || 'This page could not be backed up.',
+    httpStatus: archiveError?.statusCode || null,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+async function captureReadableCopyForItem({ store, userId, item, force = false }) {
+  if (!item || !shouldAttemptPageArchive(item) || typeof store.upsertItemArchive !== 'function') return null;
+  const existing = typeof store.getItemArchive === 'function' ? await store.getItemArchive(userId, item.id) : null;
+  if (existing?.status === 'ready' && !force) return existing;
+  await store.upsertItemArchive(userId, item.id, {
+    status: 'pending',
+    sourceUrl: item.url,
+    errorCode: '',
+    errorMessage: '',
+  });
+  try {
+    const archive = await captureReadableCopy(item.url);
+    return await store.upsertItemArchive(userId, item.id, archive);
+  } catch (error) {
+    return store.upsertItemArchive(userId, item.id, {
+      sourceUrl: item.url,
+      ...failedArchivePayload(error),
+    });
+  }
+}
+
+async function startReadableCopyForItem({ req, store, userId, item, force = false }) {
+  if (!item || !shouldAttemptPageArchive(item) || typeof store.upsertItemArchive !== 'function') return null;
+  const existing = typeof store.getItemArchive === 'function' ? await store.getItemArchive(userId, item.id) : null;
+  if (existing?.status === 'ready' && !force) return existing;
+  const pending = await store.upsertItemArchive(userId, item.id, {
+    status: 'pending',
+    sourceUrl: item.url,
+    errorCode: '',
+    errorMessage: '',
+  });
+  captureWorkflow(req, 'page backup queued', { itemId: item.id, host: archiveHost(item.url) });
+  setTimeout(() => {
+    captureReadableCopyForItem({ store, userId, item, force })
+      .then((archive) => {
+        const event = archive?.status === 'ready' ? 'page backup saved' : 'page backup skipped';
+        req.app?.locals?.observability?.capture(event, {
+          itemId: item.id,
+          userId,
+          host: archiveHost(item.url),
+          status: archive?.status || 'failed',
+          errorCode: archive?.errorCode || '',
+          byteSize: archive?.byteSize || 0,
+        }, userId);
+      })
+      .catch((error) => {
+        req.app?.locals?.observability?.warn('page backup failed', {
+          itemId: item.id,
+          userId,
+          host: archiveHost(item.url),
+          errorCode: error?.code || 'capture_failed',
+        });
+      });
+  }, 0);
+  return pending;
+}
+
+async function libraryCareSummary(store, userId) {
+  const [items, linkChecks, reminders] = await Promise.all([
+    store.getItems(userId),
+    typeof store.listLinkHealthChecks === 'function' ? store.listLinkHealthChecks(userId) : [],
+    typeof store.listItemReminders === 'function' ? store.listItemReminders(userId) : [],
+  ]);
+  return buildLibraryCareSummary({ items, linkChecks, reminders });
+}
+
+async function checkLibraryLinks({ store, userId, limit = 20 }) {
+  if (typeof store.upsertLinkHealthCheck !== 'function') return { checked: [], skipped: true };
+  const [items, checks] = await Promise.all([
+    store.getItems(userId),
+    typeof store.listLinkHealthChecks === 'function' ? store.listLinkHealthChecks(userId) : [],
+  ]);
+  const candidates = linkCheckCandidates(items, checks, limit);
+  const checked = [];
+  for (const item of candidates) {
+    let result;
+    try {
+      result = await checkPageReachable(item.url);
+    } catch (error) {
+      result = {
+        status: 'unknown',
+        sourceUrl: item.url,
+        finalUrl: '',
+        httpStatus: null,
+        errorCode: error?.code || 'check_failed',
+        errorMessage: 'This link could not be checked right now.',
+        checkedAt: new Date().toISOString(),
+      };
+    }
+    const saved = await store.upsertLinkHealthCheck(userId, item.id, result);
+    if (saved) checked.push(saved);
+  }
+  return { checked, skipped: false };
 }
 
 async function persistNoteImages({ store, config, userId, itemId, files = [] }) {
@@ -1512,6 +1638,49 @@ function createApp({ store, config = {}, observability = createObservability(con
     return res.json({ collection });
   }));
 
+  app.get('/api/library-care', asyncRoute(async (req, res) => {
+    if (typeof store.getItems !== 'function') return res.status(501).json({ error: 'Library checkup is not available.' });
+    return res.json(await libraryCareSummary(store, req.user.id));
+  }));
+
+  app.post('/api/library-care/check-links', importRateLimit, asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 20, 50));
+    const result = await checkLibraryLinks({ store, userId: req.user.id, limit });
+    const summary = await libraryCareSummary(store, req.user.id);
+    captureWorkflow(req, 'library links checked', {
+      checkedCount: result.checked?.length || 0,
+      brokenCount: summary.cleanup.brokenLinkCount,
+      unknownCount: (result.checked || []).filter((entry) => entry.status === 'unknown').length,
+    });
+    return res.json({ ...summary, checked: result.checked || [] });
+  }));
+
+  app.post('/api/items/:id/reminders', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.createItemReminder !== 'function') return res.status(501).json({ error: 'Reminders are not available.' });
+    const item = await store.getItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+    const input = normalizeReminderInput(req.body || {});
+    const reminder = await store.createItemReminder(req.user.id, item.id, input);
+    if (!reminder) return res.status(404).json({ error: 'Item not found.' });
+    captureWorkflow(req, 'item reminder created', { itemId: item.id, reminderId: reminder.id, reason: reminder.reason });
+    return res.status(201).json({ reminder, item });
+  }));
+
+  app.patch('/api/reminders/:id', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.updateItemReminder !== 'function') return res.status(501).json({ error: 'Reminders are not available.' });
+    const status = ['done', 'dismissed', 'pending'].includes(req.body?.status) ? req.body.status : 'done';
+    const reminder = await store.updateItemReminder(req.user.id, req.params.id, {
+      status,
+      completedAt: status === 'done' || status === 'dismissed' ? new Date().toISOString() : null,
+    });
+    if (!reminder) return res.status(404).json({ error: 'Reminder not found.' });
+    captureWorkflow(req, 'item reminder updated', { reminderId: reminder.id, status });
+    return res.json({ reminder });
+  }));
+
   app.post('/api/notes', noteUpload.array('images', MAX_NOTE_IMAGES), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     if (typeof store.createNoteItem !== 'function' || typeof store.addItemAsset !== 'function') {
@@ -1613,6 +1782,24 @@ function createApp({ store, config = {}, observability = createObservability(con
     const item = await store.getItem(req.user.id, req.params.id);
     if (!item) return res.status(404).json({ error: 'Item not found.' });
     return res.json({ item });
+  }));
+
+  app.post('/api/items/:id/archive', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.upsertItemArchive !== 'function') return res.status(501).json({ error: 'Page backup is not available.' });
+    const item = await store.getItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+    if (!shouldAttemptPageArchive(item)) return res.status(400).json({ error: 'This save cannot be backed up as a readable page.' });
+    const archive = await captureReadableCopyForItem({ store, userId: req.user.id, item, force: true });
+    const updated = await store.getItem(req.user.id, req.params.id);
+    captureWorkflow(req, archive?.status === 'ready' ? 'page backup saved' : 'page backup failed', {
+      itemId: item.id,
+      host: archiveHost(item.url),
+      status: archive?.status || 'failed',
+      errorCode: archive?.errorCode || '',
+      byteSize: archive?.byteSize || 0,
+    });
+    return res.json({ item: updated ? { ...updated, archive: archive || updated.archive } : item, archive });
   }));
 
   app.patch('/api/items/:id/review', asyncRoute(async (req, res) => {
@@ -2033,6 +2220,16 @@ function createApp({ store, config = {}, observability = createObservability(con
     const initialStatus = req.body?.review === true ? 'needs_review' : 'queued';
     const items = await store.upsertImportData({ userId: req.user.id, importId: importEntry.id, parsed, initialStatus });
     const jobs = initialStatus === 'queued' ? await store.createJobs({ userId: req.user.id, importId: importEntry.id, items }) : [];
+    let responseItem = null;
+    try {
+      responseItem = await Promise.resolve(store.getItem(req.user.id, items[0]?.id || parsed.items[0].id));
+    } catch {
+      responseItem = null;
+    }
+    if (responseItem) {
+      const archive = await startReadableCopyForItem({ req, store, userId: req.user.id, item: responseItem });
+      if (archive) responseItem = { ...responseItem, archive };
+    }
 
     let indexing = null;
     if (jobs.length) {
@@ -2052,7 +2249,7 @@ function createApp({ store, config = {}, observability = createObservability(con
     await refreshSmartCollectionsForUser(req.user.id);
     return res.status(201).json({
       import: importEntry,
-      item: items[0] || parsed.items[0],
+      item: responseItem || items[0] || parsed.items[0],
       newItemCount: items.length,
       skippedDuplicateCount: items.length ? 0 : 1,
       queuedJobCount: jobs.length,
