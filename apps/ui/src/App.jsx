@@ -6722,9 +6722,10 @@ function LibraryTab({
   ], [collectionFilter, collections, libraryLayout, platformFilter, platforms, sortOrder, stateFilter, typeFilter, updateFilter, setCollectionFilter, setLibraryLayout, setPlatformFilter, setSortOrder, setStateFilter, setTypeFilter]);
 
   return (
-    <div className="mx-auto max-w-[1480px] px-4 pb-28 pt-8 sm:px-6 md:px-10 md:py-12">
-      <div className="mb-7">
-        <form
+    <div className="mx-auto max-w-[1480px] px-4 pb-28 pt-4 sm:px-6 md:px-10 md:pt-0">
+      <section className="flex min-h-[42dvh] items-center justify-center py-6 md:min-h-[46dvh]">
+        <div className="w-full max-w-4xl">
+          <form
           onSubmit={(event) => {
             onSearch(event);
           }}
@@ -6733,6 +6734,7 @@ function LibraryTab({
           <textarea
             autoFocus
             rows={2}
+            aria-label="Search saved items"
             value={query}
             onChange={(event) => {
               const nextQuery = event.target.value;
@@ -6758,6 +6760,7 @@ function LibraryTab({
               <input
                 ref={visualSearchInputRef}
                 type="file"
+                aria-label="Upload image for Same Vibe search"
                 accept="image/png,image/jpeg,image/webp"
                 className="sr-only"
                 onChange={(event) => {
@@ -6799,7 +6802,7 @@ function LibraryTab({
               </button>
             </div>
           </div>
-        </form>
+          </form>
         {visualSearch && (
           <div className="mt-3 flex flex-col gap-3 rounded-2xl border border-primary/25 bg-primary/5 p-4 md:flex-row md:items-center">
             <img src={visualSearch.imageDataUrl} alt="" className="h-20 w-20 shrink-0 rounded-xl object-cover" />
@@ -6821,19 +6824,24 @@ function LibraryTab({
             </button>
           </div>
         )}
+        </div>
+      </section>
+
+      <div className="mx-auto max-w-4xl">
+        <IndexingProgressCard activity={indexingActivity} />
       </div>
 
-      <IndexingProgressCard activity={indexingActivity} />
-
       {searchActive && (
-        <SearchAiPanel ai={searchAi} items={items} onSelect={onSelect} />
+        <div className="mx-auto mt-5 max-w-4xl">
+          <SearchAiPanel ai={searchAi} items={items} onSelect={onSelect} />
+        </div>
       )}
 
-      <div className="sticky top-0 z-20 -mx-4 mt-5 border-y border-white/5 bg-black/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:-mx-10 md:px-10">
+      <div className="mx-auto mt-4 max-w-[760px] rounded-2xl border border-white/10 bg-black/75 px-3 py-3 backdrop-blur">
         <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
-          <span>
+          <span className="shrink-0 leading-5">
             {items.length} shown from {totalCount || items.length} saves
-            {searchActive ? ` · ${searchResultCount} search results from ${totalCount} total saves` : ''}
+            {searchActive ? ` - ${searchResultCount} search results from ${totalCount} total saves` : ''}
           </span>
           <button
             type="button"
@@ -6843,7 +6851,7 @@ function LibraryTab({
             <Filter className="h-4 w-4 text-primary" />
             Filters {activeFilters > 0 ? `(${activeFilters})` : ''}
           </button>
-          <div className="hidden flex-wrap gap-2 md:flex">
+          <div className="hidden max-w-[560px] flex-wrap justify-end gap-2 md:flex">
             <LibraryLayoutControl value={libraryLayout} onChange={setLibraryLayout} />
             <DashboardFilterSelect
               label="Type"
@@ -6905,7 +6913,7 @@ function LibraryTab({
         activeFilters={activeFilters}
       />
 
-      <div className="mt-8">
+      <div className="mt-12 md:mt-[12dvh]">
         {items.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center md:p-14">
             <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary">
