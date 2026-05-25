@@ -5,7 +5,7 @@ function columnCountForWidth(width, layoutMode) {
   if (layoutMode === 'list') return 1;
   if (layoutMode === 'grid-2') return width >= 640 ? 2 : 1;
   if (width >= 1536) return 4;
-  if (width >= 1024) return 3;
+  if (width >= 900) return 3;
   if (width >= 640) return 2;
   return 1;
 }
@@ -68,7 +68,7 @@ export default function VirtualLibraryGrid({
   }, [hasMore, loadingMore, onLoadMore, rowCount, virtualRows]);
 
   return (
-    <div ref={parentRef} className="relative w-full" data-mounted-card-count={virtualRows.length * columns} data-library-layout={layoutMode}>
+    <div ref={parentRef} className="relative w-full" data-mounted-card-count={virtualRows.length * columns} data-library-layout={layoutMode} data-library-columns={columns}>
       <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
         {virtualRows.map((virtualRow) => (
           <div
