@@ -1356,6 +1356,116 @@ test('extension token can search Lens text and stops after revoke', async () => 
   }
 });
 
+test('agent access token can query library, call MCP tools, and stops after revoke', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  store.ensureUser('agent-user', 'agent@example.com');
+  store.upsertImportData({
+    userId: 'agent-user',
+    importId: 'agent-import',
+    parsed: {
+      collections: [],
+      items: [
+        {
+          id: 'agent-save-1',
+          url: 'https://example.com/soc2',
+          contentType: 'post',
+          caption: 'SOC 2 compliance checklist',
+          collections: ['Security'],
+          platform: 'Instagram',
+          platformKey: 'instagram',
+          sourceTitle: 'SOC 2 checklist',
+          sourceAuthor: 'security-team',
+          sourceDescription: 'Security controls and audit evidence',
+          thumbnailUrl: '',
+        },
+      ],
+    },
+    initialStatus: 'done',
+  });
+  store.saveAnalysis('agent-user', 'agent-save-1', {
+    title: 'SOC 2 checklist',
+    summary: 'Security controls and audit evidence checklist.',
+    visualDescription: 'A laptop screen showing audit controls.',
+    topics: ['security', 'compliance'],
+    tags: ['soc2'],
+  });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}/api`;
+    const userHeaders = { 'Content-Type': 'application/json', 'x-user-id': 'agent-user', 'x-user-email': 'agent@example.com' };
+
+    const createResponse = await fetch(`${base}/agent-access/tokens`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: JSON.stringify({ name: 'Codex local' }),
+    });
+    const createBody = await createResponse.json();
+    assert.equal(createResponse.status, 201);
+    assert.match(createBody.secret, /^isa_/);
+    assert.deepEqual(createBody.token.scopes, ['agent:access', 'library:search', 'library:read']);
+
+    const listResponse = await fetch(`${base}/agent-access/tokens`, { headers: userHeaders });
+    const listBody = await listResponse.json();
+    assert.equal(listResponse.status, 200);
+    assert.equal(listBody.tokens.length, 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(listBody.tokens[0], 'secret'), false);
+
+    const agentHeaders = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${createBody.secret}`,
+      'x-agent-client': 'node-test',
+    };
+    const queryResponse = await fetch(`${base}/agent-access/query`, {
+      method: 'POST',
+      headers: agentHeaders,
+      body: JSON.stringify({ question: 'SOC 2 audit evidence', limit: 5 }),
+    });
+    const queryBody = await queryResponse.json();
+    assert.equal(queryResponse.status, 200);
+    assert.equal(queryBody.resultCount, 1);
+    assert.equal(queryBody.items[0].id, 'agent-save-1');
+    assert.match(queryBody.guidance, /Cite save ids/);
+
+    const mcpResponse = await fetch(`http://127.0.0.1:${port}/api/mcp`, {
+      method: 'POST',
+      headers: agentHeaders,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'ask_iscraper_library',
+          arguments: { question: 'security controls' },
+        },
+      }),
+    });
+    const mcpBody = await mcpResponse.json();
+    assert.equal(mcpResponse.status, 200);
+    assert.equal(mcpBody.result.content[0].type, 'text');
+    assert.match(mcpBody.result.content[0].text, /agent-save-1/);
+
+    const revokeResponse = await fetch(`${base}/agent-access/tokens/${createBody.token.id}`, {
+      method: 'DELETE',
+      headers: userHeaders,
+    });
+    assert.equal(revokeResponse.status, 200);
+
+    const blockedResponse = await fetch(`${base}/agent-access/query`, {
+      method: 'POST',
+      headers: agentHeaders,
+      body: JSON.stringify({ question: 'SOC 2' }),
+    });
+    assert.equal(blockedResponse.status, 401);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('extension session can capture URL without opening the web app', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

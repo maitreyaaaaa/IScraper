@@ -299,6 +299,24 @@ export function revokeExtensionToken(id) {
   });
 }
 
+export function getAgentAccessTokens() {
+  return request('/agent-access/tokens');
+}
+
+export function createAgentAccessToken(name = 'Agent access') {
+  return request('/agent-access/tokens', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function revokeAgentAccessToken(id) {
+  return request(`/agent-access/tokens/${id}`, {
+    method: 'DELETE',
+  });
+}
+
 export function saveProviderCredential(payload) {
   return request('/provider-credentials', {
     method: 'POST',

@@ -7,9 +7,18 @@ const DEFAULT_EXTENSION_SCOPES = [
   'captures:create',
   'captures:delete',
 ];
+const DEFAULT_AGENT_SCOPES = [
+  'agent:access',
+  'library:search',
+  'library:read',
+];
 
 function generateExtensionToken() {
   return `isx_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+function generateAgentToken() {
+  return `isa_${crypto.randomBytes(32).toString('base64url')}`;
 }
 
 function hashExtensionToken(token) {
@@ -34,9 +43,18 @@ function defaultExtensionExpiry() {
   return date.toISOString();
 }
 
+function defaultAgentExpiry() {
+  const date = new Date();
+  date.setDate(date.getDate() + 90);
+  return date.toISOString();
+}
+
 module.exports = {
+  DEFAULT_AGENT_SCOPES,
   DEFAULT_EXTENSION_SCOPES,
+  defaultAgentExpiry,
   defaultExtensionExpiry,
+  generateAgentToken,
   generateExtensionToken,
   hashExtensionToken,
   publicExtensionToken,
