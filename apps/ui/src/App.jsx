@@ -52,10 +52,12 @@ import {
 import {
   approveReviewItem,
   cancelAccountDeletion,
+  createAgentAccessToken,
   createExtensionToken,
   createNote,
   deleteProviderCredential,
   downloadObsidianGraph,
+  getAgentAccessTokens,
   getAccountDeletion,
   getItem,
   getItems,
@@ -73,6 +75,7 @@ import {
   enrichItem,
   revealProviderCredential,
   requestAccountDeletion,
+  revokeAgentAccessToken,
   saveLink,
   saveProfile,
   saveProviderCredential,
@@ -3058,6 +3061,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
   const [noteForm, setNoteForm] = useState({ title: '', body: '', links: '', images: [] });
   const [credentials, setCredentials] = useState([]);
+  const [agentTokens, setAgentTokens] = useState([]);
+  const [agentTokenName, setAgentTokenName] = useState('Codex / Cursor / Claude');
+  const [createdAgentAccess, setCreatedAgentAccess] = useState(null);
   const [credentialOptions, setCredentialOptions] = useState(null);
   const [credentialForm, setCredentialForm] = useState({
     setup: 'openrouter_all',
@@ -3165,9 +3171,13 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   }, [collectionFilter, platformFilter, sortOrder, stateFilter, typeFilter]);
 
   const loadControls = useCallback(async () => {
-    const credentialBody = await getProviderCredentials();
+    const [credentialBody, agentBody] = await Promise.all([
+      getProviderCredentials(),
+      getAgentAccessTokens(),
+    ]);
     setCredentials(credentialBody.credentials || []);
     setCredentialOptions(credentialBody.options || null);
+    setAgentTokens(agentBody.tokens || []);
   }, []);
 
   const mergeUpdatedItem = useCallback((updated) => {
@@ -3237,6 +3247,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setLibraryNextCursor(null);
           setSearchResults(null);
           setCredentials([]);
+          setAgentTokens([]);
+          setCreatedAgentAccess(null);
           setLoading(false);
         resetPostHogUser();
       }
@@ -3254,6 +3266,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setLibraryNextCursor(null);
         setSearchResults(null);
         setCredentials([]);
+        setAgentTokens([]);
+        setCreatedAgentAccess(null);
         setProfile(null);
         setProfileRequired(false);
         setLoading(false);
@@ -3726,6 +3740,41 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   };
 
+  const handleCreateAgentAccess = async (event) => {
+    event.preventDefault();
+    if (!requireSignIn('connect agent access')) return;
+    if (!requireProfile('connect agent access')) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await createAgentAccessToken(agentTokenName);
+      setCreatedAgentAccess(body);
+      await loadControls();
+      setNotice('Agent access token created. Copy it now; IScraper only shows it once.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRevokeAgentAccess = async (id) => {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await revokeAgentAccessToken(id);
+      setCreatedAgentAccess((current) => (current?.token?.id === id ? null : current));
+      await loadControls();
+      setNotice('Agent access revoked.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const navItems = [
     ['library', 'Saved library', Brain],
     ['upload', 'Add saves', Upload],
@@ -4168,6 +4217,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 {canUsePrivateActions && tab === 'settings' && (
                   <SettingsTab
                     credentials={credentials}
+                    agentTokens={agentTokens}
+                    agentTokenName={agentTokenName}
+                    setAgentTokenName={setAgentTokenName}
+                    createdAgentAccess={createdAgentAccess}
+                    onCreateAgentAccess={handleCreateAgentAccess}
+                    onRevokeAgentAccess={handleRevokeAgentAccess}
                     credentialForm={credentialForm}
                     setCredentialForm={updateCredentialForm}
                     credentialSaveSuccess={credentialSaveSuccess}
@@ -6863,6 +6918,12 @@ function ReviewCard({ item, busy, onSelect, onUpdate, onApprove }) {
 
 function SettingsTab({
   credentials,
+  agentTokens,
+  agentTokenName,
+  setAgentTokenName,
+  createdAgentAccess,
+  onCreateAgentAccess,
+  onRevokeAgentAccess,
   credentialForm,
   setCredentialForm,
   credentialSaveSuccess,
@@ -6876,6 +6937,36 @@ function SettingsTab({
   const selectedSetup = KEY_SETUP_OPTIONS[credentialForm.setup] || KEY_SETUP_OPTIONS.openrouter_all;
   const [providerWarning, setProviderWarning] = useState(null);
   const providerWarningCopy = providerWarning ? PROVIDER_WARNING_COPY[providerWarning] : null;
+  const [copiedAgentValue, setCopiedAgentValue] = useState('');
+  const agentAccessUrls = useMemo(() => {
+    const base = import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '/api');
+    const apiUrl = new URL(base, window.location.origin);
+    const apiBase = apiUrl.href.replace(/\/api\/?$/, '/api');
+    return {
+      mcp: `${apiBase}/mcp`,
+      query: `${apiBase}/agent-access/query`,
+    };
+  }, []);
+  const agentMcpConfig = JSON.stringify({
+    mcpServers: {
+      iscraper: {
+        type: 'http',
+        url: agentAccessUrls.mcp,
+        headers: {
+          Authorization: 'Bearer PASTE_AGENT_TOKEN_HERE',
+        },
+      },
+    },
+  }, null, 2);
+  const copyAgentValue = async (value, key) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedAgentValue(key);
+      window.setTimeout(() => setCopiedAgentValue(''), 1600);
+    } catch {
+      setCopiedAgentValue('');
+    }
+  };
   const groupedCredentials = credentials.reduce((groups, credential) => {
     const key = `${credential.provider}:${credential.keyHint}:${credential.baseUrl || ''}:${credential.displayName || ''}`;
     if (!groups[key]) {
@@ -6939,6 +7030,102 @@ function SettingsTab({
           <span className="inline-flex shrink-0 items-center justify-center rounded-full bg-white/10 px-5 py-3 text-sm font-semibold text-muted-foreground">
             Coming soon
           </span>
+        </div>
+      </section>
+
+      <section className="space-y-5 rounded-2xl border border-white/10 p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Agent access</div>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Ask your library from Claude, Codex, or Cursor</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Create a read-only token for tools that support MCP or simple HTTP requests.
+            </p>
+          </div>
+          <span className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-4 py-2 text-xs font-semibold text-emerald-200">
+            <ShieldCheck className="h-4 w-4" /> Read only
+          </span>
+        </div>
+
+        <form onSubmit={onCreateAgentAccess} className="flex flex-col gap-3 sm:flex-row">
+          <input
+            value={agentTokenName}
+            onChange={(event) => setAgentTokenName(event.target.value)}
+            placeholder="Token name"
+            className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black px-4 py-3 text-sm outline-none focus:border-primary"
+          />
+          <button disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
+            Create token
+          </button>
+        </form>
+
+        {createdAgentAccess?.secret && (
+          <div className="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Copy now</div>
+                <p className="mt-1 text-sm text-muted-foreground">This token is shown once.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => copyAgentValue(createdAgentAccess.secret, 'agent-secret')}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground"
+              >
+                <Copy className="h-4 w-4" /> {copiedAgentValue === 'agent-secret' ? 'Copied' : 'Copy token'}
+              </button>
+            </div>
+            <code className="block break-all rounded-lg border border-white/10 bg-black p-3 font-mono text-xs text-foreground">
+              {createdAgentAccess.secret}
+            </code>
+          </div>
+        )}
+
+        <div className="grid gap-3">
+          <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">MCP endpoint</div>
+              <button type="button" onClick={() => copyAgentValue(agentAccessUrls.mcp, 'mcp-url')} className="rounded-lg border border-white/10 p-2 text-primary" aria-label="Copy MCP endpoint">
+                <Copy className="h-4 w-4" />
+              </button>
+            </div>
+            <code className="block break-all font-mono text-xs text-foreground">{agentAccessUrls.mcp}</code>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">MCP config</div>
+              <button type="button" onClick={() => copyAgentValue(agentMcpConfig, 'mcp-config')} className="rounded-lg border border-white/10 p-2 text-primary" aria-label="Copy MCP config">
+                <Copy className="h-4 w-4" />
+              </button>
+            </div>
+            <pre className="max-h-56 overflow-auto rounded-lg bg-black p-3 text-xs leading-5 text-muted-foreground">{agentMcpConfig}</pre>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {agentTokens?.length ? agentTokens.map((token) => (
+            <div key={token.id} className="flex items-center gap-3 rounded-xl border border-white/10 p-4">
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold">{token.name || 'Agent access'}</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {token.revokedAt ? 'Revoked' : token.lastUsedAt ? `Last used ${new Date(token.lastUsedAt).toLocaleDateString()}` : 'Not used yet'} - expires {token.expiresAt ? new Date(token.expiresAt).toLocaleDateString() : 'never'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onRevokeAgentAccess(token.id)}
+                disabled={busy || Boolean(token.revokedAt)}
+                className="rounded-lg border border-white/10 p-2 text-destructive disabled:opacity-50"
+                aria-label="Revoke agent access"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )) : (
+            <div className="rounded-xl border border-white/10 px-4 py-3 text-sm text-muted-foreground">
+              No agent tokens yet.
+            </div>
+          )}
         </div>
       </section>
 

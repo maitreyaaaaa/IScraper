@@ -17,11 +17,19 @@ const { parseManualLinkPayload } = require('./services/linkSaver');
 const { validateProfileInput } = require('./services/profiles');
 const { contextForRequest, createObservability } = require('./services/observability');
 const {
+  DEFAULT_AGENT_SCOPES,
   DEFAULT_EXTENSION_SCOPES,
+  defaultAgentExpiry,
   defaultExtensionExpiry,
+  generateAgentToken,
   generateExtensionToken,
   hashExtensionToken,
 } = require('./services/extensionTokens');
+const {
+  buildAgentQueryResponse,
+  handleMcpRequest,
+  publicAgentItem,
+} = require('./services/agentAccess');
 const { cleanLensText, describeLensCrop } = require('./services/lensSearch');
 const {
   isDeletionBlockingStatus,
@@ -85,6 +93,24 @@ async function getExtensionUser(req, store, requiredScope = 'lens:search') {
   const user = await store.getUserForExtensionToken(hashExtensionToken(token), requiredScope);
   if (!user) {
     const error = new Error('Extension token is invalid, expired, or revoked.');
+    error.statusCode = 401;
+    throw error;
+  }
+  return user;
+}
+
+async function getAgentUser(req, store, requiredScope = 'agent:access') {
+  const auth = req.header('authorization') || '';
+  const bearer = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : '';
+  const token = String(req.header('x-iscraper-agent-token') || bearer || '').trim();
+  if (!token || typeof store.getUserForExtensionToken !== 'function') {
+    const error = new Error('Agent access token is required.');
+    error.statusCode = 401;
+    throw error;
+  }
+  const user = await store.getUserForExtensionToken(hashExtensionToken(token), requiredScope);
+  if (!user) {
+    const error = new Error('Agent access token is invalid, expired, revoked, or missing the required scope.');
     error.statusCode = 401;
     throw error;
   }
@@ -1222,6 +1248,52 @@ function createApp({ store, config = {}, observability = createObservability(con
     return user;
   }
 
+  async function getAgentRequestUser(req, scope = 'agent:access') {
+    const user = await getAgentUser(req, store, scope);
+    req.user = user;
+    if (typeof store.getActiveDeletionRequest === 'function') {
+      const deletion = await store.getActiveDeletionRequest(user.id);
+      if (deletion && isDeletionBlockingStatus(deletion.status)) {
+        const error = new Error('Account deletion is pending. Agent access is disabled for this account.');
+        error.statusCode = 423;
+        error.deletion = publicDeletionRequest(deletion);
+        throw error;
+      }
+    }
+    await requireCompletedProfile(req, store);
+    return user;
+  }
+
+  async function runAgentLibraryQuery({ req, userId, query, limit = 8 }) {
+    const cleanQuery = cleanText(query || '', 240);
+    if (!cleanQuery) {
+      const error = new Error('Ask a question before searching your IScraper library.');
+      error.statusCode = 400;
+      throw error;
+    }
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 20));
+    const results = (await runSearch({ store, config, userId, query: cleanQuery, filters: { limit: safeLimit } })).slice(0, safeLimit);
+    const searchEventId = createSearchEventId();
+    if (typeof store.recordSearchEvent === 'function') {
+      await store.recordSearchEvent({
+        id: searchEventId,
+        userId,
+        query: results.length === 0 ? cleanQuery : '',
+        queryLength: cleanQuery.length,
+        filters: { source: 'agent-access', limit: safeLimit },
+        resultCount: results.length,
+        includeAi: false,
+        resultIds: results.map((item) => item.id),
+      });
+    }
+    captureWorkflow(req, 'agent library queried', {
+      searchEventId,
+      resultCount: results.length,
+      client: cleanText(req.header('x-agent-client') || '', 80),
+    });
+    return { searchEventId, results, response: buildAgentQueryResponse({ query: cleanQuery, results }) };
+  }
+
   app.post('/api/extension/saves/link', importRateLimit, asyncRoute(async (req, res) => {
     const user = await getExtensionRequestUser(req, 'saves:create');
     const parsed = parseManualLinkPayload(req.body || {});
@@ -1364,6 +1436,42 @@ function createApp({ store, config = {}, observability = createObservability(con
       imageCount: assets.length,
     });
     return res.json({ deleted: Boolean(deleted), itemId: existing.id });
+  }));
+
+  app.post('/api/agent-access/query', searchRateLimit, asyncRoute(async (req, res) => {
+    const user = await getAgentRequestUser(req, 'library:search');
+    const { searchEventId, response } = await runAgentLibraryQuery({
+      req,
+      userId: user.id,
+      query: req.body?.question || req.body?.query,
+      limit: req.body?.limit,
+    });
+    return res.json({ ...response, searchEventId });
+  }));
+
+  app.get('/api/agent-access/items/:id', searchRateLimit, asyncRoute(async (req, res) => {
+    const user = await getAgentRequestUser(req, 'library:read');
+    const item = await store.getItem(user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: 'Saved item not found.' });
+    captureWorkflow(req, 'agent item read', {
+      itemId: item.id,
+      client: cleanText(req.header('x-agent-client') || '', 80),
+    });
+    return res.json({ item: publicAgentItem(item) });
+  }));
+
+  app.post('/api/mcp', searchRateLimit, asyncRoute(async (req, res) => {
+    const user = await getAgentRequestUser(req, 'library:search');
+    const search = ({ userId, query, filters }) => runSearch({ store, config, userId, query, filters });
+    const response = Array.isArray(req.body)
+      ? await Promise.all(req.body.map((entry) => handleMcpRequest({ request: entry, userId: user.id, store, search })))
+      : await handleMcpRequest({ request: req.body, userId: user.id, store, search });
+    if (response === null) return res.status(202).json({});
+    captureWorkflow(req, 'mcp request handled', {
+      client: cleanText(req.header('x-agent-client') || 'mcp', 80),
+      batched: Array.isArray(req.body),
+    });
+    return res.json(Array.isArray(response) ? response.filter(Boolean) : response);
   }));
 
   app.use(asyncRoute(async (req, _res, next) => {
@@ -1722,6 +1830,44 @@ function createApp({ store, config = {}, observability = createObservability(con
     if (!revoked) return res.status(404).json({ error: 'Extension token not found.' });
     captureWorkflow(req, 'extension token revoked', { extensionTokenId: req.params.id });
     return res.json({ revoked: true });
+  }));
+
+  app.get('/api/agent-access/tokens', asyncRoute(async (req, res) => {
+    if (typeof store.listExtensionTokens !== 'function') return res.json({ tokens: [] });
+    const tokens = (await store.listExtensionTokens(req.user.id))
+      .filter((token) => (token.scopes || []).includes('agent:access'));
+    return res.json({ tokens });
+  }));
+
+  app.post('/api/agent-access/tokens', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.createExtensionToken !== 'function') return res.status(501).json({ error: 'Agent access tokens are not available.' });
+    const rawToken = generateAgentToken();
+    const token = await store.createExtensionToken(req.user.id, {
+      tokenHash: hashExtensionToken(rawToken),
+      name: cleanText(req.body?.name || 'Agent access', 80),
+      scopes: DEFAULT_AGENT_SCOPES,
+      expiresAt: defaultAgentExpiry(),
+    });
+    captureWorkflow(req, 'agent access token created', { agentTokenId: token.id, scopeCount: DEFAULT_AGENT_SCOPES.length });
+    return res.status(201).json({
+      token,
+      secret: rawToken,
+      mcpEndpoint: '/api/mcp',
+      queryEndpoint: '/api/agent-access/query',
+    });
+  }));
+
+  app.delete('/api/agent-access/tokens/:id', asyncRoute(async (req, res) => {
+    if (typeof store.revokeExtensionToken !== 'function' || typeof store.listExtensionTokens !== 'function') {
+      return res.status(501).json({ error: 'Agent access tokens are not available.' });
+    }
+    const existing = (await store.listExtensionTokens(req.user.id))
+      .find((token) => token.id === req.params.id && (token.scopes || []).includes('agent:access'));
+    if (!existing) return res.status(404).json({ error: 'Agent access token not found.' });
+    const revoked = await store.revokeExtensionToken(req.user.id, req.params.id);
+    captureWorkflow(req, 'agent access token revoked', { agentTokenId: req.params.id });
+    return res.json({ revoked: Boolean(revoked) });
   }));
 
   app.get('/api/graph', asyncRoute(async (req, res) => {
