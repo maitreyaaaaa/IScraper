@@ -23,6 +23,7 @@ const {
   hashExtensionToken,
 } = require('./services/extensionTokens');
 const { cleanLensText, describeLensCrop } = require('./services/lensSearch');
+const { findSimilarVisualItems } = require('./services/similarVisuals');
 const {
   isDeletionBlockingStatus,
   processAccountDeletionRequest,
@@ -1542,6 +1543,17 @@ function createApp({ store, config = {}, observability = createObservability(con
     const item = await store.getItem(req.user.id, req.params.id);
     if (!item) return res.status(404).json({ error: 'Item not found.' });
     return res.json({ item });
+  }));
+
+  app.get('/api/items/:id/similar-visuals', searchRateLimit, asyncRoute(async (req, res) => {
+    const item = await store.getItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+    const items = await store.getItems(req.user.id);
+    const result = findSimilarVisualItems(items, item.id, { limit: req.query.limit });
+    return res.json({
+      item,
+      results: result.items,
+    });
   }));
 
   app.patch('/api/items/:id/review', asyncRoute(async (req, res) => {
