@@ -40,6 +40,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Tag,
   ThumbsDown,
@@ -132,6 +133,7 @@ const STALE_ENRICHMENT_UI_MS = 15 * 60 * 1000;
 const TYPE_FILTERS = ['all', 'uploaded', 'links', 'notes'];
 const STATE_FILTERS = ['all', 'needs_review', 'searchable', 'enriched', 'failed'];
 const SORT_OPTIONS = ['newest', 'oldest'];
+const DASHBOARD_TABS = ['library', 'smart', 'care', 'graph', 'upload', 'settings'];
 const LIBRARY_LAYOUT_STORAGE_KEY = 'iscraper.libraryLayout.v1';
 const LIBRARY_LAYOUT_OPTIONS = ['grid-2', 'grid-3', 'gallery', 'list'];
 const LIBRARY_LAYOUT_ITEMS = [
@@ -1008,7 +1010,11 @@ function itemIdFromLocation() {
 
 function dashboardTabFromLocation() {
   const tab = appParamsFromLocation().get('tab');
-  return ['library', 'gallery', 'smart', 'care', 'graph', 'upload', 'settings'].includes(tab) ? tab : 'library';
+  return DASHBOARD_TABS.includes(tab) ? tab : 'library';
+}
+
+function libraryLayoutFromLocation() {
+  return appParamsFromLocation().get('tab') === 'gallery' ? 'gallery' : readStoredLibraryLayout();
 }
 
 function cleanAuthCallbackUrl() {
@@ -3159,7 +3165,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [sortOrder, setSortOrder] = useState('newest');
   const [collectionFilter, setCollectionFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
-  const [libraryLayout, setLibraryLayout] = useState(() => readStoredLibraryLayout());
+  const [libraryLayout, setLibraryLayout] = useState(() => libraryLayoutFromLocation());
   const [items, setItems] = useState([]);
   const [libraryItems, setLibraryItems] = useState([]);
   const [libraryTotalCount, setLibraryTotalCount] = useState(0);
@@ -3560,6 +3566,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   useEffect(() => {
     const onDashboardLocationChange = () => {
       setTab(dashboardTabFromLocation());
+      if (appParamsFromLocation().get('tab') === 'gallery') {
+        setLibraryLayout('gallery');
+      }
       resetPageScroll();
     };
     window.addEventListener('popstate', onDashboardLocationChange);
@@ -4137,14 +4146,13 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
 
   const navItems = [
     ['library', 'Saved library', Brain],
-    ['gallery', 'Gallery', Images],
     ['smart', 'Smart Collections', Folder],
-    ['care', 'Library checkup', ShieldCheck],
     ['upload', 'Add saves', Upload],
   ];
   const advancedNavItems = [
+    ['care', 'Library checkup', ShieldCheck],
     ['graph', 'Graph view', GitBranch],
-    ['settings', 'BYOK', Settings],
+    ['settings', 'AI keys', KeyRound],
   ];
   const SidebarToggleIcon = sidebarExpanded ? PanelLeftClose : PanelLeftOpen;
   const advancedActive = advancedNavItems.some(([key]) => key === tab);
@@ -4152,7 +4160,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const advancedExpanded = sidebarVisibleExpanded && (advancedOpen || advancedActive);
 
   const selectTab = useCallback((nextTab) => {
-    if (!['library', 'gallery', 'smart', 'care', 'graph', 'upload', 'settings'].includes(nextTab)) return;
+    if (!DASHBOARD_TABS.includes(nextTab)) return;
     if (nextTab === 'upload') setUploadInitialMode('upload');
     setTab(nextTab);
     replaceAppTabUrl(nextTab);
@@ -4347,75 +4355,74 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             <FileText className="h-4 w-4 shrink-0" />
             {sidebarVisibleExpanded && <span className="truncate">How to Use</span>}
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (authEnabled && !session) {
-                onOpenLogin();
-                return;
-              }
-              if (!session) {
-                selectTab('settings');
-                return;
-              }
-              setAccountSettingsOpen(true);
-            }}
-            title="Settings"
-            aria-label="Open account settings"
-            className={`flex items-center rounded-lg text-sm text-muted-foreground transition hover:bg-white/5 hover:text-foreground ${
-              sidebarVisibleExpanded ? 'w-full gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
-            }`}
-          >
-            <Settings className="h-4 w-4 shrink-0" />
-            {sidebarVisibleExpanded && <span className="truncate">Settings</span>}
-          </button>
         </nav>
         <div className={`border-t border-white/5 p-3 ${sidebarVisibleExpanded ? '' : 'flex flex-col items-center'}`}>
-          <button
-            type="button"
-            onClick={() => {
-              if (!sidebarVisibleExpanded) {
-                setSidebarExpanded(true);
-                setAdvancedOpen(true);
-                return;
-              }
-              setAdvancedOpen((current) => !current);
-            }}
-            title="Advanced Options"
-            aria-label="Advanced Options"
-            aria-expanded={advancedExpanded}
-            className={`flex items-center rounded-lg text-sm transition ${
-              advancedActive ? 'text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
-            } ${
-              sidebarVisibleExpanded ? 'w-full justify-between gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
-            }`}
-          >
-            <span className={`flex items-center ${sidebarVisibleExpanded ? 'gap-3' : ''}`}>
-              <Settings className="h-4 w-4 shrink-0" />
-              {sidebarVisibleExpanded && <span className="truncate">Advanced Options</span>}
-            </span>
-            {sidebarVisibleExpanded && (
-              <ChevronDown className={`h-4 w-4 shrink-0 transition ${advancedExpanded ? 'rotate-180' : ''}`} />
-            )}
-          </button>
+          <div className={`flex ${sidebarVisibleExpanded ? 'items-center gap-2' : 'flex-col items-center gap-2'}`}>
+            <button
+              type="button"
+              onClick={() => {
+                if (authEnabled && !session) {
+                  onOpenLogin();
+                  return;
+                }
+                if (!session) {
+                  selectTab('settings');
+                  return;
+                }
+                setAccountSettingsOpen(true);
+              }}
+              title="Settings"
+              aria-label="Open settings"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-muted-foreground transition hover:bg-white/5 hover:text-primary"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((current) => !current)}
+              title="Advanced Options"
+              aria-label="Advanced Options"
+              aria-expanded={advancedExpanded}
+              className={`flex min-h-11 items-center rounded-lg text-sm transition ${
+                advancedActive ? 'text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+              } ${
+                sidebarVisibleExpanded ? 'min-w-0 flex-1 justify-between gap-2 px-3 py-2.5' : 'h-11 w-11 justify-center'
+              }`}
+            >
+              <span className={`flex min-w-0 items-center ${sidebarVisibleExpanded ? 'gap-3' : ''}`}>
+                <SlidersHorizontal className="h-4 w-4 shrink-0" />
+                {sidebarVisibleExpanded && <span className="truncate">Advanced Options</span>}
+              </span>
+              {sidebarVisibleExpanded && (
+                <ChevronDown className={`h-4 w-4 shrink-0 transition ${advancedExpanded ? 'rotate-90' : '-rotate-90'}`} />
+              )}
+            </button>
+          </div>
           {advancedExpanded && (
-            <div className={`mt-1 space-y-1 ${sidebarVisibleExpanded ? '' : 'flex flex-col items-center'}`}>
+            <div
+              className="fixed bottom-16 z-[80] w-60 rounded-2xl border border-white/10 bg-black/95 p-2 shadow-2xl shadow-black/70 backdrop-blur"
+              style={{ left: sidebarVisibleExpanded ? '15.75rem' : '5.25rem' }}
+            >
+              <div className="mb-1 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-primary">
+                Advanced Options
+              </div>
               {advancedNavItems.map(([key, title, Icon]) => (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => selectTab(key)}
+                  onClick={() => {
+                    selectTab(key);
+                    setAdvancedOpen(false);
+                  }}
                   title={title}
                   aria-label={title}
                   aria-current={tab === key ? 'page' : undefined}
-                  className={`flex items-center rounded-lg text-sm transition ${
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition ${
                     tab === key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
-                  } ${
-                    sidebarVisibleExpanded ? 'w-full gap-3 px-3 py-2.5 pl-7' : 'h-11 w-11 justify-center'
                   }`}
                 >
                   <Icon className="h-4 w-4 shrink-0" />
-                  {sidebarVisibleExpanded && <span className="truncate">{title}</span>}
+                  <span className="truncate">{title}</span>
                 </button>
               ))}
             </div>
@@ -4515,57 +4522,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     searchAi={searchMeta.ai}
                     searchFeedback={searchMeta.feedback}
                     onSearchFeedback={handleSearchFeedback}
-                    scrollRef={dashPanelRef}
-                    hasMore={!searchActive && Boolean(libraryNextCursor)}
-                    loadingMore={libraryLoading}
-                    onLoadMore={() => {
-                      if (!libraryLoading && libraryNextCursor) loadLibraryPage({ cursor: libraryNextCursor });
-                    }}
-                  />
-                )}
-                {authEnabled && !session && tab === 'gallery' && (
-                  <AuthRequiredPanel
-                    title="Sign in to view Gallery."
-                    copy="Gallery is a private visual view of your saved library."
-                    busy={busy}
-                    onSignIn={onOpenLogin}
-                  />
-                )}
-                {authEnabled && session && profileRequired && tab === 'gallery' && (
-                  <ProfileRequiredPanel
-                    profileForm={profileForm}
-                    setProfileForm={setProfileForm}
-                    onAvatarFile={handleAvatarFile}
-                    onSave={handleProfileSave}
-                    busy={busy}
-                  />
-                )}
-                {canUsePrivateActions && tab === 'gallery' && (
-                  <GalleryTab
-                    items={filtered}
-                    totalCount={searchActive ? items.length : libraryTotalCount}
-                    searchActive={searchActive}
-                    searchResultCount={boardItems.length}
-                    query={query}
-                    visualSearch={visualSearch}
-                    onClearSearch={clearSearchState}
-                    typeFilter={typeFilter}
-                    setTypeFilter={setTypeFilter}
-                    stateFilter={stateFilter}
-                    setStateFilter={setStateFilter}
-                    sortOrder={sortOrder}
-                    setSortOrder={setSortOrder}
-                    collectionFilter={collectionFilter}
-                    setCollectionFilter={setCollectionFilter}
-                    collections={collections}
-                    platformFilter={platformFilter}
-                    setPlatformFilter={setPlatformFilter}
-                    platforms={platforms}
-                    onSelect={openDetail}
-                    indexingActivity={indexingActivity}
-                    activationState={activationState}
-                    onOpenAdd={() => selectTab('upload')}
-                    onOpenLibrarySearch={() => selectTab('library')}
                     scrollRef={dashPanelRef}
                     hasMore={!searchActive && Boolean(libraryNextCursor)}
                     loadingMore={libraryLoading}
@@ -4709,8 +4665,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 )}
                 {authEnabled && !session && tab === 'settings' && (
                   <AuthRequiredPanel
-                    title="Sign in to open Settings."
-                    copy="Settings belong to your private account."
+                    title="Sign in to manage AI keys."
+                    copy="AI keys belong to your private account."
                     busy={busy}
                     onSignIn={onOpenLogin}
                   />
@@ -6291,7 +6247,7 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
   const avatarUrl = avatarUrlForSession(session, profile);
   const initial = initialForSession(session, profile);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const advancedActive = tab === 'graph' || tab === 'settings';
+  const advancedActive = tab === 'care' || tab === 'graph' || tab === 'settings';
   return (
     <div className="sticky top-0 z-30 border-b border-white/10 bg-black/90 p-3 backdrop-blur md:hidden">
       <div className="mb-3 flex items-center justify-between">
@@ -6310,12 +6266,10 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
           </button>
         )}
       </div>
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         {[
           ['library', 'Library'],
-          ['gallery', 'Gallery'],
           ['smart', 'Smart'],
-          ['care', 'Check'],
           ['upload', 'Add'],
         ].map(([key, label]) => (
           <button
@@ -6346,8 +6300,9 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
         {(advancedOpen || advancedActive) && (
           <div className="grid grid-cols-2 gap-2 border-t border-white/10 p-2">
             {[
+              ['care', 'Checkup'],
               ['graph', 'Graph view'],
-              ['settings', 'BYOK'],
+              ['settings', 'AI keys'],
             ].map(([key, label]) => (
               <button
                 key={key}
@@ -6963,221 +6918,6 @@ function LibraryTab({
                   onSearchFeedback={onSearchFeedback}
                 />
               )
-            )}
-          />
-        )}
-      </div>
-
-      {hasMore && (
-        <div className="mt-4 flex justify-center">
-          <button
-            type="button"
-            onClick={onLoadMore}
-            disabled={loadingMore}
-            className="rounded-full border border-white/10 bg-white/[0.04] px-6 py-3 text-sm font-semibold transition hover:border-primary hover:text-primary"
-          >
-            {loadingMore ? 'Loading...' : 'Show more saves'}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function GalleryTab({
-  items,
-  totalCount,
-  searchActive,
-  searchResultCount,
-  query,
-  visualSearch,
-  onClearSearch,
-  typeFilter,
-  setTypeFilter,
-  stateFilter,
-  setStateFilter,
-  sortOrder,
-  setSortOrder,
-  collectionFilter,
-  setCollectionFilter,
-  collections,
-  platformFilter,
-  setPlatformFilter,
-  platforms,
-  onSelect,
-  indexingActivity,
-  activationState,
-  onOpenAdd,
-  onOpenLibrarySearch,
-  scrollRef,
-  hasMore = false,
-  loadingMore = false,
-  onLoadMore,
-}) {
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const activeFilters = (typeFilter !== 'all' ? 1 : 0) + (stateFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
-  const visualPreviewCount = items.filter((item) => Boolean(item.thumbnailUrl)).length;
-  const pendingPreviewCount = Math.max(0, items.length - visualPreviewCount);
-  const updateFilter = useCallback((setter) => (value) => {
-    setter(value);
-  }, []);
-  const mobileFilterGroups = useMemo(() => [
-    { label: 'Type', value: typeFilter, options: TYPE_FILTERS, onChange: updateFilter(setTypeFilter) },
-    { label: 'Status', value: stateFilter, options: STATE_FILTERS, onChange: updateFilter(setStateFilter) },
-    { label: 'Platform', value: platformFilter, options: platforms, onChange: updateFilter(setPlatformFilter) },
-    { label: 'Collection', value: collectionFilter, options: collections, onChange: updateFilter(setCollectionFilter) },
-    { label: 'Sort', value: sortOrder, options: SORT_OPTIONS, onChange: updateFilter(setSortOrder) },
-  ], [collectionFilter, collections, platformFilter, platforms, sortOrder, stateFilter, typeFilter, updateFilter, setCollectionFilter, setPlatformFilter, setSortOrder, setStateFilter, setTypeFilter]);
-
-  return (
-    <div className="mx-auto max-w-[1520px] px-4 pb-28 pt-8 sm:px-6 md:px-10 md:py-12">
-      <div className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
-        <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="p-6 md:p-8">
-            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-              <Images className="h-3.5 w-3.5" />
-              Private visual view
-            </div>
-            <h1 className="font-display text-4xl font-bold tracking-tight md:text-5xl">Gallery</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-              A visual board for screenshots, products, memes, UI references, and image-heavy saves from the same private library.
-            </p>
-            <div className="mt-5 flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full border border-white/10 bg-black px-3 py-2 text-muted-foreground">
-                {items.length} shown from {totalCount || items.length} saves
-              </span>
-              <span className="rounded-full border border-white/10 bg-black px-3 py-2 text-muted-foreground">
-                {visualPreviewCount} with previews
-              </span>
-              {pendingPreviewCount > 0 && (
-                <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-amber-200">
-                  {pendingPreviewCount} preview pending
-                </span>
-              )}
-            </div>
-          </div>
-          <div className="border-t border-white/10 bg-black/30 p-6 md:p-8 lg:border-l lg:border-t-0">
-            <div className="flex h-full flex-col justify-between gap-5">
-              <div>
-                <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Creator board</div>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  Open a card to inspect the original save, source, notes, collection, status, and full image preview.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={onOpenAdd}
-                  className="inline-flex min-h-11 items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
-                >
-                  <Plus className="h-4 w-4" /> Add saves
-                </button>
-                <button
-                  type="button"
-                  onClick={onOpenLibrarySearch}
-                  className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold text-foreground transition hover:border-primary"
-                >
-                  <Search className="h-4 w-4" /> Search library
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <IndexingProgressCard activity={indexingActivity} />
-
-      {searchActive && (
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/25 bg-primary/5 p-4 text-sm">
-          <span className="min-w-0 text-muted-foreground">
-            {visualSearch
-              ? `Showing Same Vibe matches for ${visualSearch.fileName}: ${searchResultCount} matches.`
-              : `Showing Library search results${query ? ` for "${query}"` : ''}: ${searchResultCount} matches.`}
-          </span>
-          <button
-            type="button"
-            onClick={onClearSearch}
-            className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-foreground transition hover:bg-white/5"
-          >
-            <X className="h-3.5 w-3.5" /> Clear search
-          </button>
-        </div>
-      )}
-
-      <div className="sticky top-0 z-20 -mx-4 mt-5 border-y border-white/5 bg-black/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:-mx-10 md:px-10">
-        <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
-          <span>
-            Visual board | {items.length} shown{activeFilters > 0 ? ` | ${activeFilters} filters active` : ''}
-          </span>
-          <button
-            type="button"
-            onClick={() => setFiltersOpen(true)}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-white/10 px-4 py-2 font-sans text-sm font-semibold text-foreground transition hover:border-primary md:hidden"
-          >
-            <Filter className="h-4 w-4 text-primary" />
-            Filters {activeFilters > 0 ? `(${activeFilters})` : ''}
-          </button>
-          <div className="hidden flex-wrap gap-2 md:flex">
-            <DashboardFilterSelect label="Type" ariaLabel="Filter by content type" icon={Filter} value={typeFilter} options={TYPE_FILTERS} onChange={setTypeFilter} />
-            <DashboardFilterSelect label="Status" ariaLabel="Filter by status" icon={CheckCircle2} value={stateFilter} options={STATE_FILTERS} onChange={setStateFilter} />
-            <DashboardFilterSelect label="Platform" ariaLabel="Filter by platform" value={platformFilter} options={platforms} onChange={setPlatformFilter} />
-            <DashboardFilterSelect label="Collection" ariaLabel="Filter by collection" value={collectionFilter} options={collections} onChange={setCollectionFilter} />
-            <DashboardFilterSelect label="Sort" ariaLabel="Sort gallery" icon={ChevronDown} value={sortOrder} options={SORT_OPTIONS} onChange={setSortOrder} />
-            {activeFilters > 0 && <span className="rounded-full bg-primary px-3 py-2 text-primary-foreground">{activeFilters} active</span>}
-          </div>
-        </div>
-      </div>
-
-      <MobileFiltersSheet open={filtersOpen} onClose={() => setFiltersOpen(false)} groups={mobileFilterGroups} activeFilters={activeFilters} />
-
-      <div className="mt-8">
-        {items.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center md:p-14">
-            <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary">
-              <Images className="h-5 w-5" />
-            </div>
-            <h3 className="mt-4 font-display text-2xl font-bold tracking-tight">
-              {searchActive && searchResultCount === 0
-                ? 'No visual matches yet'
-                : activeFilters > 0
-                  ? 'No saves match these filters'
-                  : activationState.needsReview
-                    ? 'Check one save to build your Gallery'
-                    : 'Add visual saves to start'}
-            </h3>
-            <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-              {searchActive && searchResultCount === 0
-                ? 'Clear the Library search or try another term from the Saved library tab.'
-                : activeFilters > 0
-                  ? 'Clear filters or switch back to All to see your visual board.'
-                  : activationState.needsReview
-                    ? 'Open Add saves, check one saved link, and add it to your Library.'
-                    : 'Paste a link, upload Instagram, Pinterest, or X files, or create a note with images.'}
-            </p>
-            <button
-              type="button"
-              onClick={onOpenAdd}
-              className="mt-5 inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
-            >
-              <Upload className="h-4 w-4" /> Add saves
-            </button>
-          </div>
-        ) : (
-          <VirtualLibraryGrid
-            items={items}
-            scrollRef={scrollRef}
-            layoutMode="gallery"
-            hasMore={hasMore}
-            loadingMore={loadingMore}
-            onLoadMore={onLoadMore}
-            renderItem={(item, index, cardHeight) => (
-              <GalleryCard
-                key={item.id}
-                item={item}
-                height={cardHeight}
-                onClick={onSelect}
-                searchActive={searchActive}
-              />
             )}
           />
         )}
@@ -8085,7 +7825,7 @@ function SettingsTab({
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="font-display text-4xl font-bold tracking-tight">Settings</h1>
+            <h1 className="font-display text-4xl font-bold tracking-tight">AI keys</h1>
             <span className="rounded-full bg-primary px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-primary-foreground">
               BYOK only
             </span>
