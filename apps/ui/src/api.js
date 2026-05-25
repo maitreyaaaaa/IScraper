@@ -285,11 +285,11 @@ export function getExtensionTokens() {
   return request('/extension-tokens');
 }
 
-export function createExtensionToken(name = 'Browser extension') {
+export function createExtensionToken(name = 'Browser extension', scopes = null) {
   return request('/extension-tokens', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, ...(Array.isArray(scopes) ? { scopes } : {}) }),
   });
 }
 

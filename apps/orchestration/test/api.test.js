@@ -1394,6 +1394,95 @@ test('extension session can capture URL without opening the web app', async () =
   }
 });
 
+test('Telegram webhook connects a chat and saves forwarded links', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { telegramWebhookSecret: 'telegram-secret' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const tokenResponse = await fetch(`http://127.0.0.1:${port}/api/extension-tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Telegram save bot' }),
+    });
+    const tokenBody = await tokenResponse.json();
+
+    const connectResponse = await fetch(`http://127.0.0.1:${port}/api/telegram/webhook`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Telegram-Bot-Api-Secret-Token': 'telegram-secret',
+      },
+      body: JSON.stringify({
+        update_id: 1,
+        message: {
+          message_id: 10,
+          chat: { id: 12345, type: 'private' },
+          from: { first_name: 'Creator', username: 'creator' },
+          text: `/connect ${tokenBody.secret}`,
+        },
+      }),
+    });
+    const connectBody = await connectResponse.json();
+
+    const saveResponse = await fetch(`http://127.0.0.1:${port}/api/telegram/webhook`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Telegram-Bot-Api-Secret-Token': 'telegram-secret',
+      },
+      body: JSON.stringify({
+        update_id: 2,
+        message: {
+          message_id: 11,
+          chat: { id: 12345, type: 'private' },
+          from: { first_name: 'Creator', username: 'creator' },
+          text: 'Save this UI reference https://example.com/share-target',
+        },
+      }),
+    });
+    const saveBody = await saveResponse.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(tokenResponse.status, 201);
+    assert.equal(connectResponse.status, 200);
+    assert.match(connectBody.text, /Connected/i);
+    assert.equal(saveResponse.status, 201);
+    assert.match(saveBody.text, /Saved/i);
+    assert.equal(saveBody.item.sourceTitle, 'Save this UI reference');
+    assert.equal(items.some((item) => item.url === 'https://example.com/share-target'), true);
+    assert.equal(items.find((item) => item.url === 'https://example.com/share-target')?.collections[0], 'Telegram saves');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Telegram webhook requires the configured secret token', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { telegramWebhookSecret: 'telegram-secret' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/telegram/webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ update_id: 1, message: { chat: { id: 1 }, text: 'https://example.com' } }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 401);
+    assert.match(body.error, /secret/i);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('extension session can undo a URL capture it created', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
@@ -1557,13 +1646,13 @@ test('POST /api/imports rejects unsupported uploads', async () => {
   try {
     const port = server.address().port;
     const form = new FormData();
-    form.append('exportFiles', new Blob(['not html'], { type: 'text/plain' }), 'notes.txt');
+    form.append('exportFiles', new Blob(['not html'], { type: 'text/plain' }), 'notes.exe');
 
     const response = await fetch(`http://127.0.0.1:${port}/api/imports`, { method: 'POST', body: form });
     const body = await response.json();
 
     assert.equal(response.status, 400);
-    assert.match(body.error, /Instagram ZIP\/HTML\/JSON/);
+    assert.match(body.error, /Instagram, Pinterest, or X/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });

@@ -301,7 +301,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return deleteUserRowsFromTables(client, userId, tables);
     },
     async deleteUserAccessData(userId) {
-      return deleteUserRowsFromTables(client, userId, ['user_provider_credentials', 'extension_tokens', 'user_ai_keys']);
+      return deleteUserRowsFromTables(client, userId, ['capture_connections', 'user_provider_credentials', 'extension_tokens', 'user_ai_keys']);
     },
     async deleteUserProfileData(userId) {
       const retainedPurchases = await retainCompletedCreditPurchases(client, userId);
@@ -356,7 +356,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return mapDeletionRequest(data);
     },
     async getPrivacyExport(userId) {
-      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, credentials, extensionTokens, searchEvents, searchFeedback, profile, credits, deletionRequest] = await Promise.all([
+      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, credentials, extensionTokens, captureConnections, searchEvents, searchFeedback, profile, credits, deletionRequest] = await Promise.all([
         this.getItems(userId),
         selectAllUserRows(client, 'item_archives', userId, '*', (query) => query.order('updated_at', { ascending: false })),
         selectAllUserRows(client, 'link_health_checks', userId, '*', (query) => query.order('checked_at', { ascending: false })),
@@ -367,6 +367,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         selectAllUserRows(client, 'smart_collection_items', userId, '*', (query) => query.order('updated_at', { ascending: false })),
         this.listProviderCredentials(userId),
         this.listExtensionTokens(userId),
+        this.listCaptureConnections(userId),
         selectAllUserRows(client, 'search_events', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'search_result_feedback', userId, '*', (query) => query.order('created_at', { ascending: false })),
         this.getProfile(userId),
@@ -386,6 +387,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         credits,
         providerCredentials: credentials,
         extensionTokens,
+        captureConnections,
         searchEvents: searchEvents.map(mapSearchEvent),
         searchFeedback: searchFeedback.map(mapSearchFeedback),
         profile,
@@ -505,6 +507,68 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .eq('id', token.id)
         .throwOnError();
       return { id: token.userId, email: '' };
+    },
+    async upsertCaptureConnection(userId, { provider, externalId, tokenHash, username = '', displayName = '' }) {
+      const normalizedProvider = String(provider || '').trim().toLowerCase();
+      const normalizedExternalId = String(externalId || '').trim();
+      if (!normalizedProvider || !normalizedExternalId || !tokenHash) return null;
+      const { data, error } = await client
+        .from('capture_connections')
+        .upsert({
+          user_id: userId,
+          provider: normalizedProvider,
+          external_id: normalizedExternalId,
+          token_hash: tokenHash,
+          username: cleanDbText(username).slice(0, 120),
+          display_name: cleanDbText(displayName).slice(0, 160),
+          revoked_at: null,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'provider,external_id' })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return publicCaptureConnection(mapCaptureConnection(data));
+    },
+    async getCaptureConnection(provider, externalId) {
+      const { data, error } = await client
+        .from('capture_connections')
+        .select('*')
+        .eq('provider', String(provider || '').trim().toLowerCase())
+        .eq('external_id', String(externalId || '').trim())
+        .is('revoked_at', null)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapCaptureConnection(data) : null;
+    },
+    async markCaptureConnectionUsed(id) {
+      const { data, error } = await client
+        .from('capture_connections')
+        .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      return data ? publicCaptureConnection(mapCaptureConnection(data)) : null;
+    },
+    async revokeCaptureConnection(provider, externalId) {
+      const { data, error } = await client
+        .from('capture_connections')
+        .update({ revoked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('provider', String(provider || '').trim().toLowerCase())
+        .eq('external_id', String(externalId || '').trim())
+        .is('revoked_at', null)
+        .select('id');
+      if (error) throw error;
+      return Boolean(data?.length);
+    },
+    async listCaptureConnections(userId) {
+      const { data, error } = await client
+        .from('capture_connections')
+        .select('*')
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false });
+      if (error) throw error;
+      return data.map(mapCaptureConnection).map(publicCaptureConnection);
     },
     async recordLensSearchEvent({ userId, queryType, resultCount }) {
       await client
@@ -2522,6 +2586,36 @@ function mapExtensionToken(row) {
     lastUsedAt: row.last_used_at,
     expiresAt: row.expires_at,
     revokedAt: row.revoked_at,
+  };
+}
+
+function mapCaptureConnection(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    provider: row.provider,
+    externalId: row.external_id,
+    tokenHash: row.token_hash,
+    username: row.username || '',
+    displayName: row.display_name || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastUsedAt: row.last_used_at,
+    revokedAt: row.revoked_at,
+  };
+}
+
+function publicCaptureConnection(row) {
+  return {
+    id: row.id,
+    provider: row.provider,
+    externalId: row.externalId,
+    username: row.username || '',
+    displayName: row.displayName || '',
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    lastUsedAt: row.lastUsedAt || null,
+    revokedAt: row.revokedAt || null,
   };
 }
 

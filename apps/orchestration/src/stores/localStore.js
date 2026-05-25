@@ -77,6 +77,7 @@ function seedFromLegacyIndex(dataPath) {
     userActivityEvents: [],
     profiles: [],
     extensionTokens: [],
+    captureConnections: [],
     lensSearchEvents: [],
     itemAssets: [],
     itemArchives: [],
@@ -141,6 +142,7 @@ function emptyState() {
     searchFeedback: [],
     profiles: [],
     extensionTokens: [],
+    captureConnections: [],
     lensSearchEvents: [],
     itemAssets: [],
     itemArchives: [],
@@ -173,6 +175,7 @@ function normalizeState(state) {
     jobs: (state.jobs || []).map(normalizeJob),
     profiles: state.profiles || [],
     extensionTokens: state.extensionTokens || [],
+    captureConnections: state.captureConnections || [],
     lensSearchEvents: state.lensSearchEvents || [],
     itemAssets: state.itemAssets || [],
     itemArchives: state.itemArchives || [],
@@ -252,6 +255,21 @@ function hydrateLocalItem(state, item, { includeArchiveContent = false } = {}) {
     ...item,
     assets: localItemAssets(state, item.userId, item.id),
     archive: localItemArchive(state, item.userId, item.id, { includeContent: includeArchiveContent }),
+  };
+}
+
+function publicCaptureConnection(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    provider: row.provider,
+    externalId: row.externalId,
+    username: row.username || '',
+    displayName: row.displayName || '',
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    lastUsedAt: row.lastUsedAt || null,
+    revokedAt: row.revokedAt || null,
   };
 }
 
@@ -540,6 +558,7 @@ function createLocalStore({ dataPath }) {
       const deleted = {
         providerCredentials: deleteFromArrayByUser('providerCredentials', userId),
         extensionTokens: deleteFromArrayByUser('extensionTokens', userId),
+        captureConnections: deleteFromArrayByUser('captureConnections', userId),
       };
       save();
       return deleted;
@@ -616,6 +635,7 @@ function createLocalStore({ dataPath }) {
         credits: this.getCredits(userId),
         providerCredentials: this.listProviderCredentials(userId),
         extensionTokens: state.extensionTokens.filter((entry) => entry.userId === userId).map(publicExtensionToken),
+        captureConnections: this.listCaptureConnections(userId),
         searchEvents: state.searchEvents.filter((entry) => entry.userId === userId),
         searchFeedback: state.searchFeedback.filter((entry) => entry.userId === userId),
         profile: this.getProfile(userId),
@@ -724,6 +744,78 @@ function createLocalStore({ dataPath }) {
       save();
       const user = state.users.find((entry) => entry.id === token.userId);
       return { id: token.userId, email: user?.email || '' };
+    },
+
+    upsertCaptureConnection(userId, { provider, externalId, tokenHash, username = '', displayName = '' }) {
+      const normalizedProvider = String(provider || '').trim().toLowerCase();
+      const normalizedExternalId = String(externalId || '').trim();
+      if (!normalizedProvider || !normalizedExternalId || !tokenHash) return null;
+      let connection = state.captureConnections.find((entry) => entry.provider === normalizedProvider && entry.externalId === normalizedExternalId);
+      if (connection) {
+        Object.assign(connection, {
+          userId,
+          tokenHash,
+          username: String(username || '').trim().slice(0, 120),
+          displayName: String(displayName || '').trim().slice(0, 160),
+          revokedAt: null,
+          updatedAt: now(),
+        });
+      } else {
+        connection = {
+          id: `capture-connection-${Date.now()}-${state.captureConnections.length + 1}`,
+          userId,
+          provider: normalizedProvider,
+          externalId: normalizedExternalId,
+          tokenHash,
+          username: String(username || '').trim().slice(0, 120),
+          displayName: String(displayName || '').trim().slice(0, 160),
+          createdAt: now(),
+          updatedAt: now(),
+          lastUsedAt: null,
+          revokedAt: null,
+        };
+        state.captureConnections.push(connection);
+      }
+      save();
+      return publicCaptureConnection(connection);
+    },
+
+    getCaptureConnection(provider, externalId) {
+      const connection = state.captureConnections.find((entry) => (
+        entry.provider === String(provider || '').trim().toLowerCase()
+        && entry.externalId === String(externalId || '').trim()
+        && !entry.revokedAt
+      ));
+      return connection ? { ...connection } : null;
+    },
+
+    markCaptureConnectionUsed(id) {
+      const connection = state.captureConnections.find((entry) => entry.id === id);
+      if (!connection) return null;
+      connection.lastUsedAt = now();
+      connection.updatedAt = now();
+      save();
+      return publicCaptureConnection(connection);
+    },
+
+    revokeCaptureConnection(provider, externalId) {
+      const connection = state.captureConnections.find((entry) => (
+        entry.provider === String(provider || '').trim().toLowerCase()
+        && entry.externalId === String(externalId || '').trim()
+        && !entry.revokedAt
+      ));
+      if (!connection) return false;
+      connection.revokedAt = now();
+      connection.updatedAt = now();
+      save();
+      return true;
+    },
+
+    listCaptureConnections(userId) {
+      return state.captureConnections
+        .filter((entry) => entry.userId === userId)
+        .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+        .map(publicCaptureConnection);
     },
 
     recordLensSearchEvent({ userId, queryType, resultCount }) {

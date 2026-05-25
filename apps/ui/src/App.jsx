@@ -157,9 +157,10 @@ const HERO_PLATFORMS = [
 const HERO_OUTCOME_WORDS = ['usable', 'searchable', 'exportable', 'organized', 'summarized', 'findable'];
 const IMPORT_STORAGE_BUCKET = import.meta.env.VITE_SUPABASE_IMPORT_BUCKET || 'instagram-assets';
 const VERCEL_SAFE_UPLOAD_BYTES = 4 * 1024 * 1024;
-const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv']);
+const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv', '.js', '.txt']);
 const INSTAGRAM_SAVED_EXPORT_RE = /(^|\/)your_instagram_activity\/saved\/saved_(posts|collections)\.(html|htm|json)$/i;
 const INSTAGRAM_SAVED_FILE_RE = /^saved_(posts|collections)\.(html|htm|json)$/i;
+const X_BOOKMARK_FILE_RE = /(^|\/)(data\/)?(bookmarks?|x[-_ ]?bookmarks?|twitter[-_ ]?bookmarks?|pauch[-_ ]?.*)\.(json|js|csv|txt)$/i;
 
 function fileImportName(file) {
   return String(file?.webkitRelativePath || file?.name || '').replace(/\\/g, '/');
@@ -176,26 +177,35 @@ function isInstagramSavedFile(file) {
   return INSTAGRAM_SAVED_EXPORT_RE.test(name) || INSTAGRAM_SAVED_FILE_RE.test(baseName) || fileExtension(name) === '.zip';
 }
 
+function isXBookmarkFile(file) {
+  const name = fileImportName(file);
+  const baseName = name.split('/').pop() || name;
+  return X_BOOKMARK_FILE_RE.test(name) || X_BOOKMARK_FILE_RE.test(baseName) || fileExtension(name) === '.zip';
+}
+
 function importCandidateFiles(files = [], sourceType = 'auto') {
   const candidates = files.filter((file) => EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(fileImportName(file) || file.name)));
   if (sourceType === 'instagram') return candidates.filter(isInstagramSavedFile);
   if (sourceType === 'pinterest') return candidates;
+  if (sourceType === 'x') return candidates;
 
   const zipFiles = candidates.filter((file) => fileExtension(fileImportName(file) || file.name) === '.zip');
   if (zipFiles.length) return zipFiles;
 
   const instagramSavedFiles = candidates.filter(isInstagramSavedFile);
-  return instagramSavedFiles.length ? instagramSavedFiles : candidates;
+  if (instagramSavedFiles.length) return instagramSavedFiles;
+  const xBookmarkFiles = candidates.filter(isXBookmarkFile);
+  return xBookmarkFiles.length ? xBookmarkFiles : candidates;
 }
 
 function validateExportFiles(files = [], sourceType = 'auto') {
-  if (!files.length) throw new Error('Upload an Instagram ZIP/HTML/JSON file or your Pinterest export ZIP/JSON/CSV.');
+  if (!files.length) throw new Error('Upload Instagram, Pinterest, or X bookmark export files.');
   for (const file of files) {
     if (!EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(fileImportName(file) || file.name))) {
-      throw new Error('Upload Instagram HTML files or Pinterest ZIP/JSON/CSV exports. The selected file is missing a supported extension.');
+      throw new Error('Upload ZIP, HTML, JSON, CSV, JS, or TXT export files.');
     }
     if (!file.size) {
-      throw new Error('The selected export file is empty. Re-export from Instagram or Pinterest, then upload the .html, .zip, .json, or .csv file.');
+      throw new Error('The selected export file is empty. Re-export from Instagram, Pinterest, or X, then upload the file again.');
     }
   }
   if (sourceType === 'instagram' && !files.some(isInstagramSavedFile)) {
@@ -965,20 +975,27 @@ function canonicalizeLegacyHashRoute() {
 
 function pendingSaveFromLocation() {
   const params = appParamsFromLocation();
-  const url = params.get('url') || params.get('saveUrl');
+  const sharedText = params.get('text') || '';
+  const url = params.get('url') || params.get('saveUrl') || firstUrlInText(sharedText);
   if (!url) return null;
+  const note = params.get('note') || sharedText.replace(url, '').trim();
   return {
     url,
     title: params.get('title') || '',
     description: params.get('description') || '',
     platform: params.get('platform') || '',
-    note: params.get('note') || '',
+    note,
     author: params.get('author') || '',
     thumbnailUrl: params.get('thumbnailUrl') || '',
     source: params.get('source') || '',
     clientActionId: params.get('clientActionId') || '',
     autoSave: params.get('autoSave') === '1',
   };
+}
+
+function firstUrlInText(value = '') {
+  const match = String(value || '').match(/https?:\/\/[^\s<>"')\]]+/i);
+  return match ? match[0].replace(/[.,!?;:]+$/, '') : '';
 }
 
 function itemIdFromLocation() {
@@ -3160,6 +3177,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [files, setFiles] = useState([]);
   const [importSourceType, setImportSourceType] = useState('auto');
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
+  const [uploadInitialMode, setUploadInitialMode] = useState('upload');
   const [noteForm, setNoteForm] = useState({ title: '', body: '', links: '', images: [] });
   const [credentials, setCredentials] = useState([]);
   const [credentialOptions, setCredentialOptions] = useState(null);
@@ -3827,6 +3845,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       pendingSaveHandledRef.current = true;
       timer = window.setTimeout(() => {
         setTab('upload');
+        setUploadInitialMode('link');
         replaceAppTabUrl('upload');
         resetPageScroll();
         setLinkForm({
@@ -3867,7 +3886,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (!requireSignIn('import saves')) return false;
     if (!requireProfile('import saves')) return false;
     if (!files.length) {
-      setError('Upload an Instagram ZIP/HTML/JSON file or your Pinterest export ZIP/JSON/CSV.');
+      setError('Upload Instagram, Pinterest, or X bookmark export files.');
       return false;
     }
     setBusy(true);
@@ -4084,6 +4103,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
 
   const selectTab = useCallback((nextTab) => {
     if (!['library', 'gallery', 'smart', 'care', 'graph', 'upload', 'settings'].includes(nextTab)) return;
+    if (nextTab === 'upload') setUploadInitialMode('upload');
     setTab(nextTab);
     replaceAppTabUrl(nextTab);
     resetPageScroll();
@@ -4613,10 +4633,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 )}
                 {canUsePrivateActions && tab === 'upload' && (
                   <UploadTab
+                    key={uploadInitialMode}
                     files={files}
                     setFiles={setFiles}
                     importSourceType={importSourceType}
                     setImportSourceType={setImportSourceType}
+                    initialAddMode={uploadInitialMode}
                     linkForm={linkForm}
                     setLinkForm={setLinkForm}
                     noteForm={noteForm}
@@ -4672,6 +4694,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     busy={busy}
                     authEnabled={authEnabled}
                     onOpenHowTo={onOpenHowTo}
+                    onNotice={setNotice}
+                    onError={setError}
                   />
                 )}
               </>
@@ -5528,7 +5552,7 @@ function QuickAddModal({
       setMode('upload');
     }
     if (unsupported.length && !images.length && !exports.length) {
-      onError('Upload images, links, or Instagram/Pinterest download files.');
+      onError('Upload images, links, or Instagram/Pinterest/X download files.');
     }
   }, [addImagesToNote, onError, setFiles, setImportSourceType]);
 
@@ -5536,7 +5560,7 @@ function QuickAddModal({
   const choices = [
     { mode: 'link', title: 'Paste a link', copy: 'Save one post, product, article, or idea.', icon: ExternalLink },
     { mode: 'note', title: 'Write a note', copy: 'Capture a thought, image, reminder, or useful context.', icon: FileText },
-    { mode: 'upload', title: 'Upload files', copy: 'Add Instagram or Pinterest exports from your device.', icon: Upload },
+    { mode: 'upload', title: 'Upload files', copy: 'Add Instagram, Pinterest, or X bookmark exports from your device.', icon: Upload },
   ];
 
   return (
@@ -5721,7 +5745,7 @@ function QuickAddModal({
               <div>
                 <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Upload files</div>
                 <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose export files</h3>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">Use this for Instagram or Pinterest downloads. For folders, open the full Add Saves page.</p>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">Use this for Instagram, Pinterest, or X bookmark downloads. For folders, open the full Add Saves page.</p>
               </div>
               <button
                 type="button"
@@ -5801,7 +5825,7 @@ function QuickAddModal({
             <Upload className="mx-auto mb-3 h-8 w-8 text-primary" />
             <h3 className="font-display text-xl font-bold">Drop images, ZIPs, folders, or files here</h3>
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Images become note attachments. Instagram or Pinterest files are detected automatically.
+              Images become note attachments. Instagram, Pinterest, and X bookmark files are detected automatically.
             </p>
             <div className="mt-5 flex flex-wrap justify-center gap-3">
               <button
@@ -5957,8 +5981,8 @@ function QuickAddModal({
 
               <section className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
                 <div>
-                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Instagram or Pinterest</div>
-                  <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Upload a ZIP or folder</h3>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Instagram, Pinterest, or X</div>
+                  <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Upload a ZIP, folder, or bookmark file</h3>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">Auto-detect is on, so you can upload the file you downloaded.</p>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-black p-4">
@@ -7062,7 +7086,7 @@ function GalleryTab({
                   ? 'Clear filters or switch back to All to see your visual board.'
                   : activationState.needsReview
                     ? 'Open Add saves, check one saved link, and add it to your Library.'
-                    : 'Paste a link, upload Instagram or Pinterest files, or create a note with images.'}
+                    : 'Paste a link, upload Instagram, Pinterest, or X files, or create a note with images.'}
             </p>
             <button
               type="button"
@@ -7493,6 +7517,7 @@ function UploadTab({
   setFiles,
   importSourceType,
   setImportSourceType,
+  initialAddMode = 'upload',
   linkForm,
   setLinkForm,
   noteForm,
@@ -7511,7 +7536,7 @@ function UploadTab({
   onTrySearch,
 }) {
   const [dragging, setDragging] = useState(false);
-  const [activeAddMode, setActiveAddMode] = useState('upload');
+  const [activeAddMode, setActiveAddMode] = useState(() => (['link', 'note', 'upload'].includes(initialAddMode) ? initialAddMode : 'upload'));
   const linkInputRef = useRef(null);
   const noteImageInputRef = useRef(null);
   const importHealth = useMemo(() => importHealthForFiles(files, importSourceType), [files, importSourceType]);
@@ -7524,13 +7549,14 @@ function UploadTab({
     { value: 'auto', label: 'Choose for me', help: 'Best if you are not sure.' },
     { value: 'instagram', label: 'Instagram', help: 'For files downloaded from Instagram.' },
     { value: 'pinterest', label: 'Pinterest', help: 'For files downloaded from Pinterest.' },
+    { value: 'x', label: 'X bookmarks', help: 'For bookmark CSV, JSON, JS, TXT, or ZIP files.' },
   ];
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-6 py-20">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <h1 className="font-display text-4xl font-bold tracking-tight">Add to your library</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Save a note, paste a link, or upload files from Instagram or Pinterest.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Save a note, paste a link, or upload files from Instagram, Pinterest, or X.</p>
         </div>
         <button
           type="button"
@@ -7576,7 +7602,7 @@ function UploadTab({
       >
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
         <h3 className="mb-2 font-display text-xl font-bold">Drop your files here</h3>
-        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV</p>
+        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV · X bookmark ZIP/JS/JSON/CSV/TXT</p>
         <button
           type="button"
           onClick={onOpenHowTo}
@@ -7587,7 +7613,7 @@ function UploadTab({
         <br />
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
           Choose export files
-          <input type="file" multiple accept=".html,.htm,.zip,.json,.csv" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
+          <input type="file" multiple accept=".html,.htm,.zip,.json,.csv,.js,.txt" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
         </label>
         <label className="ml-3 inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/10 px-6 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5">
           Choose export folder
@@ -7610,7 +7636,7 @@ function UploadTab({
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">File source</div>
           <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Where did these files come from?</h2>
         </div>
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
           {sourceOptions.map((option) => (
             <button
               key={option.value}
@@ -7915,9 +7941,13 @@ function SettingsTab({
   busy,
   authEnabled,
   onOpenHowTo,
+  onNotice,
+  onError,
 }) {
   const selectedSetup = KEY_SETUP_OPTIONS[credentialForm.setup] || KEY_SETUP_OPTIONS.openrouter_all;
   const [providerWarning, setProviderWarning] = useState(null);
+  const [telegramCode, setTelegramCode] = useState('');
+  const [captureBusy, setCaptureBusy] = useState(false);
   const providerWarningCopy = providerWarning ? PROVIDER_WARNING_COPY[providerWarning] : null;
   const groupedCredentials = credentials.reduce((groups, credential) => {
     const key = `${credential.provider}:${credential.keyHint}:${credential.baseUrl || ''}:${credential.displayName || ''}`;
@@ -7934,6 +7964,19 @@ function SettingsTab({
     groups[key].credentials.push(credential);
     return groups;
   }, {});
+  const createTelegramCode = async () => {
+    setCaptureBusy(true);
+    onError?.('');
+    try {
+      const body = await createExtensionToken('Telegram save bot', ['saves:create']);
+      setTelegramCode(body.secret || '');
+      onNotice?.('Telegram bot link code created. Send it to the bot with /connect.');
+    } catch (err) {
+      onError?.(err.message || 'Could not create a Telegram bot link code.');
+    } finally {
+      setCaptureBusy(false);
+    }
+  };
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 px-6 py-20">
@@ -7983,6 +8026,63 @@ function SettingsTab({
             Coming soon
           </span>
         </div>
+      </section>
+
+      <section className="space-y-4 rounded-2xl border border-white/10 p-5">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Fast capture</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Mobile share and Telegram</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            IScraper can receive shared links from supported mobile browsers. Telegram bot linking uses a private code from this account.
+          </p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+            <div className="flex items-center gap-2 font-semibold">
+              <ExternalLink className="h-4 w-4 text-primary" /> Mobile share-sheet
+            </div>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              When IScraper is installed as an app, supported Android browsers can share links into the Add Saves screen.
+            </p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+            <div className="flex items-center gap-2 font-semibold">
+              <Bot className="h-4 w-4 text-primary" /> Telegram save bot
+            </div>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Create a code, send <span className="font-mono text-foreground">/connect</span> plus the code to the bot, then forward links.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={createTelegramCode}
+          disabled={busy || captureBusy}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60"
+        >
+          {captureBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
+          Create Telegram bot link code
+        </button>
+        {telegramCode && (
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Private bot link code</div>
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+              <code className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-white/10 bg-black px-3 py-2 text-xs text-foreground">
+                /connect {telegramCode}
+              </code>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(`/connect ${telegramCode}`).then(() => onNotice?.('Telegram connect command copied.'));
+                }}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-white/5"
+              >
+                <Copy className="h-4 w-4" /> Copy
+              </button>
+            </div>
+            <p className="mt-3 text-xs leading-5 text-muted-foreground">Treat this like a password. This code only allows saving links into your account.</p>
+          </div>
+        )}
       </section>
 
       <form onSubmit={onSave} className="space-y-4 rounded-2xl border border-white/10 p-5">

@@ -36,6 +36,14 @@ const {
 const { cleanLensText, describeLensCrop } = require('./services/lensSearch');
 const { findSimilarVisualItems, publicVisualSearchAnalysis } = require('./services/visualSimilarity');
 const {
+  assertTelegramWebhookSecret,
+  parseTelegramCommand,
+  parseTelegramUpdate,
+  sendTelegramReply,
+  telegramReply,
+  tokenHashFromConnectText,
+} = require('./services/telegramCapture');
+const {
   isDeletionBlockingStatus,
   processAccountDeletionRequest,
   publicDeletionRequest,
@@ -51,9 +59,13 @@ const {
   noteInputFromBody,
 } = require('./services/notes');
 
-const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv']);
+const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv', '.js', '.txt']);
 const EXPORT_UPLOAD_MIME_TYPES = new Set([
   'text/html',
+  'text/plain',
+  'text/javascript',
+  'application/javascript',
+  'application/x-javascript',
   'application/octet-stream',
   'application/zip',
   'application/x-zip-compressed',
@@ -347,7 +359,7 @@ function contentSecurityPolicy() {
 function uploadFileFilter(_req, file, callback) {
   const extension = path.extname(file.originalname || '').toLowerCase();
   if (!EXPORT_UPLOAD_EXTENSIONS.has(extension) || !EXPORT_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
-    return callback(new Error('Upload Instagram ZIP/HTML/JSON files or Pinterest export ZIP/JSON/CSV files.'));
+    return callback(new Error('Upload Instagram, Pinterest, or X bookmark export files.'));
   }
   return callback(null, true);
 }
@@ -364,7 +376,7 @@ function noteImageFileFilter(_req, file, callback) {
 function assertImportFileAllowed(file, maxUploadFileSizeBytes) {
   const extension = path.extname(file.originalname || '').toLowerCase();
   if (!EXPORT_UPLOAD_EXTENSIONS.has(extension) || !EXPORT_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
-    const error = new Error('Upload Instagram ZIP/HTML/JSON files or Pinterest export ZIP/JSON/CSV files.');
+    const error = new Error('Upload Instagram, Pinterest, or X bookmark export files.');
     error.statusCode = 400;
     throw error;
   }
@@ -378,7 +390,7 @@ function assertImportFileAllowed(file, maxUploadFileSizeBytes) {
 async function createImportFromFiles({ store, userId, files, config }) {
   const parsed = await parseImportExport(files);
   if (!parsed.items.length) {
-    const error = new Error('No saves were found in those files. Upload Instagram saved-post ZIP/HTML/JSON files or Pinterest export ZIP/JSON/CSV files.');
+    const error = new Error('No saves were found in those files. Upload Instagram saved-post files, Pinterest export files, or X bookmark export files.');
     error.statusCode = 400;
     throw error;
   }
@@ -549,6 +561,13 @@ async function loadImportFilesFromStorage({ store, userId, storageFiles, config 
 
 function cleanText(value, maxLength) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function extensionScopesFromBody(body = {}) {
+  if (!Array.isArray(body.scopes) || !body.scopes.length) return DEFAULT_EXTENSION_SCOPES;
+  const allowed = new Set(DEFAULT_EXTENSION_SCOPES);
+  const scopes = [...new Set(body.scopes.map((scope) => String(scope || '').trim()).filter((scope) => allowed.has(scope)))];
+  return scopes.length ? scopes : DEFAULT_EXTENSION_SCOPES;
 }
 
 function reviewUpdatesFromBody(body = {}, item = {}) {
@@ -938,6 +957,54 @@ function createApp({ store, config = {}, observability = createObservability(con
       return { mode: 'inline', triggered: false };
     }
     return { mode: 'vm-worker', queued: true, reason, userId, importId };
+  }
+
+  async function saveLinkCapture({
+    req,
+    userId,
+    payload,
+    source = 'manual-link',
+    reason = 'manual-link',
+    initialStatus = 'queued',
+    shouldArchive = true,
+  }) {
+    const parsed = parseManualLinkPayload(payload || {});
+    const importEntry = await store.createImport({
+      userId,
+      source,
+      mode: 'export',
+      fileNames: [parsed.items[0].url],
+    });
+    const items = await store.upsertImportData({ userId, importId: importEntry.id, parsed, initialStatus });
+    const jobs = initialStatus === 'queued' ? await store.createJobs({ userId, importId: importEntry.id, items }) : [];
+    let responseItem = null;
+    try {
+      responseItem = await Promise.resolve(store.getItem(userId, items[0]?.id || parsed.items[0].id));
+    } catch {
+      responseItem = null;
+    }
+    if (shouldArchive && responseItem) {
+      const archive = await startReadableCopyForItem({ req, store, userId, item: responseItem });
+      if (archive) responseItem = { ...responseItem, archive };
+    }
+    let indexing = null;
+    if (jobs.length) {
+      indexing = await queueIndexingWork({
+        reason,
+        userId,
+        importId: importEntry.id,
+        shouldDownload: false,
+      });
+    }
+    await refreshSmartCollectionsForUser(userId);
+    return {
+      import: importEntry,
+      item: responseItem || items[0] || parsed.items[0],
+      newItemCount: items.length,
+      skippedDuplicateCount: items.length ? 0 : 1,
+      queuedJobCount: jobs.length,
+      indexing,
+    };
   }
 
   const workerProcessHandler = asyncRoute(async (req, res) => {
@@ -1507,6 +1574,99 @@ function createApp({ store, config = {}, observability = createObservability(con
     return res.json({ deleted: Boolean(deleted), itemId: existing.id });
   }));
 
+  app.post('/api/telegram/webhook', asyncRoute(async (req, res) => {
+    assertTelegramWebhookSecret(req, config);
+    if (
+      typeof store.upsertCaptureConnection !== 'function'
+      || typeof store.getCaptureConnection !== 'function'
+      || typeof store.markCaptureConnectionUsed !== 'function'
+      || typeof store.revokeCaptureConnection !== 'function'
+      || typeof store.getUserForExtensionToken !== 'function'
+    ) {
+      return res.status(501).json({ error: 'Telegram capture is not available.' });
+    }
+
+    const update = parseTelegramUpdate(req.body || {});
+    if (!update) return res.json(telegramReply('Send a link to save it in IScraper.'));
+
+    const sendAndReturn = async (reply, status = 200) => {
+      try {
+        await sendTelegramReply(config, update.chatId, reply.text);
+      } catch (error) {
+        warnWorkflow(req, 'telegram reply failed', { chatId: update.chatId, error: error.message });
+      }
+      return res.status(status).json(reply);
+    };
+
+    const command = parseTelegramCommand(update.text);
+    if (command?.command === 'start' || command?.command === 'connect') {
+      const tokenHash = tokenHashFromConnectText(update.text);
+      if (!tokenHash) {
+        return sendAndReturn(telegramReply('Open IScraper Settings, create a Telegram bot link code, then send /connect followed by that code.'));
+      }
+      const user = await store.getUserForExtensionToken(tokenHash, 'saves:create');
+      if (!user) return sendAndReturn(telegramReply('That IScraper link code is invalid, expired, or revoked.'), 401);
+      req.user = user;
+      await requireCompletedProfile(req, store);
+      await store.upsertCaptureConnection(user.id, {
+        provider: 'telegram',
+        externalId: update.chatId,
+        tokenHash,
+        username: update.username,
+        displayName: update.displayName,
+      });
+      captureWorkflow(req, 'telegram chat connected', {
+        userId: user.id,
+        chatId: update.chatId,
+      });
+      return sendAndReturn(telegramReply('Connected. Send or forward a link here and I will save it to IScraper.'));
+    }
+
+    if (command?.command === 'disconnect') {
+      const disconnected = await store.revokeCaptureConnection('telegram', update.chatId);
+      captureWorkflow(req, 'telegram chat disconnected', { chatId: update.chatId, disconnected });
+      return sendAndReturn(telegramReply(disconnected ? 'Disconnected from IScraper.' : 'This chat was not connected yet.'));
+    }
+
+    const connection = await store.getCaptureConnection('telegram', update.chatId);
+    if (!connection) {
+      return sendAndReturn(telegramReply('Connect this chat first. Open IScraper Settings, create a Telegram bot link code, then send /connect followed by that code.'));
+    }
+    const user = await store.getUserForExtensionToken(connection.tokenHash, 'saves:create');
+    if (!user) return sendAndReturn(telegramReply('Your IScraper bot link was revoked or expired. Create a new Telegram bot link code in Settings and connect again.'), 401);
+    req.user = user;
+    await requireCompletedProfile(req, store);
+
+    const url = update.links[0];
+    if (!url) return sendAndReturn(telegramReply('Send or forward a message with one link and I will save it.'));
+    const note = cleanText(update.text.replace(url, '').trim(), 500);
+    const result = await saveLinkCapture({
+      req,
+      userId: user.id,
+      source: 'telegram-bot',
+      reason: 'telegram-bot',
+      payload: {
+        url,
+        title: note ? note.split('\n')[0] : '',
+        note: [
+          'Saved via Telegram.',
+          note,
+        ].filter(Boolean).join(' '),
+        collection: 'Telegram saves',
+      },
+    });
+    await store.markCaptureConnectionUsed(connection.id);
+    captureWorkflow(req, 'telegram link saved', {
+      userId: user.id,
+      itemId: result.item?.id,
+      duplicate: !result.newItemCount,
+    });
+    return sendAndReturn(telegramReply(result.newItemCount ? 'Saved to IScraper.' : 'Already saved in IScraper.', {
+      item: result.item,
+      duplicate: !result.newItemCount,
+    }), result.newItemCount ? 201 : 200);
+  }));
+
   app.use(asyncRoute(async (req, _res, next) => {
     const user = await getUser(req, store);
     await store.ensureUser(user.id, user.email);
@@ -1967,13 +2127,14 @@ function createApp({ store, config = {}, observability = createObservability(con
     await requireCompletedProfile(req, store);
     if (typeof store.createExtensionToken !== 'function') return res.status(501).json({ error: 'Extension tokens are not available.' });
     const rawToken = generateExtensionToken();
+    const scopes = extensionScopesFromBody(req.body || {});
     const token = await store.createExtensionToken(req.user.id, {
       tokenHash: hashExtensionToken(rawToken),
       name: cleanText(req.body?.name || 'Browser extension', 80),
-      scopes: DEFAULT_EXTENSION_SCOPES,
+      scopes,
       expiresAt: defaultExtensionExpiry(),
     });
-    captureWorkflow(req, 'extension token created', { extensionTokenId: token.id, scopeCount: DEFAULT_EXTENSION_SCOPES.length });
+    captureWorkflow(req, 'extension token created', { extensionTokenId: token.id, scopeCount: scopes.length });
     return res.status(201).json({ token, secret: rawToken });
   }));
 
@@ -2095,7 +2256,7 @@ function createApp({ store, config = {}, observability = createObservability(con
   app.post('/api/imports', importRateLimit, upload.array('exportFiles', 20), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
-    if (!files.length) return res.status(400).json({ error: 'Upload Instagram ZIP/HTML/JSON files or your Pinterest export ZIP/JSON/CSV.' });
+    if (!files.length) return res.status(400).json({ error: 'Upload Instagram, Pinterest, or X bookmark export files.' });
 
     files.forEach((file) => assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024));
     const result = await createImportFromFiles({ store, userId: req.user.id, files, config });
@@ -2397,7 +2558,7 @@ function createApp({ store, config = {}, observability = createObservability(con
   }));
 
   app.use((error, req, res, _next) => {
-    const statusCode = error.statusCode || (error instanceof multer.MulterError || /Upload Instagram/.test(error.message) ? 400 : 500);
+    const statusCode = error.statusCode || (error instanceof multer.MulterError || /Upload Instagram|bookmark export/.test(error.message) ? 400 : 500);
     const properties = contextForRequest(req, { statusCode });
     if (statusCode >= 500) {
       req.app?.locals?.observability?.captureError(error, properties, req.user?.id || 'server');
