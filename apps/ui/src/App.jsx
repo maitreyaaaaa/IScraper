@@ -1465,7 +1465,6 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
   const introRef = useRef(null);
   const cursorRef = useRef(null);
   const heroTitle = useRef(null);
-  const [launchOfferDismissed, setLaunchOfferDismissed] = useState(() => window.localStorage.getItem('iscraper.launchOffer.dismissed') === '1');
   const [feedback, setFeedback] = useState([]);
   const [feedbackForm, setFeedbackForm] = useState({ feature: 'Search', message: '' });
   const [feedbackBusy, setFeedbackBusy] = useState(false);
@@ -1523,11 +1522,6 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
       .then((body) => setFeedback(body.feedback || []))
       .catch(() => setFeedback([]));
   }, []);
-
-  const dismissLaunchOffer = () => {
-    window.localStorage.setItem('iscraper.launchOffer.dismissed', '1');
-    setLaunchOfferDismissed(true);
-  };
 
   const handleFeedbackSubmit = async (event) => {
     event.preventDefault();
@@ -1760,30 +1754,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         className="pointer-events-none fixed left-0 top-0 z-[100] hidden h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary mix-blend-difference md:block"
       />
 
-      {!launchOfferDismissed && (
-        <div className="fixed left-0 right-0 top-0 z-[70] bg-orange-500 px-4 py-2 text-black shadow-[0_14px_40px_rgba(249,115,22,0.28)]">
-          <div className="mx-auto flex max-w-7xl items-center gap-3">
-            <span className="shrink-0 rounded-full bg-black px-3 py-1 font-mono text-[11px] font-black uppercase tracking-[0.16em] text-orange-500">
-              Launch offer
-            </span>
-            <p className="min-w-0 flex-1 text-sm font-bold leading-tight text-black sm:text-base">
-              <span className="sm:hidden">200 saves free to start.</span>
-              <span className="hidden sm:inline">Your first 200 imported saves are on us.</span>
-              <span className="hidden font-semibold text-black/80 sm:inline"> Build your first searchable library before paying IScraper credits.</span>
-            </p>
-            <button
-              type="button"
-              onClick={dismissLaunchOffer}
-              className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-black/15 text-black transition hover:bg-black hover:text-orange-500"
-              aria-label="Dismiss launch offer"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      <header className={`pointer-events-none fixed left-0 right-0 z-50 px-4 transition-[top] ${launchOfferDismissed ? 'top-4' : 'top-[4.15rem]'}`}>
+      <header className="pointer-events-none fixed left-0 right-0 top-4 z-50 px-4">
         <div className="mx-auto grid max-w-7xl grid-cols-[auto_1fr_auto] items-center gap-4">
           <button
             type="button"
@@ -1843,7 +1814,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         />
       )}
 
-      <section className={`landing-hero relative flex min-h-screen items-center overflow-hidden bg-black ${launchOfferDismissed ? 'pt-28 md:pt-36' : 'pt-40 md:pt-48'}`}>
+      <section className="landing-hero relative flex min-h-screen items-center overflow-hidden bg-black pt-28 md:pt-36">
         <div className="parallax-grid radial-fade grid-bg absolute inset-0 opacity-60" />
         <div
           className="parallax-glow-primary absolute -left-20 -top-32 h-[480px] w-[480px] rounded-full opacity-40 blur-[120px]"
@@ -1912,7 +1883,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
             {[
               ['Saved ideas rescued', 'All'],
               ['Platforms supported', 'Any'],
-              ['First saves on us', '200'],
+              ['Library modes', '3'],
               ['Search in seconds', 'Fast'],
             ].map(([label, value]) => (
               <div key={label} className="border-l border-white/10 pl-4">
@@ -1958,7 +1929,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
             {[
               [Zap, 'Save from any platform', 'Paste a link from Pinterest, X, TikTok, YouTube, Instagram, or any site and keep it in the same searchable library.'],
               [Brain, 'Know why you saved it', 'Each save can get a plain-English summary, so old posts, links, and references become useful again instead of forgotten.'],
-              [CheckCircle2, 'First 200 saves included', 'Start with 200 imported saves covered by IScraper before paid credits matter. No API key needed for that first allowance.'],
+              [CheckCircle2, 'Review before indexing', 'Imported saves can be checked before they become searchable, so your library stays intentional and clean.'],
               [Tag, 'Organized without the cleanup', 'Group saves by themes like travel, food, fitness, shopping, home, business, or inspiration.'],
               [Lock, 'Private by default', 'Your library belongs to your account. Saves happen only after you explicitly authorize them.'],
               [ShieldCheck, 'Built around official exports', 'Use Instagram and Pinterest exports without handing over social-platform passwords.'],
@@ -2829,7 +2800,7 @@ const LEGAL_CONTENT = {
       ['AI processing', 'When indexing is enabled, content may be sent to configured AI providers to create summaries, OCR, transcripts, tags, and search data. AI output can be wrong, incomplete, or outdated, so you should verify important information yourself.'],
       ['Browser extension coming soon', 'The IScraper browser extension is not available for users yet. When released, it will be optional and must be used only on pages and content you are allowed to process.'],
       ['Things you cannot do', 'Do not upload content you do not have rights to use, attack the service, bypass rate limits, scrape or copy other users data, reverse engineer protected parts of the service, or use IScraper for unlawful activity.'],
-      ['Credits and paid features', 'The first 200 imported saved items are currently included without paid IScraper credits, subject to abuse prevention and fair-use limits. Credit purchases are currently marked as coming soon. If payments are enabled later, pricing, refunds, and billing terms will be shown before purchase.'],
+      ['Credits and paid features', 'AI enrichment may require connected provider keys or paid IScraper credits. Credit purchases are currently marked as coming soon. If payments are enabled later, pricing, refunds, and billing terms will be shown before purchase.'],
       ['Service changes', 'We may change, pause, or discontinue features. We will try to avoid disrupting your saved library, but we do not guarantee uninterrupted access.'],
       ['Disclaimer', 'IScraper is provided as-is without warranties. To the maximum extent allowed by law, we are not responsible for indirect damages, lost data, lost profits, or decisions made from AI-generated output.'],
       ['Contact', `For support or legal questions, contact us at ${SUPPORT_EMAIL}.`],
@@ -2861,7 +2832,7 @@ const LEGAL_CONTENT = {
     sections: [
       ['Account protection', 'IScraper uses Supabase Auth with Google or email sign-in for account access. Users must complete profile setup before importing saved content. Keep your login method secure because it controls access to your IScraper account.'],
       ['Data separation', 'Production data is stored in Supabase with user ownership checks and row-level security policies. The backend uses the service role only on server-side routes, never in browser code.'],
-      ['API keys', 'User AI provider keys are encrypted before storage. The first included indexing allowance can use IScraper provider keys; users can still add their own keys when they want provider control.'],
+      ['API keys', 'User AI provider keys are encrypted before storage. Users can add their own keys when they want provider control for AI enrichment.'],
       ['Extension security - coming soon', 'The browser extension uses a scoped extension session created after account sign-in. It does not store your main web-app login token and will not be available to users until browser-store release.'],
       ['Abuse prevention', 'IScraper uses upload limits, rate limits, URL safety checks, CORS restrictions, and security headers to reduce common abuse and accidental exposure.'],
       ['Report a security issue', `Email ${SUPPORT_EMAIL} with the subject "IScraper security report". Include the affected page, steps to reproduce, and impact. Do not publicly disclose an issue until we have had a chance to fix it.`],
@@ -3106,9 +3077,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const sidebarRef = useRef(null);
+  const sidebarHoverTimerRef = useRef(null);
   const dashPanelRef = useRef(null);
   const pendingSaveHandledRef = useRef(false);
   const pendingItemHandledRef = useRef(false);
@@ -3763,7 +3736,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   ];
   const SidebarToggleIcon = sidebarExpanded ? PanelLeftClose : PanelLeftOpen;
   const advancedActive = advancedNavItems.some(([key]) => key === tab);
-  const advancedExpanded = sidebarExpanded && (advancedOpen || advancedActive);
+  const sidebarVisibleExpanded = sidebarExpanded || sidebarHoverExpanded;
+  const advancedExpanded = sidebarVisibleExpanded && (advancedOpen || advancedActive);
 
   const selectTab = useCallback((nextTab) => {
     if (!['library', 'graph', 'upload', 'settings'].includes(nextTab)) return;
@@ -3790,30 +3764,56 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (advancedActive) setAdvancedOpen(true);
   }, [advancedActive]);
 
+  useEffect(() => () => {
+    if (sidebarHoverTimerRef.current) window.clearTimeout(sidebarHoverTimerRef.current);
+  }, []);
+
+  const handleSidebarToggle = () => {
+    if (sidebarHoverTimerRef.current) window.clearTimeout(sidebarHoverTimerRef.current);
+    setSidebarHoverExpanded(false);
+    setSidebarExpanded((current) => !current);
+  };
+
+  const handleSidebarMouseEnter = () => {
+    if (sidebarExpanded) return;
+    if (sidebarHoverTimerRef.current) window.clearTimeout(sidebarHoverTimerRef.current);
+    setSidebarHoverExpanded(true);
+  };
+
+  const handleSidebarMouseLeave = () => {
+    if (sidebarExpanded) return;
+    if (sidebarHoverTimerRef.current) window.clearTimeout(sidebarHoverTimerRef.current);
+    sidebarHoverTimerRef.current = window.setTimeout(() => {
+      setSidebarHoverExpanded(false);
+    }, 500);
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-black text-foreground">
       <aside
         ref={sidebarRef}
+        onMouseEnter={handleSidebarMouseEnter}
+        onMouseLeave={handleSidebarMouseLeave}
         className={`hidden h-screen shrink-0 flex-col overflow-hidden border-r border-white/5 bg-black transition-[width] duration-200 md:flex ${
-          sidebarExpanded ? 'w-60' : 'w-[76px]'
+          sidebarVisibleExpanded ? 'w-60' : 'w-[76px]'
         }`}
       >
-        <div className={`flex border-b border-white/5 p-3 ${sidebarExpanded ? 'items-center gap-2' : 'flex-col items-center gap-2'}`}>
+        <div className={`flex border-b border-white/5 p-3 ${sidebarVisibleExpanded ? 'items-center gap-2' : 'flex-col items-center gap-2'}`}>
           <button
             type="button"
             onClick={onBack}
             title="Back to home"
             aria-label="Back to home"
             className={`flex min-h-11 items-center rounded-lg transition hover:bg-white/5 hover:text-foreground ${
-              sidebarExpanded ? 'min-w-0 flex-1 gap-3 px-2' : 'h-11 w-11 justify-center'
+              sidebarVisibleExpanded ? 'min-w-0 flex-1 gap-3 px-2' : 'h-11 w-11 justify-center'
             }`}
           >
             <ArrowLeft className="h-4 w-4 shrink-0 text-muted-foreground" />
-            {sidebarExpanded && <BrandLogo className="h-14 w-40 min-w-0" />}
+            {sidebarVisibleExpanded && <BrandLogo className="h-14 w-40 min-w-0" />}
           </button>
           <button
             type="button"
-            onClick={() => setSidebarExpanded((current) => !current)}
+            onClick={handleSidebarToggle}
             aria-label={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
             aria-expanded={sidebarExpanded}
             title={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
@@ -3829,13 +3829,13 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             title={`Signed in as @${profile.username}`}
             aria-label={`Open account settings for @${profile.username}`}
             className={`flex w-full items-center border-b border-white/5 text-left text-xs text-muted-foreground transition hover:bg-white/5 hover:text-foreground ${
-              sidebarExpanded ? 'gap-3 px-5 py-3' : 'justify-center px-3 py-3'
+              sidebarVisibleExpanded ? 'gap-3 px-5 py-3' : 'justify-center px-3 py-3'
             }`}
           >
             <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-primary text-sm font-bold text-primary-foreground">
               {dashboardAvatarUrl ? <img src={dashboardAvatarUrl} alt="" className="h-full w-full object-cover" /> : dashboardInitial}
             </span>
-            {sidebarExpanded && (
+            {sidebarVisibleExpanded && (
               <span className="min-w-0">
                 <span className="block">Signed in as</span>
                 <span className="block truncate font-semibold text-foreground">@{profile.username}</span>
@@ -3844,7 +3844,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           </button>
         )}
         {authEnabled && !session && (
-          <div className={`border-b border-white/5 py-3 ${sidebarExpanded ? 'px-5' : 'px-3'}`}>
+          <div className={`border-b border-white/5 py-3 ${sidebarVisibleExpanded ? 'px-5' : 'px-3'}`}>
             <button
               type="button"
               onClick={onOpenLogin}
@@ -3852,23 +3852,23 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
               title="Sign in"
               aria-label="Sign in"
               className={`inline-flex w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-60 ${
-                sidebarExpanded ? 'gap-2 px-4 py-2.5' : 'h-11 px-0'
+                sidebarVisibleExpanded ? 'gap-2 px-4 py-2.5' : 'h-11 px-0'
               }`}
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
-              {sidebarExpanded && 'Sign in'}
+              {sidebarVisibleExpanded && 'Sign in'}
             </button>
           </div>
         )}
         {authEnabled && session && profileRequired && (
           <div
             title="Choose a username before importing or saving."
-            className={`border-b border-white/5 text-xs leading-5 text-muted-foreground ${sidebarExpanded ? 'px-5 py-3' : 'grid place-items-center px-3 py-3'}`}
+            className={`border-b border-white/5 text-xs leading-5 text-muted-foreground ${sidebarVisibleExpanded ? 'px-5 py-3' : 'grid place-items-center px-3 py-3'}`}
           >
-            {sidebarExpanded ? 'Choose a username before importing or saving.' : <AlertCircle className="h-4 w-4" />}
+            {sidebarVisibleExpanded ? 'Choose a username before importing or saving.' : <AlertCircle className="h-4 w-4" />}
           </div>
         )}
-        <nav className={`flex-1 space-y-1 p-3 ${sidebarExpanded ? '' : 'flex flex-col items-center'}`}>
+        <nav className={`flex-1 space-y-1 p-3 ${sidebarVisibleExpanded ? '' : 'flex flex-col items-center'}`}>
           {navItems.map(([key, title, Icon]) => (
             <button
               key={key}
@@ -3879,11 +3879,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
               className={`flex items-center rounded-lg text-sm transition ${
                 tab === key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
               } ${
-                sidebarExpanded ? 'w-full gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
+                sidebarVisibleExpanded ? 'w-full gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
               }`}
             >
               <Icon className="h-4 w-4 shrink-0" />
-              {sidebarExpanded && <span className="truncate">{title}</span>}
+              {sidebarVisibleExpanded && <span className="truncate">{title}</span>}
             </button>
           ))}
           <button
@@ -3892,11 +3892,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             title="How to Use"
             aria-label="How to Use"
             className={`flex items-center rounded-lg text-sm text-muted-foreground transition hover:bg-white/5 hover:text-foreground ${
-              sidebarExpanded ? 'w-full gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
+              sidebarVisibleExpanded ? 'w-full gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
             }`}
           >
             <FileText className="h-4 w-4 shrink-0" />
-            {sidebarExpanded && <span className="truncate">How to Use</span>}
+            {sidebarVisibleExpanded && <span className="truncate">How to Use</span>}
           </button>
           <button
             type="button"
@@ -3914,18 +3914,18 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             title="Settings"
             aria-label="Open account settings"
             className={`flex items-center rounded-lg text-sm text-muted-foreground transition hover:bg-white/5 hover:text-foreground ${
-              sidebarExpanded ? 'w-full gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
+              sidebarVisibleExpanded ? 'w-full gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
             }`}
           >
             <Settings className="h-4 w-4 shrink-0" />
-            {sidebarExpanded && <span className="truncate">Settings</span>}
+            {sidebarVisibleExpanded && <span className="truncate">Settings</span>}
           </button>
         </nav>
-        <div className={`border-t border-white/5 p-3 ${sidebarExpanded ? '' : 'flex flex-col items-center'}`}>
+        <div className={`border-t border-white/5 p-3 ${sidebarVisibleExpanded ? '' : 'flex flex-col items-center'}`}>
           <button
             type="button"
             onClick={() => {
-              if (!sidebarExpanded) {
+              if (!sidebarVisibleExpanded) {
                 setSidebarExpanded(true);
                 setAdvancedOpen(true);
                 return;
@@ -3938,19 +3938,19 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             className={`flex items-center rounded-lg text-sm transition ${
               advancedActive ? 'text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
             } ${
-              sidebarExpanded ? 'w-full justify-between gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
+              sidebarVisibleExpanded ? 'w-full justify-between gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'
             }`}
           >
-            <span className={`flex items-center ${sidebarExpanded ? 'gap-3' : ''}`}>
+            <span className={`flex items-center ${sidebarVisibleExpanded ? 'gap-3' : ''}`}>
               <Settings className="h-4 w-4 shrink-0" />
-              {sidebarExpanded && <span className="truncate">Advanced Options</span>}
+              {sidebarVisibleExpanded && <span className="truncate">Advanced Options</span>}
             </span>
-            {sidebarExpanded && (
+            {sidebarVisibleExpanded && (
               <ChevronDown className={`h-4 w-4 shrink-0 transition ${advancedExpanded ? 'rotate-180' : ''}`} />
             )}
           </button>
           {advancedExpanded && (
-            <div className={`mt-1 space-y-1 ${sidebarExpanded ? '' : 'flex flex-col items-center'}`}>
+            <div className={`mt-1 space-y-1 ${sidebarVisibleExpanded ? '' : 'flex flex-col items-center'}`}>
               {advancedNavItems.map(([key, title, Icon]) => (
                 <button
                   key={key}
@@ -3962,11 +3962,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                   className={`flex items-center rounded-lg text-sm transition ${
                     tab === key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
                   } ${
-                    sidebarExpanded ? 'w-full gap-3 px-3 py-2.5 pl-7' : 'h-11 w-11 justify-center'
+                    sidebarVisibleExpanded ? 'w-full gap-3 px-3 py-2.5 pl-7' : 'h-11 w-11 justify-center'
                   }`}
                 >
                   <Icon className="h-4 w-4 shrink-0" />
-                  {sidebarExpanded && <span className="truncate">{title}</span>}
+                  {sidebarVisibleExpanded && <span className="truncate">{title}</span>}
                 </button>
               ))}
             </div>
@@ -3975,10 +3975,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         <div
           title={`${stats.total} saved items`}
           className={`border-t border-white/5 p-4 font-mono text-[10px] uppercase tracking-widest text-muted-foreground ${
-            sidebarExpanded ? '' : 'grid place-items-center'
+            sidebarVisibleExpanded ? '' : 'grid place-items-center'
           }`}
         >
-          {sidebarExpanded ? `${stats.total} saved items` : <Database className="h-4 w-4" />}
+          {sidebarVisibleExpanded ? `${stats.total} saved items` : <Database className="h-4 w-4" />}
         </div>
       </aside>
 
@@ -4494,9 +4494,6 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     working: ['Working', 'text-primary', CheckCircle2],
     failed: ['Needs attention', 'text-destructive', AlertCircle],
   };
-  const freeCreditProgress = dataUsage.credits.freeLimit
-    ? Math.min(100, Math.round((dataUsage.credits.freeUsed / dataUsage.credits.freeLimit) * 100))
-    : 0;
   const visualCoverage = dataUsage.searchable
     ? Math.round((dataUsage.visualReady / dataUsage.searchable) * 100)
     : 0;
@@ -4579,7 +4576,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                   <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Data & usage</div>
                   <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Your library health</h3>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    A quick view of what is saved, what is searchable, and how much enrichment allowance remains.
+                    A quick view of what is saved, what is searchable, and how much enrichment capacity remains.
                   </p>
                 </div>
 
@@ -4644,21 +4641,17 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
 
                     <div className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
                       <section className="rounded-2xl border border-primary/25 bg-primary/5 p-5">
-                        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Allowance</div>
+                        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Credits</div>
                         <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
                           <div>
                             <div className="font-display text-3xl font-bold">{formatUsageNumber(dataUsage.credits.available)}</div>
                             <div className="mt-1 text-sm text-muted-foreground">available enrichment credits</div>
                           </div>
-                          <div className="text-right text-sm text-muted-foreground">
-                            {formatUsageNumber(dataUsage.credits.freeUsed)} / {formatUsageNumber(dataUsage.credits.freeLimit)} free used
-                          </div>
                         </div>
                         <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
-                          <div className="h-full rounded-full bg-primary" style={{ width: `${freeCreditProgress}%` }} />
+                          <div className="h-full rounded-full bg-primary" style={{ width: dataUsage.credits.available > 0 ? '100%' : '0%' }} />
                         </div>
                         <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                          <span>{formatUsageNumber(dataUsage.credits.freeRemaining)} free left</span>
                           <span>{formatUsageNumber(dataUsage.credits.paid)} paid credits</span>
                         </div>
                       </section>
@@ -6475,7 +6468,7 @@ function UploadTab({
   onTrySearch,
 }) {
   const [dragging, setDragging] = useState(false);
-  const [activeAddMode, setActiveAddMode] = useState('link');
+  const [activeAddMode, setActiveAddMode] = useState('upload');
   const linkInputRef = useRef(null);
   const noteImageInputRef = useRef(null);
   const importHealth = useMemo(() => importHealthForFiles(files, importSourceType), [files, importSourceType]);
@@ -6521,6 +6514,96 @@ function UploadTab({
           </button>
         ))}
       </div>
+      {activeAddMode === 'upload' && (
+      <>
+      
+
+      <div
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          setFiles(Array.from(event.dataTransfer.files));
+        }}
+        className={`rounded-2xl border-2 border-dashed p-12 text-center transition md:p-16 ${dragging ? 'border-primary bg-primary/5' : 'border-white/15'}`}
+      >
+        <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
+        <h3 className="mb-2 font-display text-xl font-bold">Drop your files here</h3>
+        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV</p>
+        <button
+          type="button"
+          onClick={onOpenHowTo}
+          className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-xs text-muted-foreground transition hover:text-foreground"
+        >
+          <FileText className="h-3.5 w-3.5" /> Need the export steps?
+        </button>
+        <br />
+        <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
+          Choose export files
+          <input type="file" multiple accept=".html,.htm,.zip,.json,.csv" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
+        </label>
+        <label className="ml-3 inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/10 px-6 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5">
+          Choose export folder
+          <input type="file" multiple webkitdirectory="" directory="" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
+        </label>
+        {files.length > 0 && (
+          <div className="mt-6 space-y-2 text-left">
+            {files.map((file) => (
+              <div key={`${fileImportName(file)}-${file.size}`} className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-black px-4 py-2 text-sm">
+                <span className="min-w-0 truncate font-mono">{fileImportName(file) || file.name}</span>
+                <span className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+        <div className="mb-4">
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">File source</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Where did these files come from?</h2>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          {sourceOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setImportSourceType(option.value)}
+              className={`rounded-xl border px-4 py-3 text-left transition ${
+                importSourceType === option.value
+                  ? 'border-primary bg-primary/10 text-foreground'
+                  : 'border-white/10 bg-black text-muted-foreground hover:border-white/25 hover:text-foreground'
+              }`}
+            >
+              <span className="block text-sm font-semibold">{option.label}</span>
+              <span className="mt-1 block text-xs leading-5">{option.help}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <div>
+        <button onClick={onImport} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+          Add files to Library
+        </button>
+        {activationState.searchable > 0 && (
+          <button
+            type="button"
+            onClick={() => onTrySearch(activationState.searchQuery)}
+            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5"
+          >
+            <Search className="h-4 w-4" />
+            Go to Library
+          </button>
+        )}
+      </div>
+      </>
+      )}
 
       {activeAddMode === 'note' && (
       <form onSubmit={onCreateNote} className="space-y-4 rounded-2xl border border-primary/30 bg-primary/5 p-5">
@@ -6606,18 +6689,6 @@ function UploadTab({
       </form>
       )}
 
-      <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Included</div>
-            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Your first 200 saved posts are included.</h2>
-          </div>
-          <span className="rounded-full bg-primary px-4 py-2 font-display text-xl font-bold text-primary-foreground">200</span>
-        </div>
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Start by adding the saves you care about most. You can search them from your Library after they are added.
-        </p>
-      </div>
 
       <IndexingProgressCard activity={indexingActivity} />
 
@@ -6703,94 +6774,6 @@ function UploadTab({
         </section>
       )}
 
-      {activeAddMode === 'upload' && (
-      <>
-      <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
-        <div className="mb-4">
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Upload files</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Where did these files come from?</h2>
-        </div>
-        <div className="grid gap-3 md:grid-cols-3">
-          {sourceOptions.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => setImportSourceType(option.value)}
-              className={`rounded-xl border px-4 py-3 text-left transition ${
-                importSourceType === option.value
-                  ? 'border-primary bg-primary/10 text-foreground'
-                  : 'border-white/10 bg-black text-muted-foreground hover:border-white/25 hover:text-foreground'
-              }`}
-            >
-              <span className="block text-sm font-semibold">{option.label}</span>
-              <span className="mt-1 block text-xs leading-5">{option.help}</span>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <div
-        onDragOver={(event) => {
-          event.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(event) => {
-          event.preventDefault();
-          setDragging(false);
-          setFiles(Array.from(event.dataTransfer.files));
-        }}
-        className={`rounded-2xl border-2 border-dashed p-12 text-center transition md:p-16 ${dragging ? 'border-primary bg-primary/5' : 'border-white/15'}`}
-      >
-        <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
-        <h3 className="mb-2 font-display text-xl font-bold">Drop your files here</h3>
-        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV</p>
-        <button
-          type="button"
-          onClick={onOpenHowTo}
-          className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-xs text-muted-foreground transition hover:text-foreground"
-        >
-          <FileText className="h-3.5 w-3.5" /> Need the export steps?
-        </button>
-        <br />
-        <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
-          Choose export files
-          <input type="file" multiple accept=".html,.htm,.zip,.json,.csv" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
-        </label>
-        <label className="ml-3 inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/10 px-6 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5">
-          Choose export folder
-          <input type="file" multiple webkitdirectory="" directory="" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
-        </label>
-        {files.length > 0 && (
-          <div className="mt-6 space-y-2 text-left">
-            {files.map((file) => (
-              <div key={`${fileImportName(file)}-${file.size}`} className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-black px-4 py-2 text-sm">
-                <span className="min-w-0 truncate font-mono">{fileImportName(file) || file.name}</span>
-                <span className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div>
-        <button onClick={onImport} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-          Add files to Library
-        </button>
-        {activationState.searchable > 0 && (
-          <button
-            type="button"
-            onClick={() => onTrySearch(activationState.searchQuery)}
-            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5"
-          >
-            <Search className="h-4 w-4" />
-            Go to Library
-          </button>
-        )}
-      </div>
-      </>
-      )}
     </div>
   );
 }
@@ -6940,7 +6923,7 @@ function SettingsTab({
           </span>
         </div>
         <p className="mt-2 text-sm text-muted-foreground">
-          Your first 200 imported saves are included without paid IScraper credits. You can add your own provider key later if you want provider control or higher personal limits.
+          AI enrichment can use your saved provider keys. Paid IScraper credits are coming soon for users who do not want to bring their own key.
         </p>
       </div>
 
@@ -7147,6 +7130,7 @@ function GraphTab({ onSelectItem }) {
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [graphSidebarTab, setGraphSidebarTab] = useState('details');
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const zoomRef = useRef(1);
@@ -7214,6 +7198,11 @@ function GraphTab({ onSelectItem }) {
   const conceptNodes = graph?.nodes?.filter((node) => node.type !== 'item') || [];
   const itemNodes = graph?.nodes?.filter((node) => node.type === 'item') || [];
   const selectedNode = graph?.nodes?.find((node) => node.id === selectedNodeId) || null;
+  const graphSidebarTabs = [
+    { key: 'details', label: 'Details' },
+    { key: 'explore', label: 'Explore' },
+    { key: 'export', label: 'Export' },
+  ];
   const selectedNeighborIds = useMemo(() => {
     if (!selectedNodeId || !graph) return new Set();
     return new Set(graph.links.flatMap((link) => (
@@ -7355,16 +7344,6 @@ function GraphTab({ onSelectItem }) {
             Nodes are built from indexed titles, topics, tags, brands, people, and collections. Export it when you want Obsidian or an AI agent to work with your saved-library graph.
           </p>
         </div>
-        <div className="flex flex-wrap gap-3">
-          <button onClick={handleExport} className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
-            <Download className="h-4 w-4" />
-            Export Obsidian graph
-          </button>
-          <button onClick={handleCopyPrompt} className="inline-flex items-center gap-2 rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-foreground transition hover:border-primary hover:text-primary">
-            <Check className="h-4 w-4" />
-            {copied ? 'Copied' : 'Copy AI prompt'}
-          </button>
-        </div>
       </div>
 
       {error && <Banner type="error">{error}</Banner>}
@@ -7445,6 +7424,7 @@ function GraphTab({ onSelectItem }) {
                 if (gesture) event.currentTarget.releasePointerCapture?.(event.pointerId);
                 dragRef.current = null;
                 if (gesture?.nodeId && !gesture.moved) {
+                  setGraphSidebarTab('details');
                   setSelectedNodeId((current) => (current === gesture.nodeId ? null : gesture.nodeId));
                 }
               }}
@@ -7505,83 +7485,134 @@ function GraphTab({ onSelectItem }) {
           )}
         </div>
 
-        <div className="space-y-5">
-          <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
-            <div className="flex items-start gap-3">
-              <span className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ background: graphNodeColor(selectedNode?.type || 'item') }} />
-              <div className="min-w-0">
-                <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">
-                  {selectedNode ? selectedNode.type : 'Selection'}
+        <aside className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+          <div className="grid grid-cols-3 gap-1 rounded-xl border border-white/10 bg-black p-1">
+            {graphSidebarTabs.map((sidebarTab) => (
+              <button
+                key={sidebarTab.key}
+                type="button"
+                onClick={() => setGraphSidebarTab(sidebarTab.key)}
+                className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                  graphSidebarTab === sidebarTab.key
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                }`}
+              >
+                {sidebarTab.label}
+              </button>
+            ))}
+          </div>
+
+          {graphSidebarTab === 'details' && (
+            <div className="mt-5">
+              <div className="flex items-start gap-3">
+                <span className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ background: graphNodeColor(selectedNode?.type || 'item') }} />
+                <div className="min-w-0">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">
+                    {selectedNode ? selectedNode.type : 'Selection'}
+                  </div>
+                  <h2 className="mt-1 line-clamp-2 font-display text-xl font-bold tracking-tight">
+                    {selectedNode ? selectedNode.label : 'Click a node'}
+                  </h2>
                 </div>
-                <h2 className="mt-1 line-clamp-2 font-display text-2xl font-bold tracking-tight">
-                  {selectedNode ? selectedNode.label : 'Click a node'}
-                </h2>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                {selectedNode
+                  ? selectedNode.type === 'item'
+                    ? selectedNode.summary || 'No summary available.'
+                    : `${selectedNode.itemCount || selectedConnections.length} linked saves or concepts.`
+                  : 'Click any node to show details and nearby connections.'}
+              </p>
+              {selectedNode?.url && (
+                <a href={selectedNode.url} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-xs text-primary">
+                  Open original post <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+              {selectedNode?.type === 'item' && (
+                <button type="button" onClick={() => onSelectItem(selectedNode.itemId)} className="mt-3 inline-flex w-full items-center justify-center rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">
+                  Open save detail
+                </button>
+              )}
+              <div className="mt-5 border-t border-white/10 pt-4">
+                <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Connected nodes</div>
+                {selectedConnections.length > 0 ? (
+                  <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                    {selectedConnections.map((node) => (
+                      <button key={node.id} type="button" onClick={() => setSelectedNodeId(node.id)} className="flex w-full items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-left text-xs transition hover:border-primary">
+                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: graphNodeColor(node.type) }} />
+                        <span className="min-w-0 flex-1 truncate">{node.label}</span>
+                        <span className="text-[10px] uppercase text-muted-foreground">{node.type}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    {selectedNode ? 'No nearby nodes found.' : 'Select a node to see its connections.'}
+                  </p>
+                )}
               </div>
             </div>
-            <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              {selectedNode
-                ? selectedNode.type === 'item'
-                  ? selectedNode.summary || 'No summary available.'
-                  : `${selectedNode.itemCount || selectedConnections.length} linked saves or concepts.`
-                : 'Click any node to show details, highlight local connections, and inspect nearby saves.'}
-            </p>
-            {selectedNode?.url && (
-              <a href={selectedNode.url} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-xs text-primary">
-                Open original post <ExternalLink className="h-3 w-3" />
-              </a>
-            )}
-            {selectedNode?.type === 'item' && (
-              <button type="button" onClick={() => onSelectItem(selectedNode.itemId)} className="mt-3 inline-flex w-full items-center justify-center rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">
-                Open save detail
-              </button>
-            )}
-            {selectedConnections.length > 0 && (
-              <div className="mt-4">
-                <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Connected nodes</div>
-                <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
-                  {selectedConnections.map((node) => (
-                    <button key={node.id} type="button" onClick={() => setSelectedNodeId(node.id)} className="flex w-full items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-left text-xs transition hover:border-primary">
-                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: graphNodeColor(node.type) }} />
-                      <span className="min-w-0 flex-1 truncate">{node.label}</span>
-                      <span className="text-[10px] uppercase text-muted-foreground">{node.type}</span>
+          )}
+
+          {graphSidebarTab === 'explore' && (
+            <div className="mt-5 space-y-5">
+              <section>
+                <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Top concepts</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {conceptNodes.slice(0, 24).map((node) => (
+                    <button
+                      key={node.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedNodeId(node.id);
+                        setGraphSidebarTab('details');
+                      }}
+                      className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-muted-foreground transition hover:border-primary hover:text-foreground"
+                    >
+                      {node.label}
                     </button>
                   ))}
+                  {!conceptNodes.length && <span className="text-sm text-muted-foreground">No concept nodes yet.</span>}
                 </div>
+              </section>
+
+              <section className="border-t border-white/10 pt-4">
+                <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Indexed saves</div>
+                <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
+                  {itemNodes.slice(0, 40).map((node) => (
+                    <button key={node.id} onClick={() => onSelectItem(node.itemId)} className="block w-full rounded-xl border border-white/10 p-3 text-left transition hover:border-primary">
+                      <div className="line-clamp-1 text-sm font-semibold">{node.label}</div>
+                      <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">{node.summary}</div>
+                    </button>
+                  ))}
+                  {!itemNodes.length && <span className="text-sm text-muted-foreground">No indexed saves yet.</span>}
+                </div>
+              </section>
+            </div>
+          )}
+
+          {graphSidebarTab === 'export' && (
+            <div className="mt-5 space-y-4">
+              <div>
+                <h2 className="font-display text-xl font-bold tracking-tight">Export for Obsidian or AI tools</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Download your graph, then use the prompt below with a local-file agent.
+                </p>
               </div>
-            )}
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
-            <h2 className="font-display text-2xl font-bold tracking-tight">AI-agent prompt</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">After export, paste the downloaded file path into this prompt before giving it to Claude, Codex, Cursor, or another local-file agent.</p>
-            <textarea readOnly value={prompt} className="mt-4 h-56 w-full resize-none rounded-xl border border-white/10 bg-black p-4 font-mono text-xs leading-5 text-muted-foreground outline-none" />
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
-            <h2 className="font-display text-2xl font-bold tracking-tight">Top concepts</h2>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {conceptNodes.slice(0, 24).map((node) => (
-                <span key={node.id} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-muted-foreground">
-                  {node.label}
-                </span>
-              ))}
-              {!conceptNodes.length && <span className="text-sm text-muted-foreground">No concept nodes yet.</span>}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
-            <h2 className="font-display text-2xl font-bold tracking-tight">Indexed saves</h2>
-            <div className="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1">
-              {itemNodes.slice(0, 40).map((node) => (
-                <button key={node.id} onClick={() => onSelectItem(node.itemId)} className="block w-full rounded-xl border border-white/10 p-3 text-left transition hover:border-primary">
-                  <div className="line-clamp-1 text-sm font-semibold">{node.label}</div>
-                  <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">{node.summary}</div>
+              <div className="grid gap-2">
+                <button onClick={handleExport} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.01]">
+                  <Download className="h-4 w-4" />
+                  Export Obsidian graph
                 </button>
-              ))}
-              {!itemNodes.length && <span className="text-sm text-muted-foreground">No indexed saves yet.</span>}
+                <button onClick={handleCopyPrompt} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-foreground transition hover:border-primary hover:text-primary">
+                  <Check className="h-4 w-4" />
+                  {copied ? 'Copied' : 'Copy AI prompt'}
+                </button>
+              </div>
+              <textarea readOnly value={prompt} className="h-64 w-full resize-none rounded-xl border border-white/10 bg-black p-4 font-mono text-xs leading-5 text-muted-foreground outline-none" />
             </div>
-          </div>
-        </div>
+          )}
+        </aside>
       </div>
     </div>
   );

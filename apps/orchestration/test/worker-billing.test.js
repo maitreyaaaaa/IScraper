@@ -130,14 +130,14 @@ test('processing one saved item uses the user key without consuming app credits'
 
     assert.equal(item.status, 'done');
     assert.equal(credits.freeItemsUsed, 0);
-    assert.equal(credits.freeItemsRemaining, 200);
+    assert.equal(credits.freeItemsRemaining, 0);
   } finally {
     global.fetch = originalFetch;
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('processing one saved item uses app OpenRouter key and consumes free allowance', async () => {
+test('processing one saved item uses app OpenRouter key and consumes paid credit', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const userId = 'u1';
@@ -179,6 +179,7 @@ test('processing one saved item uses app OpenRouter key and consumes free allowa
 
   try {
     store.ensureUser(userId, 'u1@example.com');
+    store.addCreditTransaction({ userId, amount: 1, reason: 'test' });
     const entry = store.createImport({ userId, source: 'instagram-export', fileNames: ['saved_posts.html'] });
     const items = store.upsertImportData({
       userId,
@@ -213,8 +214,9 @@ test('processing one saved item uses app OpenRouter key and consumes free allowa
     const item = store.getItem(userId, 'item-2');
 
     assert.equal(item.status, 'done');
-    assert.equal(credits.freeItemsUsed, 1);
-    assert.equal(credits.freeItemsRemaining, 199);
+    assert.equal(credits.freeItemsUsed, 0);
+    assert.equal(credits.freeItemsRemaining, 0);
+    assert.equal(credits.paidCredits, 0);
   } finally {
     global.fetch = originalFetch;
     rmSync(dir, { recursive: true, force: true });
@@ -269,6 +271,7 @@ test('processing jobs can run with bounded parallel indexing', async () => {
 
   try {
     store.ensureUser(userId, 'u1@example.com');
+    store.addCreditTransaction({ userId, amount: 3, reason: 'test' });
     const entry = store.createImport({ userId, source: 'instagram-export', fileNames: ['saved_posts.html'] });
     const items = store.upsertImportData({
       userId,
@@ -300,7 +303,8 @@ test('processing jobs can run with bounded parallel indexing', async () => {
 
     const jobs = await store.getJobs(userId, entry.id);
     assert.equal(jobs.every((job) => job.status === 'done'), true);
-    assert.equal(store.getCredits(userId).freeItemsUsed, 3);
+    assert.equal(store.getCredits(userId).freeItemsUsed, 0);
+    assert.equal(store.getCredits(userId).paidCredits, 0);
     assert.ok(maxInFlight > 1);
   } finally {
     global.fetch = originalFetch;

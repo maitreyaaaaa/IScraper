@@ -741,7 +741,6 @@ async function chooseScreenshotAnalysisPlan({ store, config, userId }) {
 
     if (typeof store.getCredits !== 'function') return { credential: appCredential, source: null };
     const credits = await store.getCredits(userId);
-    if (credits.freeItemsRemaining > 0) return { credential: appCredential, source: 'free' };
     if (credits.paidCredits > 0) return { credential: appCredential, source: 'paid' };
   }
 

@@ -364,15 +364,6 @@ async function chooseAnalysisPlan({
 
   if (appTextCredential && typeof store.getCredits === 'function') {
     const credits = await store.getCredits(userId);
-    if (credits.freeItemsRemaining > 0) {
-      return {
-        source: 'free',
-        mediaCredential: needsMedia ? appMediaCredential : null,
-        textCredential: appTextCredential,
-        billingCredential: appTextCredential,
-        embeddingCredential: appEmbeddingCredential,
-      };
-    }
     if (credits.paidCredits > 0) {
       return {
         source: 'paid',
@@ -382,7 +373,7 @@ async function chooseAnalysisPlan({
         embeddingCredential: appEmbeddingCredential,
       };
     }
-    throw pauseError('paused_needs_billing', 'Saved post did not process because the free indexing allowance is used up.');
+    throw pauseError('paused_needs_billing', 'Saved post did not process because no enrichment credits are available.');
   }
 
   throw pauseError('paused_missing_provider', 'Saved post did not process because no text AI provider key is connected.');
@@ -447,7 +438,7 @@ function userSafeIndexingError(error) {
   const message = String(error?.message || error || 'Indexing failed.');
   if (/timeout/i.test(message)) return message;
   if (/api limit|rate limit|quota/i.test(message)) return 'Provider API limit reached while indexing this save.';
-  if (/billing|allowance|credits/i.test(message)) return 'Indexing allowance is not available for this save.';
+  if (/billing|credits/i.test(message)) return 'Enrichment credits are not available for this save.';
   if (/provider key|api provider|no text ai provider/i.test(message)) return 'Connect an AI provider before indexing this save.';
   return 'Indexing failed for this save. IScraper will retry if attempts remain.';
 }

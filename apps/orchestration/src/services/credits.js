@@ -1,4 +1,4 @@
-const FREE_ITEMS_LIMIT = 200;
+const FREE_ITEMS_LIMIT = 0;
 
 const DEFAULT_CREDIT_PACKAGES = [
   {

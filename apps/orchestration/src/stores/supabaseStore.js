@@ -1067,7 +1067,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .eq('source', 'free');
       if (countError) throw countError;
 
-      const freeItemsLimit = account.free_items_limit ?? FREE_ITEMS_LIMIT;
+      const freeItemsLimit = FREE_ITEMS_LIMIT;
       const freeItemsUsed = count || 0;
       return {
         userId,

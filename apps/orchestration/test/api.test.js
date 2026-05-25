@@ -1708,7 +1708,7 @@ test('provider credential API stores keys without returning secrets', async () =
   }
 });
 
-test('GET /api/credits returns free item allowance', async () => {
+test('GET /api/credits returns paid credit availability', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const app = createApp({ store });
@@ -1720,8 +1720,9 @@ test('GET /api/credits returns free item allowance', async () => {
     const body = await response.json();
 
     assert.equal(response.status, 200);
-    assert.equal(body.credits.freeItemsLimit, 200);
-    assert.equal(body.credits.freeItemsRemaining, 200);
+    assert.equal(body.credits.freeItemsLimit, 0);
+    assert.equal(body.credits.freeItemsRemaining, 0);
+    assert.equal(body.credits.totalAvailableCredits, 0);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
