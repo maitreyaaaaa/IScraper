@@ -6889,17 +6889,17 @@ function LibraryTab({
 
   return (
     <div className="mx-auto max-w-[1480px] px-4 pb-28 pt-4 sm:px-6 md:px-10 md:pt-0">
-      <section className="flex min-h-[42dvh] items-center justify-center py-6 md:min-h-[46dvh]">
-        <div className="w-full max-w-4xl">
+      <section className="flex min-h-[66dvh] items-center justify-center py-6 md:min-h-[70dvh]">
+        <div className="w-full max-w-[44rem]">
           <form
           onSubmit={(event) => {
             onSearch(event);
           }}
-          className="w-full rounded-2xl border border-white/10 bg-white/[0.035] p-5 shadow-2xl shadow-black/40 transition focus-within:border-primary focus-within:bg-white/[0.05] md:p-6"
+          className="w-full rounded-2xl border border-white/10 bg-white/[0.035] p-4 shadow-2xl shadow-black/40 transition focus-within:border-primary focus-within:bg-white/[0.05] md:p-5"
         >
           <textarea
             autoFocus
-            rows={2}
+            rows={1}
             aria-label="Search saved items"
             value={query}
             onChange={(event) => {
@@ -6915,12 +6915,12 @@ function LibraryTab({
               onSearch(event);
             }}
             placeholder="Search your saved posts, links, and notes..."
-            className="min-h-16 w-full resize-none bg-transparent text-lg leading-7 outline-none placeholder:text-muted-foreground md:min-h-20 md:text-2xl"
+            className="min-h-10 w-full resize-none bg-transparent text-base leading-6 outline-none placeholder:text-muted-foreground md:min-h-12 md:text-lg"
           />
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <span className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 px-4 text-sm font-medium text-foreground">
-                <Search className="h-4 w-4 text-primary" />
+              <span className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 px-3 text-sm font-medium text-foreground">
+                <Search className="h-3.5 w-3.5 text-primary" />
                 Search
               </span>
               <input
@@ -6939,9 +6939,9 @@ function LibraryTab({
                 type="button"
                 onClick={() => visualSearchInputRef.current?.click()}
                 disabled={busy}
-                className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 px-4 text-sm font-medium text-foreground transition hover:border-primary hover:bg-white/5 disabled:opacity-60"
+                className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 px-3 text-sm font-medium text-foreground transition hover:border-primary hover:bg-white/5 disabled:opacity-60"
               >
-                <Images className="h-4 w-4 text-primary" />
+                <Images className="h-3.5 w-3.5 text-primary" />
                 Same vibe
               </button>
               {searchActive && (
@@ -6957,13 +6957,13 @@ function LibraryTab({
                   onClick={() => {
                     onClearSearch();
                   }}
-                  className="grid h-9 w-9 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
+                  className="grid h-8 w-8 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
                   aria-label="Clear search"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-3.5 w-3.5" />
                 </button>
               )}
-              <button type="submit" className="grid h-11 w-11 place-items-center rounded-full bg-primary text-primary-foreground transition hover:scale-[1.03] disabled:opacity-60" aria-label="Search saves" disabled={busy}>
+              <button type="submit" className="grid h-10 w-10 place-items-center rounded-full bg-primary text-primary-foreground transition hover:scale-[1.03] disabled:opacity-60" aria-label="Search saves" disabled={busy}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-5 w-5" />}
               </button>
             </div>
@@ -7053,7 +7053,7 @@ function LibraryTab({
         activeFilters={activeFilters}
       />
 
-      <div className="mt-12 md:mt-[12dvh]">
+      <div className="mt-10 md:mt-[7dvh]">
         {items.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center md:p-14">
             <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary">
