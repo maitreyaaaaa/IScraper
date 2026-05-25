@@ -84,6 +84,7 @@ import {
   saveProfile,
   saveProviderCredential,
   searchItems,
+  searchVisuals,
   setSmartCollectionItemOverride,
   setApiAccessToken,
   submitSearchFeedback,
@@ -136,8 +137,11 @@ const LIBRARY_LAYOUT_ITEMS = [
   { value: 'list', label: 'List', shortLabel: 'List', icon: List },
 ];
 const NOTE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const VISUAL_SEARCH_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const MAX_NOTE_IMAGES = 5;
 const MAX_NOTE_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_VISUAL_SEARCH_SOURCE_BYTES = 8 * 1024 * 1024;
+const MAX_VISUAL_SEARCH_DATA_URL_BYTES = 700 * 1024;
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 const HERO_PLATFORMS = [
   { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
@@ -557,6 +561,64 @@ function noteImageError(file, existingCount = 0) {
   if (file.size > MAX_NOTE_IMAGE_BYTES) return 'Note images must be 5 MB or smaller.';
   if (existingCount >= MAX_NOTE_IMAGES) return `Notes support up to ${MAX_NOTE_IMAGES} images.`;
   return '';
+}
+
+function visualSearchImageError(file) {
+  if (!VISUAL_SEARCH_IMAGE_TYPES.has(file.type)) return 'Same Vibe Search supports PNG, JPEG, or WebP images.';
+  if (file.size > MAX_VISUAL_SEARCH_SOURCE_BYTES) return 'Use an image smaller than 8 MB for Same Vibe Search.';
+  return '';
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read that image.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not open that image.'));
+    };
+    image.src = url;
+  });
+}
+
+async function imageFileToVisualSearchDataUrl(file) {
+  if (file.size <= MAX_VISUAL_SEARCH_DATA_URL_BYTES * 0.72) {
+    return readFileAsDataUrl(file);
+  }
+
+  const image = await loadImageFromFile(file);
+  const maxSide = 1000;
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+  const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+  const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not prepare that image for search.');
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+
+  for (const quality of [0.82, 0.72, 0.62, 0.52]) {
+    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+    if (dataUrl.length < MAX_VISUAL_SEARCH_DATA_URL_BYTES) return dataUrl;
+  }
+
+  throw new Error('That image is still too large after resizing. Try a smaller screenshot or crop.');
 }
 
 function cardViewForItem(item) {
@@ -3093,6 +3155,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [indexingSummary, setIndexingSummary] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
   const [searchMeta, setSearchMeta] = useState({ eventId: '', ai: null, feedback: {} });
+  const [visualSearch, setVisualSearch] = useState(null);
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
   const [importSourceType, setImportSourceType] = useState('auto');
@@ -3261,6 +3324,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   }, []);
 
+  const clearSearchState = useCallback(() => {
+    activeSearchRef.current += 1;
+    setSearchResults(null);
+    setSearchMeta({ eventId: '', ai: null, feedback: {} });
+    setVisualSearch(null);
+    setQuery('');
+  }, []);
+
   const loadControls = useCallback(async () => {
     const credentialBody = await getProviderCredentials();
     setCredentials(credentialBody.credentials || []);
@@ -3412,6 +3483,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setSmartCollectionItems([]);
           setLibraryCare(null);
           setSearchResults(null);
+          setVisualSearch(null);
           setCredentials([]);
           setLoading(false);
         resetPostHogUser();
@@ -3433,6 +3505,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setSmartCollectionItems([]);
         setLibraryCare(null);
         setSearchResults(null);
+        setVisualSearch(null);
         setCredentials([]);
         setProfile(null);
         setProfileRequired(false);
@@ -3621,8 +3694,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       if (!searchText) {
         setSearchResults(null);
         setSearchMeta({ eventId: '', ai: null, feedback: {} });
+        setVisualSearch(null);
         await loadItems();
       } else {
+        setVisualSearch(null);
         const body = await searchItems(searchText, {}, { includeAi: true });
         const mappedResults = (body.results || []).map(mapItem);
         setSearchResults(mappedResults);
@@ -4014,6 +4089,42 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     resetPageScroll();
   }, []);
 
+  const handleVisualSearch = useCallback(async (file) => {
+    if (!requireSignIn('search by image')) return;
+    if (!requireProfile('search by image')) return;
+    const validationMessage = visualSearchImageError(file);
+    if (validationMessage) {
+      setError(validationMessage);
+      return;
+    }
+    const searchRun = activeSearchRef.current + 1;
+    activeSearchRef.current = searchRun;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const imageDataUrl = await imageFileToVisualSearchDataUrl(file);
+      const body = await searchVisuals(imageDataUrl, { limit: 24 });
+      if (activeSearchRef.current !== searchRun) return;
+      const mappedResults = (body.results || []).map(mapItem);
+      setQuery('');
+      setSearchResults(mappedResults);
+      setSearchMeta({ eventId: body.searchEventId || '', ai: null, feedback: {} });
+      setVisualSearch({
+        imageDataUrl,
+        fileName: file.name || 'Uploaded image',
+        analysis: body.visualSearch || null,
+        resultCount: mappedResults.length,
+      });
+      selectTab('library');
+      setNotice(mappedResults.length ? `Found ${mappedResults.length} saved visuals with a similar vibe.` : 'No similar saved visuals found yet.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [requireProfile, requireSignIn, selectTab]);
+
   const tryActivationSearch = useCallback((searchText) => {
     const nextQuery = String(searchText || '').trim();
     selectTab('library');
@@ -4308,13 +4419,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     searchResultCount={boardItems.length}
                     query={query}
                     setQuery={setQuery}
-                    onClearSearch={() => {
-                      activeSearchRef.current += 1;
-                      setSearchResults(null);
-                      setSearchMeta({ eventId: '', ai: null, feedback: {} });
-                      setQuery('');
-                    }}
+                    onClearSearch={clearSearchState}
                     onSearch={handleSearch}
+                    onVisualSearch={handleVisualSearch}
+                    visualSearch={visualSearch}
                     busy={busy}
                     typeFilter={typeFilter}
                     setTypeFilter={setTypeFilter}
@@ -4369,12 +4477,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     searchActive={searchActive}
                     searchResultCount={boardItems.length}
                     query={query}
-                    onClearSearch={() => {
-                      activeSearchRef.current += 1;
-                      setSearchResults(null);
-                      setSearchMeta({ eventId: '', ai: null, feedback: {} });
-                      setQuery('');
-                    }}
+                    visualSearch={visualSearch}
+                    onClearSearch={clearSearchState}
                     typeFilter={typeFilter}
                     setTypeFilter={setTypeFilter}
                     stateFilter={stateFilter}
@@ -6462,6 +6566,8 @@ function LibraryTab({
   setQuery,
   onClearSearch,
   onSearch,
+  onVisualSearch,
+  visualSearch,
   busy,
   typeFilter,
   setTypeFilter,
@@ -6488,6 +6594,7 @@ function LibraryTab({
   onLoadMore,
 }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const visualSearchInputRef = useRef(null);
   const activeFilters = (typeFilter !== 'all' ? 1 : 0) + (stateFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
   const updateFilter = useCallback((setter) => (value) => {
     setter(value);
@@ -6535,9 +6642,29 @@ function LibraryTab({
                 <Search className="h-4 w-4 text-primary" />
                 Search
               </span>
+              <input
+                ref={visualSearchInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="sr-only"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  if (file) onVisualSearch(file);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => visualSearchInputRef.current?.click()}
+                disabled={busy}
+                className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 px-4 text-sm font-medium text-foreground transition hover:border-primary hover:bg-white/5 disabled:opacity-60"
+              >
+                <Images className="h-4 w-4 text-primary" />
+                Same vibe
+              </button>
               {searchActive && (
                 <span className="hidden text-xs text-muted-foreground sm:inline">
-                  {searchResultCount} matching saves
+                  {visualSearch ? `${searchResultCount} visual matches` : `${searchResultCount} matching saves`}
                 </span>
               )}
             </div>
@@ -6560,6 +6687,27 @@ function LibraryTab({
             </div>
           </div>
         </form>
+        {visualSearch && (
+          <div className="mt-3 flex flex-col gap-3 rounded-2xl border border-primary/25 bg-primary/5 p-4 md:flex-row md:items-center">
+            <img src={visualSearch.imageDataUrl} alt="" className="h-20 w-20 shrink-0 rounded-xl object-cover" />
+            <div className="min-w-0 flex-1">
+              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Same Vibe Search</div>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                Using your uploaded image to find saved visuals with similar visual notes, text, topics, brands, and tags.
+              </p>
+              {visualSearch.analysis?.visualDescription && (
+                <p className="mt-2 line-clamp-2 text-sm text-foreground">{visualSearch.analysis.visualDescription}</p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={onClearSearch}
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-white/10 px-4 text-sm font-semibold text-foreground transition hover:bg-white/5"
+            >
+              <X className="h-4 w-4" /> Clear
+            </button>
+          </div>
+        )}
       </div>
 
       <IndexingProgressCard activity={indexingActivity} />
@@ -6752,6 +6900,7 @@ function GalleryTab({
   searchActive,
   searchResultCount,
   query,
+  visualSearch,
   onClearSearch,
   typeFilter,
   setTypeFilter,
@@ -6851,7 +7000,9 @@ function GalleryTab({
       {searchActive && (
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/25 bg-primary/5 p-4 text-sm">
           <span className="min-w-0 text-muted-foreground">
-            Showing Library search results{query ? ` for "${query}"` : ''}: {searchResultCount} matches.
+            {visualSearch
+              ? `Showing Same Vibe matches for ${visualSearch.fileName}: ${searchResultCount} matches.`
+              : `Showing Library search results${query ? ` for "${query}"` : ''}: ${searchResultCount} matches.`}
           </span>
           <button
             type="button"
@@ -6980,6 +7131,7 @@ function shortCardText(value = '') {
 function firstSearchReason(item) {
   const match = item.searchMatch;
   const field = match?.matchedFields?.[0];
+  if (match?.type === 'visual' && field?.snippet) return field.snippet;
   if (field?.label && field?.terms?.length) return `Matched ${field.label.toLowerCase()}: ${field.terms.slice(0, 3).join(', ')}`;
   if (field?.label) return `Matched ${field.label.toLowerCase()}`;
   if (match?.matchTypes?.includes('semantic')) return 'Matched related meaning';

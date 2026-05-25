@@ -34,6 +34,7 @@ const {
   hashExtensionToken,
 } = require('./services/extensionTokens');
 const { cleanLensText, describeLensCrop } = require('./services/lensSearch');
+const { findSimilarVisualItems, publicVisualSearchAnalysis } = require('./services/visualSimilarity');
 const {
   isDeletionBlockingStatus,
   processAccountDeletionRequest,
@@ -2332,6 +2333,41 @@ function createApp({ store, config = {}, observability = createObservability(con
       noResults: results.length === 0,
     });
     res.json({ results, ai, searchEventId });
+  }));
+
+  app.post('/api/visual-search', searchRateLimit, asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (!config.credentialEncryptionKey || typeof store.getPreferredProviderCredential !== 'function') {
+      return res.status(428).json({ error: 'Connect a media AI key before using Same Vibe Search.' });
+    }
+    const mediaCredential = await store.getPreferredProviderCredential(req.user.id, 'media', config.credentialEncryptionKey);
+    const described = await describeLensCrop({ dataUrl: req.body?.imageDataUrl, credential: mediaCredential });
+    const allItems = await store.getItems(req.user.id);
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 24, 60));
+    const results = findSimilarVisualItems(allItems, described.analysis, { limit });
+    const searchEventId = createSearchEventId();
+    if (typeof store.recordSearchEvent === 'function') {
+      await store.recordSearchEvent({
+        id: searchEventId,
+        userId: req.user.id,
+        query: '',
+        queryLength: 0,
+        filters: { type: 'visual' },
+        resultCount: results.length,
+        includeAi: false,
+        resultIds: results.map((item) => item.id),
+      });
+    }
+    captureWorkflow(req, 'visual search completed', {
+      searchEventId,
+      resultCount: results.length,
+      hasImageAnalysis: true,
+    });
+    res.json({
+      results,
+      searchEventId,
+      visualSearch: publicVisualSearchAnalysis(described.analysis, described.query),
+    });
   }));
 
   app.post('/api/search/feedback', searchRateLimit, asyncRoute(async (req, res) => {

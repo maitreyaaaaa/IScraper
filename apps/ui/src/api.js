@@ -468,6 +468,14 @@ export function searchItems(query, filters = {}, options = {}) {
   });
 }
 
+export function searchVisuals(imageDataUrl, options = {}) {
+  return request('/visual-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ imageDataUrl, ...options }),
+  });
+}
+
 export function submitSearchFeedback(payload) {
   return request('/search/feedback', {
     method: 'POST',
