@@ -73,6 +73,7 @@ import {
   getPrivacyExportData,
   getPublicFeedback,
   getProviderCredentials,
+  getSimilarVisuals,
   importInstagramExport,
   queueStorageImport,
   enrichIntentBatch,
@@ -4782,7 +4783,17 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           onError={setError}
         />
       )}
-      {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} onArchiveRetry={handleArchiveRetry} onRemind={handleCreateReminder} busy={busy} />}
+      {selected && (
+        <DetailDrawer
+          item={selected}
+          onClose={() => setSelected(null)}
+          onApprove={handleApproveReview}
+          onArchiveRetry={handleArchiveRetry}
+          onRemind={handleCreateReminder}
+          onOpenItem={openDetail}
+          busy={busy}
+        />
+      )}
       {accountSettingsOpen && (
         <AccountSettingsModal
           open
@@ -9163,9 +9174,10 @@ function buildDetailInsight(item) {
   };
 }
 
-function DetailDrawer({ item, onClose, onApprove, onArchiveRetry, onRemind, busy }) {
+function DetailDrawer({ item, onClose, onApprove, onArchiveRetry, onRemind, onOpenItem, busy }) {
   const ref = useRef(null);
   const [assetPreview, setAssetPreview] = useState(null);
+  const [similarVisuals, setSimilarVisuals] = useState({ itemId: item.id, status: 'loading', items: [], error: '' });
   const indexingMeta = INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
   const IndexingIcon = indexingMeta.icon;
   const capture = isExtensionCaptureItem(item);
@@ -9182,6 +9194,32 @@ function DetailDrawer({ item, onClose, onApprove, onArchiveRetry, onRemind, busy
   useEffect(() => {
     gsap.fromTo(ref.current, { x: '100%' }, { x: 0, duration: 0.5, ease: 'power3.out' });
   }, []);
+  useEffect(() => {
+    let active = true;
+    getSimilarVisuals(item.id, { limit: 6 })
+      .then((body) => {
+        if (!active) return;
+        setSimilarVisuals({
+          itemId: item.id,
+          status: 'ready',
+          items: (body.results || []).map((entry) => ({
+            ...mapItem(entry.item),
+            similarity: entry.similarity,
+          })),
+          error: '',
+        });
+      })
+      .catch((err) => {
+        if (!active) return;
+        setSimilarVisuals({ itemId: item.id, status: 'error', items: [], error: err.message });
+      });
+    return () => {
+      active = false;
+    };
+  }, [item.id]);
+  const visibleSimilarVisuals = similarVisuals.itemId === item.id
+    ? similarVisuals
+    : { itemId: item.id, status: 'loading', items: [], error: '' };
   return (
     <div className="fixed inset-0 z-50 flex" onClick={onClose}>
       <div className="flex-1 bg-black/70 backdrop-blur-sm" />
@@ -9263,6 +9301,7 @@ function DetailDrawer({ item, onClose, onApprove, onArchiveRetry, onRemind, busy
               This save may mention dates, prices, funding, availability, or terms that can change. Verify the original source before acting on it.
             </Section>
           )}
+          <SimilarVisualsPanel state={visibleSimilarVisuals} onOpenItem={onOpenItem} />
           <ChipGroup icon={Bot} label="Mentioned" items={insight.mentions} />
           <ChipGroup icon={Hash} label="Topics" items={insight.topics} />
           {!note && <OriginalDetails rows={insight.originalRows} />}
@@ -9391,6 +9430,62 @@ function ReminderPanel({ item, busy, onRemind }) {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function SimilarVisualsPanel({ state, onOpenItem }) {
+  const loading = state.status === 'loading';
+  const items = state.items || [];
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
+          <Eye className="h-3 w-3" /> Similar visuals
+        </div>
+        {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+      </div>
+      {state.status === 'error' && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {state.error || 'Could not load similar saves.'}
+        </div>
+      )}
+      {!loading && state.status !== 'error' && !items.length && (
+        <div className="rounded-xl border border-white/10 bg-white/[0.025] px-4 py-3 text-sm text-muted-foreground">
+          No similar visual saves yet.
+        </div>
+      )}
+      {items.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {items.map((similar) => {
+            const reason = similar.similarity?.reasons?.[0] || similar.card?.preview || '';
+            const score = Math.min(99, Math.max(1, Math.round(Number(similar.similarity?.score || 0) * 100)));
+            return (
+              <button
+                key={similar.id}
+                type="button"
+                onClick={() => onOpenItem(similar)}
+                className="group overflow-hidden rounded-xl border border-white/10 bg-white/[0.025] text-left transition hover:border-primary"
+              >
+                {similar.thumbnailUrl ? (
+                  <img src={similar.thumbnailUrl} alt="" className="h-28 w-full object-cover transition group-hover:scale-[1.02]" loading="lazy" />
+                ) : (
+                  <div className="grid h-28 place-items-center bg-white/[0.03] text-muted-foreground">
+                    <Eye className="h-5 w-5" />
+                  </div>
+                )}
+                <div className="space-y-2 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 truncate text-sm font-semibold text-foreground">{similar.sourceTitle || similar.title}</div>
+                    <span className="shrink-0 rounded-full border border-primary/30 px-2 py-0.5 font-mono text-[10px] text-primary">{score}%</span>
+                  </div>
+                  <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">{reason}</p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

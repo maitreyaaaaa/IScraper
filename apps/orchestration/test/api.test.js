@@ -278,6 +278,123 @@ test('items API keeps full-list compatibility and supports paginated library que
   }
 });
 
+test('similar visuals endpoint returns user-scoped visual matches', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  store.ensureUser('visual-user', 'visual@example.com');
+  store.ensureUser('other-user', 'other@example.com');
+  store.upsertImportData({
+    userId: 'visual-user',
+    importId: 'visual-import',
+    parsed: {
+      collections: [],
+      items: [
+        {
+          id: 'source-kitchen',
+          url: 'https://instagram.com/p/source-kitchen',
+          contentType: 'post',
+          caption: 'Kitchen inspiration',
+          collections: ['Home'],
+          platform: 'Instagram',
+          platformKey: 'instagram',
+          sourceTitle: 'Kitchen moodboard',
+          thumbnailUrl: 'https://example.com/source.jpg',
+        },
+        {
+          id: 'related-kitchen',
+          url: 'https://pinterest.com/pin/related-kitchen',
+          contentType: 'pin',
+          caption: 'Green cabinets and brass hardware',
+          collections: ['Home'],
+          platform: 'Pinterest',
+          platformKey: 'pinterest',
+          sourceTitle: 'Green cabinet idea',
+          thumbnailUrl: 'https://example.com/related.jpg',
+        },
+        {
+          id: 'unrelated-fitness',
+          url: 'https://instagram.com/p/unrelated-fitness',
+          contentType: 'post',
+          caption: 'Workout routine',
+          collections: ['Fitness'],
+          platform: 'Instagram',
+          platformKey: 'instagram',
+          sourceTitle: 'Workout routine',
+          thumbnailUrl: 'https://example.com/fitness.jpg',
+        },
+      ],
+    },
+    initialStatus: 'done',
+  });
+  store.upsertImportData({
+    userId: 'other-user',
+    importId: 'other-import',
+    parsed: {
+      collections: [],
+      items: [
+        {
+          id: 'other-kitchen',
+          url: 'https://instagram.com/p/other-kitchen',
+          contentType: 'post',
+          caption: 'Other user kitchen',
+          collections: ['Home'],
+          platform: 'Instagram',
+          platformKey: 'instagram',
+          sourceTitle: 'Other kitchen',
+          thumbnailUrl: 'https://example.com/other.jpg',
+        },
+      ],
+    },
+    initialStatus: 'done',
+  });
+  store.saveAnalysis('visual-user', 'source-kitchen', {
+    title: 'Kitchen moodboard',
+    summary: 'A warm home kitchen reference.',
+    visualDescription: 'Warm kitchen shelves, brass hardware, marble island, green cabinets.',
+    topics: ['interior design', 'kitchen'],
+    tags: ['home', 'brass'],
+  });
+  store.saveAnalysis('visual-user', 'related-kitchen', {
+    title: 'Green cabinet idea',
+    summary: 'Another kitchen image.',
+    visualDescription: 'Green cabinets with brass pulls beside a marble kitchen counter.',
+    topics: ['kitchen', 'interior design'],
+    tags: ['brass'],
+  });
+  store.saveAnalysis('visual-user', 'unrelated-fitness', {
+    title: 'Workout routine',
+    summary: 'Exercise setup.',
+    visualDescription: 'Gym bench, dumbbells, running shoes, and a timer.',
+    topics: ['fitness'],
+    tags: ['training'],
+  });
+  store.saveAnalysis('other-user', 'other-kitchen', {
+    title: 'Other kitchen',
+    visualDescription: 'Green cabinets with brass hardware.',
+    topics: ['kitchen'],
+    tags: ['brass'],
+  });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const headers = { 'x-user-id': 'visual-user', 'x-user-email': 'visual@example.com' };
+    const response = await fetch(`http://127.0.0.1:${port}/api/items/source-kitchen/similar-visuals`, { headers });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.item.id, 'source-kitchen');
+    assert.equal(body.results.length, 1);
+    assert.equal(body.results[0].item.id, 'related-kitchen');
+    assert.ok(body.results[0].similarity.score > 0);
+    assert.equal(body.results.some((entry) => entry.item.id === 'other-kitchen'), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('admin approval and deletion processing are idempotent and prevent account recreation', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

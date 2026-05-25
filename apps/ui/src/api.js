@@ -198,6 +198,12 @@ export function archiveItem(id) {
   });
 }
 
+export function getSimilarVisuals(id, { limit = 6 } = {}) {
+  const query = new URLSearchParams();
+  if (limit) query.set('limit', String(limit));
+  return request(`/items/${id}/similar-visuals${query.toString() ? `?${query}` : ''}`);
+}
+
 export function updateReviewItem(id, payload) {
   return request(`/items/${id}/review`, {
     method: 'PATCH',

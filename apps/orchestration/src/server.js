@@ -42,7 +42,11 @@ const {
   publicAgentItem,
 } = require('./services/agentAccess');
 const { cleanLensText, describeLensCrop } = require('./services/lensSearch');
-const { findSimilarVisualItems, publicVisualSearchAnalysis } = require('./services/visualSimilarity');
+const {
+  findSimilarVisualItems: findVisualSearchItems,
+  publicVisualSearchAnalysis,
+} = require('./services/visualSimilarity');
+const { findSimilarVisualItems: findItemSimilarVisuals } = require('./services/similarVisuals');
 const {
   assertTelegramWebhookSecret,
   parseTelegramCommand,
@@ -2071,6 +2075,17 @@ function createApp({ store, config = {}, observability = createObservability(con
     return res.json({ item: updated ? { ...updated, archive: archive || updated.archive } : item, archive });
   }));
 
+  app.get('/api/items/:id/similar-visuals', searchRateLimit, asyncRoute(async (req, res) => {
+    const item = await store.getItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+    const items = await store.getItems(req.user.id);
+    const result = findItemSimilarVisuals(items, item.id, { limit: req.query.limit });
+    return res.json({
+      item,
+      results: result.items,
+    });
+  }));
+
   app.patch('/api/items/:id/review', asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     if (typeof store.updateSavedItem !== 'function') return res.status(501).json({ error: 'Review updates are not available.' });
@@ -2651,7 +2666,7 @@ function createApp({ store, config = {}, observability = createObservability(con
     const described = await describeLensCrop({ dataUrl: req.body?.imageDataUrl, credential: mediaCredential });
     const allItems = await store.getItems(req.user.id);
     const limit = Math.max(1, Math.min(Number(req.body?.limit) || 24, 60));
-    const results = findSimilarVisualItems(allItems, described.analysis, { limit });
+    const results = findVisualSearchItems(allItems, described.analysis, { limit });
     const searchEventId = createSearchEventId();
     if (typeof store.recordSearchEvent === 'function') {
       await store.recordSearchEvent({
