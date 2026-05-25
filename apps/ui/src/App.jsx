@@ -1877,19 +1877,19 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         className="pointer-events-none fixed left-0 top-0 z-[100] hidden h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary mix-blend-difference md:block"
       />
 
-      <header className="pointer-events-none fixed left-0 right-0 top-4 z-50 px-4">
-        <div className="mx-auto grid max-w-7xl grid-cols-[auto_1fr_auto] items-center gap-4">
+      <header className="pointer-events-none absolute left-0 right-0 top-4 z-50">
+        <div className="mx-auto grid w-full max-w-[100rem] grid-cols-[auto_1fr_auto] items-center gap-4 px-6 md:px-10 md:pr-20 xl:px-14 xl:pr-24">
           <button
             type="button"
             onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
             className="nav-item pointer-events-auto flex items-center"
           >
-            <BrandLogo className="h-16 w-52 md:h-20 md:w-64" />
+            <BrandLogo className="h-20 w-64 md:h-[7.5rem] md:w-[24rem]" />
           </button>
           <nav className="pointer-events-auto hidden justify-self-center rounded-full border border-white/10 bg-black/75 p-1 text-sm font-semibold text-muted-foreground shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl md:flex">
             <a href="#features" onClick={(event) => scrollToSection(event, '#features')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Features</a>
+            <a href="#how-it-works" onClick={(event) => scrollToSection(event, '#how-it-works')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">How it works</a>
             <a href="#extension" onClick={(event) => scrollToSection(event, '#extension')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Extension</a>
-            <button type="button" className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Pricing</button>
             <button type="button" onClick={onOpenHowTo} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">How to Use</button>
           </nav>
           <div className="nav-item pointer-events-auto flex items-center gap-2 justify-self-end">
@@ -1921,7 +1921,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
               onClick={onOpenApp}
               className="group hidden items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow-[0_16px_55px_rgba(164,255,18,0.22)] transition hover:scale-[1.03] sm:inline-flex"
             >
-              Open library <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+              Start my library <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
             </button>
           </div>
         </div>
@@ -1951,9 +1951,9 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         <div className="hero-content relative mx-auto w-full max-w-[100rem] overflow-visible px-6 md:px-10 md:pr-20 xl:px-14 xl:pr-24">
           <h1
             ref={heroTitle}
-            className="overflow-visible text-balance font-display text-[clamp(3rem,10.5vw,11rem)] font-bold leading-[0.95] tracking-tighter"
+            className="overflow-visible text-balance font-display text-[clamp(3rem,12vw,11rem)] font-bold leading-[0.95] tracking-tighter md:text-[clamp(3rem,10.5vw,11rem)]"
           >
-            {heroWords.map((word, index) => (
+            {heroWords.map((word) => (
               <span key={word} className="mr-[0.18em] inline-block overflow-visible last:mr-0">
                 <span className={`word inline-block ${word === 'Lose' ? 'relative isolate' : ''} ${word === 'Post' ? 'rounded-[5px] bg-orange-500 px-[0.08em] italic text-black' : ''}`}>
                   {word === 'Lose' && (
@@ -1966,51 +1966,51 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
                   )}
                   <span className={word === 'Lose' ? 'relative z-10' : ''}>{word}</span>
                 </span>
-                {index === heroWords.length - 1 && <RotatingPlatformLogo />}
+                {word === 'on' && <RotatingPlatformLogo />}
               </span>
             ))}
           </h1>
 
           <div className="mt-12 flex flex-col items-start justify-between gap-8 md:flex-row md:items-end">
-            <p className="hero-fade max-w-xl text-lg leading-relaxed text-muted-foreground">
-              Stop digging through old saves. IScraper keeps the posts, links, products, and ideas you care about in one private place, so you can find them again when you need them.
+            <p className="hero-fade max-w-[21rem] text-lg leading-relaxed text-muted-foreground sm:max-w-xl">
+              Save posts, links, screenshots, notes, products, and references in one private library. Find them later by what they are about, not just where you saved them.
             </p>
-            <div className="hero-fade flex flex-wrap items-center gap-4">
+            <div className="hero-fade flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
               {landingSession ? (
                 <button
                   type="button"
                   onClick={onOpenApp}
-                  className="glow-ring group inline-flex items-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
+                  className="glow-ring group inline-flex items-center justify-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
                 >
-                  Open library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+                  Start my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
                 </button>
               ) : (
                 <button
                   type="button"
                   onClick={onOpenLogin}
-                  className="glow-ring group inline-flex items-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
+                  className="glow-ring group inline-flex items-center justify-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
                 >
-                  Log in <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+                  Start my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
                 </button>
               )}
-              <button type="button" onClick={onOpenApp} className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
-                Visit library
+              <button type="button" onClick={(event) => scrollToSection(event, '#how-it-works')} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
+                See how it works
               </button>
-              <button type="button" onClick={onOpenHowTo} className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
+              <button type="button" onClick={onOpenHowTo} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
                 <FileText className="h-4 w-4" /> How to use
               </button>
             </div>
           </div>
 
-          <div className="hero-fade mt-24 grid grid-cols-2 gap-6 text-sm md:grid-cols-4">
+          <div className="hero-fade mt-24 grid grid-cols-2 gap-x-4 gap-y-8 text-sm md:grid-cols-4 md:gap-6">
             {[
-              ['Saved ideas rescued', 'All'],
-              ['Platforms supported', 'Any'],
-              ['Library modes', '3'],
-              ['Search in seconds', 'Fast'],
+              ['Saved posts', 'Posts'],
+              ['Useful links', 'Links'],
+              ['Screen grabs', 'Screenshots'],
+              ['Personal notes', 'Notes'],
             ].map(([label, value]) => (
               <div key={label} className="border-l border-white/10 pl-4">
-                <div className="font-display text-4xl font-bold tabular-nums">{value}</div>
+                <div className="font-display text-2xl font-bold tabular-nums sm:text-4xl">{value}</div>
                 <div className="mt-1 text-xs uppercase tracking-widest text-muted-foreground">{label}</div>
               </div>
             ))}
@@ -2025,7 +2025,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         <div className="marquee flex gap-12 whitespace-nowrap font-display text-5xl font-bold tracking-tighter md:text-7xl">
           {Array.from({ length: 2 }).map((_, index) => (
             <div key={index} className="flex gap-12">
-              {['pinterest', 'twitter', 'youtube', 'tiktok', 'instagram', 'recipes', 'outfits', 'travel', 'products', 'ideas'].map((label) => (
+              {['instagram saves', 'pinterest ideas', 'x bookmarks', 'youtube links', 'tiktok videos', 'articles', 'products', 'screenshots', 'notes'].map((label) => (
                 <span key={`${index}-${label}`} className="text-foreground/20 transition hover:text-primary">
                   {label} <span className="text-primary">✦</span>
                 </span>
@@ -2035,30 +2035,63 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         </div>
       </section>
 
+      <section id="what-you-can-save" className="relative border-b border-white/5 bg-black px-6 py-20 md:py-24">
+        <div className="mx-auto max-w-7xl">
+          <div data-reveal className="mb-10 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div>
+              <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 01 - What you can save</div>
+              <h2 className="max-w-3xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
+                All the internet stuff your brain refuses to remember.
+              </h2>
+            </div>
+            <p className="max-w-md text-pretty text-muted-foreground">
+              Your saves are not gone. They are just buried in too many apps, folders, chats, and screenshots. <RotatingPlatformLogo />
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              [Images, 'Instagram saves', 'Reels, posts, and collections you planned to revisit.'],
+              [ExternalLink, 'Pinterest ideas', 'Moodboards, recipes, outfits, interiors, products, and travel plans.'],
+              [Hash, 'X bookmarks', 'Threads, posts, and ideas that should not disappear into the feed.'],
+              [Zap, 'YouTube and TikTok links', 'Videos worth saving without turning your browser into a junk drawer.'],
+              [FileText, 'Articles and products', 'Research, shopping links, docs, and sites you want again later.'],
+              [Brain, 'Screenshots and notes', 'The random useful things that usually end up lost in your camera roll.'],
+            ].map(([Icon, title, description]) => (
+              <article key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+                <Icon className="h-5 w-5 text-primary" />
+                <h3 className="mt-5 font-display text-2xl font-semibold tracking-tight">{title}</h3>
+                <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{description}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section id="features" className="feature-section relative overflow-hidden bg-black px-6 py-24 md:py-32">
         <div className="pointer-events-none absolute left-1/2 top-10 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-[120px]" />
         <div className="mx-auto max-w-7xl">
           <div data-reveal className="mb-16 flex flex-wrap items-end justify-between gap-8">
             <div>
-              <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 01 - Why it helps</div>
+              <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Why it helps</div>
               <h2 className="max-w-3xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
                 Your saves finally <span className="italic text-primary">work for you</span>.
               </h2>
             </div>
-            <p className="max-w-md text-muted-foreground">Stop losing useful saves inside platform folders, screenshots, and browser tabs. Find the exact thing when you need it.</p>
+            <p className="max-w-md text-pretty text-muted-foreground">No messy folders. No social password handover. No "where did I save that?" panic.</p>
           </div>
 
           <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
             {[
-              [Zap, 'Save from any platform', 'Paste a link from Pinterest, X, TikTok, YouTube, Instagram, or any site and keep it in the same searchable library.'],
-              [Brain, 'Know why you saved it', 'Each save can get a plain-English summary, so old posts, links, and references become useful again instead of forgotten.'],
-              [CheckCircle2, 'Review before indexing', 'Imported saves can be checked before they become searchable, so your library stays intentional and clean.'],
-              [Tag, 'Organized without the cleanup', 'Group saves by themes like travel, food, fitness, shopping, home, business, or inspiration.'],
-              [Lock, 'Private by default', 'Your library belongs to your account. Saves happen only after you explicitly authorize them.'],
-              [ShieldCheck, 'Built around official exports', 'Use Instagram and Pinterest exports without handing over social-platform passwords.'],
-              [Search, 'Lens and AI search', 'Search by words, selected text, or a screenshot crop, then see why results matched and which saves support an AI answer.'],
-              [GitBranch, 'Export your graph', 'Turn indexed saves into an Obsidian-ready graph when you want an AI agent or vault to work with your library.'],
-              [KeyRound, 'Browser capture coming soon', 'The extension roadmap adds one-click saving for screenshots, selected text, images, and videos after browser-store release.'],
+              [Zap, 'Save from everywhere', 'Paste links, upload exports, add screenshots, or write quick notes in one private place.'],
+              [Search, 'Find old saves fast', 'Search by idea, topic, person, brand, product, or the reason you saved it.'],
+              [Brain, 'Remember why you saved it', 'Get plain-English context so old posts stop looking like mystery bookmarks.'],
+              [Tag, 'Keep messy saves organized', 'Group travel, food, fitness, shopping, work, research, and inspiration without doing the boring cleanup yourself.'],
+              [Bot, 'Ask questions about your saves', 'Ask what you saved about a topic and get an answer based on your own library.'],
+              [Images, 'Find similar ideas', 'Use a save or screenshot to uncover more things with the same vibe.'],
+              [Clock, 'Set reminders for useful saves', 'Bring a save back when it is actually time to use it. Future you gets a small favor.'],
+              [ShieldCheck, 'Check your library', 'Spot links and saves that need attention before your collection turns into digital attic dust.'],
+              [Lock, 'Private by default', 'Your library belongs to your account, and you choose what becomes searchable.'],
             ].map(([Icon, title, description], index) => (
               <div
                 key={title}
@@ -2079,15 +2112,47 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         </div>
       </section>
 
+      <section id="how-it-works" className="relative border-y border-white/10 bg-black px-6 py-24 md:py-32">
+        <div className="mx-auto max-w-7xl">
+          <div data-reveal className="mb-14 max-w-4xl">
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 03 - How it works</div>
+            <h2 className="font-display text-5xl font-bold tracking-tighter md:text-7xl">
+              Save it once. Find it when it matters.
+            </h2>
+            <p className="mt-6 max-w-2xl text-pretty text-lg leading-relaxed text-muted-foreground">
+              IScraper turns scattered saves into a private library you can search without becoming your own unpaid filing clerk.
+            </p>
+          </div>
+
+          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
+            {[
+              [Upload, 'Add your saves', 'Bring in posts, links, screenshots, notes, and exports from the places you already use.'],
+              [CheckCircle2, 'Review what matters', 'Keep the useful stuff, clean up titles or notes, and skip what is not worth saving.'],
+              [Sparkles, 'IScraper organizes it', 'Your saves get easier to search by topic, person, brand, product, and reason.'],
+              [Search, 'Search when you need it', 'Come back days or months later and find the thing without scrolling yourself into a bad mood.'],
+            ].map(([Icon, title, description], index) => (
+              <article key={title} data-reveal className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+                <div className="flex items-center justify-between gap-4">
+                  <Icon className="h-6 w-6 text-primary" />
+                  <span className="font-mono text-xs uppercase tracking-[0.24em] text-muted-foreground">0{index + 1}</span>
+                </div>
+                <h3 className="mt-8 font-display text-2xl font-semibold tracking-tight">{title}</h3>
+                <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{description}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section id="extension" className="relative border-y border-white/10 bg-black px-6 py-24 md:py-32">
         <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
           <div data-reveal>
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 02 - Browser extension</div>
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 04 - Browser extension</div>
             <h2 className="max-w-4xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
-              Capture from Chrome without opening IScraper.
+              Save the page you are on without opening another tab.
             </h2>
             <p className="mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-              The extension is built around two actions: Capture URL and Screen Capture. Users connect their IScraper account once, then saves run in the background from the browser.
+              The browser extension will let you save the current page or capture a screenshot from your browser. It is coming after browser-store approval.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <button
@@ -2106,16 +2171,16 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
               </button>
             </div>
             <p className="mt-5 text-sm leading-6 text-muted-foreground">
-              Planned for Chromium browsers like Chrome, Edge, Brave, Arc, and Opera after store approval.
+              Until then, you can still upload exports, paste links, and add notes from the web app.
             </p>
           </div>
 
           <div data-reveal className="grid gap-4 sm:grid-cols-2">
             {[
-              [KeyRound, 'Email account sign-in', 'Connect once with the same email account used for IScraper.'],
-              [Search, 'Capture URL', 'Save the current tab URL and metadata directly to your library.'],
-              [Eye, 'Screen Capture', 'Drag a crop area and save the image with a 5-second Undo action.'],
-              [ShieldCheck, 'Store review - coming soon', 'The extension needs browser-store approval before normal users can install it.'],
+              [Search, 'Save the current page', 'Send the page you are viewing into your private library.'],
+              [Eye, 'Capture a screenshot', 'Save a crop of the screen when the useful bit is visual.'],
+              [RotateCcw, 'Undo quickly', 'If you save the wrong thing, undo it right away.'],
+              [ShieldCheck, 'Built with permission', 'It runs when you click it, not as a hidden background scraper.'],
             ].map(([Icon, title, description]) => (
               <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
                 <Icon className="h-6 w-6 text-primary" />
@@ -2130,16 +2195,19 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
       <section id="why" className="index-section relative overflow-hidden bg-black px-6 py-24 md:py-32">
         <div className="index-pin mx-auto max-w-7xl">
           <div className="index-heading mb-16">
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 03 - What becomes searchable</div>
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 05 - What gets easier to find</div>
             <h2 className="max-w-4xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
-              Turn every save into a <span className="italic text-accent">usable reference</span>.
+              For the posts you swore you would come back to.
             </h2>
+            <p className="mt-6 max-w-2xl text-pretty text-lg leading-relaxed text-muted-foreground">
+              IScraper helps each save carry enough context that you can actually use it later.
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-white/10 bg-white/10 md:grid-cols-3 lg:grid-cols-4">
             {[
               [Sparkles, 'What it is'], [FileText, 'Quick summary'], [FileText, 'What was said'], [Eye, 'Words on screen'],
-              [Eye, 'What is shown'], [Tag, 'Creator or brand'], [Bot, 'Product or idea'], [GitBranch, 'Links or names'],
-              [Hash, 'Theme'], [Sparkles, 'Collection'], [Brain, 'Reason you saved'], [ShieldCheck, 'Original post'],
+              [Eye, 'What is shown'], [Tag, 'Creator or brand'], [Bot, 'Product or idea'], [ExternalLink, 'Links or names'],
+              [Hash, 'Theme'], [Folder, 'Collection'], [Brain, 'Reason you saved'], [ShieldCheck, 'Original post'],
             ].map(([Icon, title]) => (
               <div key={title} data-index-tile className="group relative min-h-36 bg-black p-8 transition-colors hover:bg-primary/5">
                 <Icon className="h-6 w-6 text-muted-foreground transition-colors group-hover:text-primary" />
@@ -2153,10 +2221,10 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
       <section id="feedback" className="bg-black px-6 py-24 md:py-32">
         <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.9fr_1.1fr]">
           <div data-reveal>
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 04 - Build with us</div>
+            <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">/ 06 - Build with us</div>
             <h2 className="font-display text-5xl font-bold tracking-tighter md:text-7xl">What should we add next?</h2>
             <p className="mt-6 max-w-xl leading-relaxed text-muted-foreground">
-              Tell us what would make your saved-post library more useful. Ideas are shown publicly, but names and profile photos are hidden.
+              Tell us what would make your saved library more useful. Ideas are shown publicly, but names and profile photos are hidden.
             </p>
 
             <form onSubmit={handleFeedbackSubmit} className="feedback-card mt-10 rounded-3xl border border-white/10 bg-white/[0.03] p-5">
@@ -2226,14 +2294,14 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           <h2 data-reveal className="text-balance font-display text-6xl font-bold tracking-tighter md:text-8xl">
             Your best references are already saved. <br />Make them <RotatingOutcomeText />
           </h2>
-          <p data-reveal className="mx-auto mt-8 max-w-xl text-lg text-muted-foreground">Paste one link or upload an export, then turn saved posts, products, creators, research, and ideas into a library you can come back to.</p>
+          <p data-reveal className="mx-auto mt-8 max-w-xl text-lg text-muted-foreground">Paste one link or upload an export, then turn posts, products, research, screenshots, and ideas into a library you can come back to.</p>
           <div data-reveal className="mt-12 flex flex-wrap items-center justify-center gap-4">
             <button
               type="button"
               onClick={onOpenApp}
               className="glow-ring group inline-flex items-center gap-3 rounded-full bg-primary px-9 py-5 text-lg font-semibold text-primary-foreground transition hover:scale-[1.03]"
             >
-              Build my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+              Start my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
             </button>
             <button
               type="button"
