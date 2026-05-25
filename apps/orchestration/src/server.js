@@ -14,6 +14,17 @@ const { formatPrice } = require('./services/credits');
 const { buildKnowledgeGraph, buildObsidianFiles } = require('./services/graph');
 const { createDeepSeekSearchAnswer } = require('./services/aiSearch');
 const { parseManualLinkPayload } = require('./services/linkSaver');
+const {
+  PageArchiveError,
+  captureReadableCopy,
+  checkPageReachable,
+  shouldAttemptPageArchive,
+} = require('./services/pageArchive');
+const {
+  buildLibraryCareSummary,
+  linkCheckCandidates,
+  normalizeReminderInput,
+} = require('./services/libraryCare');
 const { validateProfileInput } = require('./services/profiles');
 const { contextForRequest, createObservability } = require('./services/observability');
 const {
@@ -31,6 +42,15 @@ const {
   publicAgentItem,
 } = require('./services/agentAccess');
 const { cleanLensText, describeLensCrop } = require('./services/lensSearch');
+const { findSimilarVisualItems, publicVisualSearchAnalysis } = require('./services/visualSimilarity');
+const {
+  assertTelegramWebhookSecret,
+  parseTelegramCommand,
+  parseTelegramUpdate,
+  sendTelegramReply,
+  telegramReply,
+  tokenHashFromConnectText,
+} = require('./services/telegramCapture');
 const {
   isDeletionBlockingStatus,
   processAccountDeletionRequest,
@@ -47,9 +67,13 @@ const {
   noteInputFromBody,
 } = require('./services/notes');
 
-const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv']);
+const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv', '.js', '.txt']);
 const EXPORT_UPLOAD_MIME_TYPES = new Set([
   'text/html',
+  'text/plain',
+  'text/javascript',
+  'application/javascript',
+  'application/x-javascript',
   'application/octet-stream',
   'application/zip',
   'application/x-zip-compressed',
@@ -361,7 +385,7 @@ function contentSecurityPolicy() {
 function uploadFileFilter(_req, file, callback) {
   const extension = path.extname(file.originalname || '').toLowerCase();
   if (!EXPORT_UPLOAD_EXTENSIONS.has(extension) || !EXPORT_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
-    return callback(new Error('Upload Instagram ZIP/HTML/JSON files or Pinterest export ZIP/JSON/CSV files.'));
+    return callback(new Error('Upload Instagram, Pinterest, or X bookmark export files.'));
   }
   return callback(null, true);
 }
@@ -378,7 +402,7 @@ function noteImageFileFilter(_req, file, callback) {
 function assertImportFileAllowed(file, maxUploadFileSizeBytes) {
   const extension = path.extname(file.originalname || '').toLowerCase();
   if (!EXPORT_UPLOAD_EXTENSIONS.has(extension) || !EXPORT_UPLOAD_MIME_TYPES.has(file.mimetype || '')) {
-    const error = new Error('Upload Instagram ZIP/HTML/JSON files or Pinterest export ZIP/JSON/CSV files.');
+    const error = new Error('Upload Instagram, Pinterest, or X bookmark export files.');
     error.statusCode = 400;
     throw error;
   }
@@ -392,7 +416,7 @@ function assertImportFileAllowed(file, maxUploadFileSizeBytes) {
 async function createImportFromFiles({ store, userId, files, config }) {
   const parsed = await parseImportExport(files);
   if (!parsed.items.length) {
-    const error = new Error('No saves were found in those files. Upload Instagram saved-post ZIP/HTML/JSON files or Pinterest export ZIP/JSON/CSV files.');
+    const error = new Error('No saves were found in those files. Upload Instagram saved-post files, Pinterest export files, or X bookmark export files.');
     error.statusCode = 400;
     throw error;
   }
@@ -565,6 +589,13 @@ function cleanText(value, maxLength) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
+function extensionScopesFromBody(body = {}) {
+  if (!Array.isArray(body.scopes) || !body.scopes.length) return DEFAULT_EXTENSION_SCOPES;
+  const allowed = new Set(DEFAULT_EXTENSION_SCOPES);
+  const scopes = [...new Set(body.scopes.map((scope) => String(scope || '').trim()).filter((scope) => allowed.has(scope)))];
+  return scopes.length ? scopes : DEFAULT_EXTENSION_SCOPES;
+}
+
 function reviewUpdatesFromBody(body = {}, item = {}) {
   const sourceTitle = cleanText(body.sourceTitle ?? body.title ?? item.sourceTitle, 160);
   const sourceAuthor = cleanText(body.sourceAuthor ?? body.author ?? item.sourceAuthor, 120);
@@ -681,6 +712,121 @@ function captureWorkflow(req, event, properties = {}) {
 
 function warnWorkflow(req, event, properties = {}) {
   req.app?.locals?.observability?.warn(event, contextForRequest(req, properties));
+}
+
+function archiveHost(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
+function failedArchivePayload(error) {
+  const archiveError = error instanceof PageArchiveError ? error : null;
+  const errorCode = archiveError?.code || 'capture_failed';
+  return {
+    status: ['unsupported_protocol', 'blocked_host', 'blocked_port', 'unsupported_content_type', 'no_readable_content'].includes(errorCode) ? 'skipped' : 'failed',
+    errorCode,
+    errorMessage: archiveError?.message || 'This page could not be backed up.',
+    httpStatus: archiveError?.statusCode || null,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+async function captureReadableCopyForItem({ store, userId, item, force = false }) {
+  if (!item || !shouldAttemptPageArchive(item) || typeof store.upsertItemArchive !== 'function') return null;
+  const existing = typeof store.getItemArchive === 'function' ? await store.getItemArchive(userId, item.id) : null;
+  if (existing?.status === 'ready' && !force) return existing;
+  await store.upsertItemArchive(userId, item.id, {
+    status: 'pending',
+    sourceUrl: item.url,
+    errorCode: '',
+    errorMessage: '',
+  });
+  try {
+    const archive = await captureReadableCopy(item.url);
+    return await store.upsertItemArchive(userId, item.id, archive);
+  } catch (error) {
+    return store.upsertItemArchive(userId, item.id, {
+      sourceUrl: item.url,
+      ...failedArchivePayload(error),
+    });
+  }
+}
+
+async function startReadableCopyForItem({ req, store, userId, item, force = false }) {
+  if (!item || !shouldAttemptPageArchive(item) || typeof store.upsertItemArchive !== 'function') return null;
+  const existing = typeof store.getItemArchive === 'function' ? await store.getItemArchive(userId, item.id) : null;
+  if (existing?.status === 'ready' && !force) return existing;
+  const pending = await store.upsertItemArchive(userId, item.id, {
+    status: 'pending',
+    sourceUrl: item.url,
+    errorCode: '',
+    errorMessage: '',
+  });
+  captureWorkflow(req, 'page backup queued', { itemId: item.id, host: archiveHost(item.url) });
+  setTimeout(() => {
+    captureReadableCopyForItem({ store, userId, item, force })
+      .then((archive) => {
+        const event = archive?.status === 'ready' ? 'page backup saved' : 'page backup skipped';
+        req.app?.locals?.observability?.capture(event, {
+          itemId: item.id,
+          userId,
+          host: archiveHost(item.url),
+          status: archive?.status || 'failed',
+          errorCode: archive?.errorCode || '',
+          byteSize: archive?.byteSize || 0,
+        }, userId);
+      })
+      .catch((error) => {
+        req.app?.locals?.observability?.warn('page backup failed', {
+          itemId: item.id,
+          userId,
+          host: archiveHost(item.url),
+          errorCode: error?.code || 'capture_failed',
+        });
+      });
+  }, 0);
+  return pending;
+}
+
+async function libraryCareSummary(store, userId) {
+  const [items, linkChecks, reminders] = await Promise.all([
+    store.getItems(userId),
+    typeof store.listLinkHealthChecks === 'function' ? store.listLinkHealthChecks(userId) : [],
+    typeof store.listItemReminders === 'function' ? store.listItemReminders(userId) : [],
+  ]);
+  return buildLibraryCareSummary({ items, linkChecks, reminders });
+}
+
+async function checkLibraryLinks({ store, userId, limit = 20 }) {
+  if (typeof store.upsertLinkHealthCheck !== 'function') return { checked: [], skipped: true };
+  const [items, checks] = await Promise.all([
+    store.getItems(userId),
+    typeof store.listLinkHealthChecks === 'function' ? store.listLinkHealthChecks(userId) : [],
+  ]);
+  const candidates = linkCheckCandidates(items, checks, limit);
+  const checked = [];
+  for (const item of candidates) {
+    let result;
+    try {
+      result = await checkPageReachable(item.url);
+    } catch (error) {
+      result = {
+        status: 'unknown',
+        sourceUrl: item.url,
+        finalUrl: '',
+        httpStatus: null,
+        errorCode: error?.code || 'check_failed',
+        errorMessage: 'This link could not be checked right now.',
+        checkedAt: new Date().toISOString(),
+      };
+    }
+    const saved = await store.upsertLinkHealthCheck(userId, item.id, result);
+    if (saved) checked.push(saved);
+  }
+  return { checked, skipped: false };
 }
 
 async function persistNoteImages({ store, config, userId, itemId, files = [] }) {
@@ -839,6 +985,54 @@ function createApp({ store, config = {}, observability = createObservability(con
     return { mode: 'vm-worker', queued: true, reason, userId, importId };
   }
 
+  async function saveLinkCapture({
+    req,
+    userId,
+    payload,
+    source = 'manual-link',
+    reason = 'manual-link',
+    initialStatus = 'queued',
+    shouldArchive = true,
+  }) {
+    const parsed = parseManualLinkPayload(payload || {});
+    const importEntry = await store.createImport({
+      userId,
+      source,
+      mode: 'export',
+      fileNames: [parsed.items[0].url],
+    });
+    const items = await store.upsertImportData({ userId, importId: importEntry.id, parsed, initialStatus });
+    const jobs = initialStatus === 'queued' ? await store.createJobs({ userId, importId: importEntry.id, items }) : [];
+    let responseItem = null;
+    try {
+      responseItem = await Promise.resolve(store.getItem(userId, items[0]?.id || parsed.items[0].id));
+    } catch {
+      responseItem = null;
+    }
+    if (shouldArchive && responseItem) {
+      const archive = await startReadableCopyForItem({ req, store, userId, item: responseItem });
+      if (archive) responseItem = { ...responseItem, archive };
+    }
+    let indexing = null;
+    if (jobs.length) {
+      indexing = await queueIndexingWork({
+        reason,
+        userId,
+        importId: importEntry.id,
+        shouldDownload: false,
+      });
+    }
+    await refreshSmartCollectionsForUser(userId);
+    return {
+      import: importEntry,
+      item: responseItem || items[0] || parsed.items[0],
+      newItemCount: items.length,
+      skippedDuplicateCount: items.length ? 0 : 1,
+      queuedJobCount: jobs.length,
+      indexing,
+    };
+  }
+
   const workerProcessHandler = asyncRoute(async (req, res) => {
     assertWorker(req, config);
     if (typeof store.getProcessableJobScopes !== 'function') return res.status(501).json({ error: 'Worker job discovery is not available.' });
@@ -917,6 +1111,16 @@ function createApp({ store, config = {}, observability = createObservability(con
     const responseItem = { ...item, indexingStage: 'visual_indexing', lastEnrichmentRequestedAt: new Date().toISOString() };
     captureWorkflow(req, 'enrichment queued', { itemId: item.id, importId: importEntry.id, queuedJobCount: jobs.length, reason });
     return { item: responseItem, enriched: false, queued: Boolean(jobs.length), queuedJobCount: jobs.length, jobs, indexing, reason };
+  }
+
+  async function refreshSmartCollectionsForUser(userId) {
+    if (typeof store.refreshSmartCollections !== 'function') return [];
+    try {
+      return await store.refreshSmartCollections(userId);
+    } catch (error) {
+      console.warn('Smart Collections refresh failed:', error.message);
+      return [];
+    }
   }
 
   app.locals.observability = observability;
@@ -1321,7 +1525,8 @@ function createApp({ store, config = {}, observability = createObservability(con
       newItemCount: items.length,
     });
 
-    res.status(201).json({
+    await refreshSmartCollectionsForUser(user.id);
+    return res.status(201).json({
       import: importEntry,
       item: items[0] || parsed.items[0],
       newItemCount: items.length,
@@ -1348,6 +1553,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       itemId: existing.id,
       importId: existing.importId,
     });
+    await refreshSmartCollectionsForUser(user.id);
     return res.json({ deleted: Boolean(deleted), itemId: existing.id });
   }));
 
@@ -1417,6 +1623,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       imageCount: item.assets?.length || 0,
       hasImageAnalysis: Boolean(item.analysis),
     });
+    await refreshSmartCollectionsForUser(user.id);
     return res.status(201).json({ item });
   }));
 
@@ -1435,6 +1642,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       itemId: existing.id,
       imageCount: assets.length,
     });
+    await refreshSmartCollectionsForUser(user.id);
     return res.json({ deleted: Boolean(deleted), itemId: existing.id });
   }));
 
@@ -1472,6 +1680,99 @@ function createApp({ store, config = {}, observability = createObservability(con
       batched: Array.isArray(req.body),
     });
     return res.json(Array.isArray(response) ? response.filter(Boolean) : response);
+  }));
+
+  app.post('/api/telegram/webhook', asyncRoute(async (req, res) => {
+    assertTelegramWebhookSecret(req, config);
+    if (
+      typeof store.upsertCaptureConnection !== 'function'
+      || typeof store.getCaptureConnection !== 'function'
+      || typeof store.markCaptureConnectionUsed !== 'function'
+      || typeof store.revokeCaptureConnection !== 'function'
+      || typeof store.getUserForExtensionToken !== 'function'
+    ) {
+      return res.status(501).json({ error: 'Telegram capture is not available.' });
+    }
+
+    const update = parseTelegramUpdate(req.body || {});
+    if (!update) return res.json(telegramReply('Send a link to save it in IScraper.'));
+
+    const sendAndReturn = async (reply, status = 200) => {
+      try {
+        await sendTelegramReply(config, update.chatId, reply.text);
+      } catch (error) {
+        warnWorkflow(req, 'telegram reply failed', { chatId: update.chatId, error: error.message });
+      }
+      return res.status(status).json(reply);
+    };
+
+    const command = parseTelegramCommand(update.text);
+    if (command?.command === 'start' || command?.command === 'connect') {
+      const tokenHash = tokenHashFromConnectText(update.text);
+      if (!tokenHash) {
+        return sendAndReturn(telegramReply('Open IScraper Settings, create a Telegram bot link code, then send /connect followed by that code.'));
+      }
+      const user = await store.getUserForExtensionToken(tokenHash, 'saves:create');
+      if (!user) return sendAndReturn(telegramReply('That IScraper link code is invalid, expired, or revoked.'), 401);
+      req.user = user;
+      await requireCompletedProfile(req, store);
+      await store.upsertCaptureConnection(user.id, {
+        provider: 'telegram',
+        externalId: update.chatId,
+        tokenHash,
+        username: update.username,
+        displayName: update.displayName,
+      });
+      captureWorkflow(req, 'telegram chat connected', {
+        userId: user.id,
+        chatId: update.chatId,
+      });
+      return sendAndReturn(telegramReply('Connected. Send or forward a link here and I will save it to IScraper.'));
+    }
+
+    if (command?.command === 'disconnect') {
+      const disconnected = await store.revokeCaptureConnection('telegram', update.chatId);
+      captureWorkflow(req, 'telegram chat disconnected', { chatId: update.chatId, disconnected });
+      return sendAndReturn(telegramReply(disconnected ? 'Disconnected from IScraper.' : 'This chat was not connected yet.'));
+    }
+
+    const connection = await store.getCaptureConnection('telegram', update.chatId);
+    if (!connection) {
+      return sendAndReturn(telegramReply('Connect this chat first. Open IScraper Settings, create a Telegram bot link code, then send /connect followed by that code.'));
+    }
+    const user = await store.getUserForExtensionToken(connection.tokenHash, 'saves:create');
+    if (!user) return sendAndReturn(telegramReply('Your IScraper bot link was revoked or expired. Create a new Telegram bot link code in Settings and connect again.'), 401);
+    req.user = user;
+    await requireCompletedProfile(req, store);
+
+    const url = update.links[0];
+    if (!url) return sendAndReturn(telegramReply('Send or forward a message with one link and I will save it.'));
+    const note = cleanText(update.text.replace(url, '').trim(), 500);
+    const result = await saveLinkCapture({
+      req,
+      userId: user.id,
+      source: 'telegram-bot',
+      reason: 'telegram-bot',
+      payload: {
+        url,
+        title: note ? note.split('\n')[0] : '',
+        note: [
+          'Saved via Telegram.',
+          note,
+        ].filter(Boolean).join(' '),
+        collection: 'Telegram saves',
+      },
+    });
+    await store.markCaptureConnectionUsed(connection.id);
+    captureWorkflow(req, 'telegram link saved', {
+      userId: user.id,
+      itemId: result.item?.id,
+      duplicate: !result.newItemCount,
+    });
+    return sendAndReturn(telegramReply(result.newItemCount ? 'Saved to IScraper.' : 'Already saved in IScraper.', {
+      item: result.item,
+      duplicate: !result.newItemCount,
+    }), result.newItemCount ? 201 : 200);
   }));
 
   app.use(asyncRoute(async (req, _res, next) => {
@@ -1552,6 +1853,103 @@ function createApp({ store, config = {}, observability = createObservability(con
     return res.json({ items });
   }));
 
+  app.get('/api/smart-collections', asyncRoute(async (req, res) => {
+    if (typeof store.listSmartCollections !== 'function') return res.json({ collections: [] });
+    const collections = await store.listSmartCollections(req.user.id, {
+      limit: req.query.limit,
+      includeHidden: req.query.includeHidden === 'true',
+    });
+    return res.json({ collections });
+  }));
+
+  app.post('/api/smart-collections/refresh', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    const collections = await refreshSmartCollectionsForUser(req.user.id);
+    captureWorkflow(req, 'smart collections refreshed', { collectionCount: collections.length });
+    return res.json({ collections });
+  }));
+
+  app.get('/api/smart-collections/:id/items', asyncRoute(async (req, res) => {
+    if (typeof store.listSmartCollectionItems !== 'function') return res.status(501).json({ error: 'Smart Collections are not available.' });
+    const page = await store.listSmartCollectionItems(req.user.id, req.params.id, {
+      limit: req.query.limit,
+      cursor: req.query.cursor,
+      sort: req.query.sort,
+      type: req.query.type,
+      state: req.query.state,
+      collection: req.query.collection,
+      platform: req.query.platform,
+    });
+    if (!page) return res.status(404).json({ error: 'Smart Collection not found.' });
+    return res.json(page);
+  }));
+
+  app.patch('/api/smart-collections/:id', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.updateSmartCollection !== 'function') return res.status(501).json({ error: 'Smart Collections are not available.' });
+    const collection = await store.updateSmartCollection(req.user.id, req.params.id, req.body || {});
+    if (!collection) return res.status(404).json({ error: 'Smart Collection not found.' });
+    captureWorkflow(req, 'smart collection updated', { collectionId: req.params.id });
+    return res.json({ collection });
+  }));
+
+  app.post('/api/smart-collections/:id/items/:itemId', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.setSmartCollectionItemOverride !== 'function') return res.status(501).json({ error: 'Smart Collections are not available.' });
+    const collection = await store.setSmartCollectionItemOverride(
+      req.user.id,
+      req.params.id,
+      req.params.itemId,
+      req.body?.action,
+    );
+    if (!collection) return res.status(404).json({ error: 'Smart Collection or item not found.' });
+    captureWorkflow(req, 'smart collection item override updated', { collectionId: req.params.id, itemId: req.params.itemId, action: req.body?.action || 'exclude' });
+    return res.json({ collection });
+  }));
+
+  app.get('/api/library-care', asyncRoute(async (req, res) => {
+    if (typeof store.getItems !== 'function') return res.status(501).json({ error: 'Library checkup is not available.' });
+    return res.json(await libraryCareSummary(store, req.user.id));
+  }));
+
+  app.post('/api/library-care/check-links', importRateLimit, asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 20, 50));
+    const result = await checkLibraryLinks({ store, userId: req.user.id, limit });
+    const summary = await libraryCareSummary(store, req.user.id);
+    captureWorkflow(req, 'library links checked', {
+      checkedCount: result.checked?.length || 0,
+      brokenCount: summary.cleanup.brokenLinkCount,
+      unknownCount: (result.checked || []).filter((entry) => entry.status === 'unknown').length,
+    });
+    return res.json({ ...summary, checked: result.checked || [] });
+  }));
+
+  app.post('/api/items/:id/reminders', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.createItemReminder !== 'function') return res.status(501).json({ error: 'Reminders are not available.' });
+    const item = await store.getItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+    const input = normalizeReminderInput(req.body || {});
+    const reminder = await store.createItemReminder(req.user.id, item.id, input);
+    if (!reminder) return res.status(404).json({ error: 'Item not found.' });
+    captureWorkflow(req, 'item reminder created', { itemId: item.id, reminderId: reminder.id, reason: reminder.reason });
+    return res.status(201).json({ reminder, item });
+  }));
+
+  app.patch('/api/reminders/:id', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.updateItemReminder !== 'function') return res.status(501).json({ error: 'Reminders are not available.' });
+    const status = ['done', 'dismissed', 'pending'].includes(req.body?.status) ? req.body.status : 'done';
+    const reminder = await store.updateItemReminder(req.user.id, req.params.id, {
+      status,
+      completedAt: status === 'done' || status === 'dismissed' ? new Date().toISOString() : null,
+    });
+    if (!reminder) return res.status(404).json({ error: 'Reminder not found.' });
+    captureWorkflow(req, 'item reminder updated', { reminderId: reminder.id, status });
+    return res.json({ reminder });
+  }));
+
   app.post('/api/notes', noteUpload.array('images', MAX_NOTE_IMAGES), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     if (typeof store.createNoteItem !== 'function' || typeof store.addItemAsset !== 'function') {
@@ -1578,6 +1976,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       linkCount: input.links.length,
       imageCount: item.assets?.length || 0,
     });
+    await refreshSmartCollectionsForUser(req.user.id);
     return res.status(201).json({ item });
   }));
 
@@ -1631,6 +2030,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       imageCount: item.assets?.length || 0,
       removedImageCount: removedAssets.length,
     });
+    await refreshSmartCollectionsForUser(req.user.id);
     return res.json({ item });
   }));
 
@@ -1643,6 +2043,7 @@ function createApp({ store, config = {}, observability = createObservability(con
     const deleted = await store.deleteSavedItem(req.user.id, existing.id);
     await removeNoteAssetObjects({ store, config, assets });
     captureWorkflow(req, 'note deleted', { itemId: existing.id, imageCount: assets.length });
+    await refreshSmartCollectionsForUser(req.user.id);
     return res.json({ deleted: Boolean(deleted), itemId: existing.id });
   }));
 
@@ -1650,6 +2051,24 @@ function createApp({ store, config = {}, observability = createObservability(con
     const item = await store.getItem(req.user.id, req.params.id);
     if (!item) return res.status(404).json({ error: 'Item not found.' });
     return res.json({ item });
+  }));
+
+  app.post('/api/items/:id/archive', asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (typeof store.upsertItemArchive !== 'function') return res.status(501).json({ error: 'Page backup is not available.' });
+    const item = await store.getItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+    if (!shouldAttemptPageArchive(item)) return res.status(400).json({ error: 'This save cannot be backed up as a readable page.' });
+    const archive = await captureReadableCopyForItem({ store, userId: req.user.id, item, force: true });
+    const updated = await store.getItem(req.user.id, req.params.id);
+    captureWorkflow(req, archive?.status === 'ready' ? 'page backup saved' : 'page backup failed', {
+      itemId: item.id,
+      host: archiveHost(item.url),
+      status: archive?.status || 'failed',
+      errorCode: archive?.errorCode || '',
+      byteSize: archive?.byteSize || 0,
+    });
+    return res.json({ item: updated ? { ...updated, archive: archive || updated.archive } : item, archive });
   }));
 
   app.patch('/api/items/:id/review', asyncRoute(async (req, res) => {
@@ -1697,6 +2116,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       });
     }
 
+    await refreshSmartCollectionsForUser(req.user.id);
     return res.json({ item, queuedJobCount: jobs.length, jobs, indexing });
   }));
 
@@ -1735,6 +2155,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       });
     }
 
+    await refreshSmartCollectionsForUser(req.user.id);
     return res.json({
       message: jobs.length ? 'Saves queued for batch indexing.' : 'No saves are waiting for indexing.',
       approvedCount: items.length,
@@ -1814,13 +2235,14 @@ function createApp({ store, config = {}, observability = createObservability(con
     await requireCompletedProfile(req, store);
     if (typeof store.createExtensionToken !== 'function') return res.status(501).json({ error: 'Extension tokens are not available.' });
     const rawToken = generateExtensionToken();
+    const scopes = extensionScopesFromBody(req.body || {});
     const token = await store.createExtensionToken(req.user.id, {
       tokenHash: hashExtensionToken(rawToken),
       name: cleanText(req.body?.name || 'Browser extension', 80),
-      scopes: DEFAULT_EXTENSION_SCOPES,
+      scopes,
       expiresAt: defaultExtensionExpiry(),
     });
-    captureWorkflow(req, 'extension token created', { extensionTokenId: token.id, scopeCount: DEFAULT_EXTENSION_SCOPES.length });
+    captureWorkflow(req, 'extension token created', { extensionTokenId: token.id, scopeCount: scopes.length });
     return res.status(201).json({ token, secret: rawToken });
   }));
 
@@ -1980,7 +2402,7 @@ function createApp({ store, config = {}, observability = createObservability(con
   app.post('/api/imports', importRateLimit, upload.array('exportFiles', 20), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
-    if (!files.length) return res.status(400).json({ error: 'Upload Instagram ZIP/HTML/JSON files or your Pinterest export ZIP/JSON/CSV.' });
+    if (!files.length) return res.status(400).json({ error: 'Upload Instagram, Pinterest, or X bookmark export files.' });
 
     files.forEach((file) => assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024));
     const result = await createImportFromFiles({ store, userId: req.user.id, files, config });
@@ -1999,7 +2421,8 @@ function createApp({ store, config = {}, observability = createObservability(con
       newItemCount: result.newItemCount,
       queuedJobCount: result.queuedJobCount,
     });
-    res.json(result);
+    await refreshSmartCollectionsForUser(req.user.id);
+    return res.json(result);
   }));
 
   app.post('/api/imports/upload-urls', importRateLimit, asyncRoute(async (req, res) => {
@@ -2089,7 +2512,8 @@ function createApp({ store, config = {}, observability = createObservability(con
       newItemCount: result.newItemCount,
       queuedJobCount: result.queuedJobCount,
     });
-    res.json(result);
+    await refreshSmartCollectionsForUser(req.user.id);
+    return res.json(result);
   }));
 
   app.post('/api/saves/link', importRateLimit, asyncRoute(async (req, res) => {
@@ -2104,6 +2528,16 @@ function createApp({ store, config = {}, observability = createObservability(con
     const initialStatus = req.body?.review === true ? 'needs_review' : 'queued';
     const items = await store.upsertImportData({ userId: req.user.id, importId: importEntry.id, parsed, initialStatus });
     const jobs = initialStatus === 'queued' ? await store.createJobs({ userId: req.user.id, importId: importEntry.id, items }) : [];
+    let responseItem = null;
+    try {
+      responseItem = await Promise.resolve(store.getItem(req.user.id, items[0]?.id || parsed.items[0].id));
+    } catch {
+      responseItem = null;
+    }
+    if (responseItem) {
+      const archive = await startReadableCopyForItem({ req, store, userId: req.user.id, item: responseItem });
+      if (archive) responseItem = { ...responseItem, archive };
+    }
 
     let indexing = null;
     if (jobs.length) {
@@ -2120,9 +2554,10 @@ function createApp({ store, config = {}, observability = createObservability(con
       initialStatus,
     });
 
-    res.status(201).json({
+    await refreshSmartCollectionsForUser(req.user.id);
+    return res.status(201).json({
       import: importEntry,
-      item: items[0] || parsed.items[0],
+      item: responseItem || items[0] || parsed.items[0],
       newItemCount: items.length,
       skippedDuplicateCount: items.length ? 0 : 1,
       queuedJobCount: jobs.length,
@@ -2207,6 +2642,41 @@ function createApp({ store, config = {}, observability = createObservability(con
     res.json({ results, ai, searchEventId });
   }));
 
+  app.post('/api/visual-search', searchRateLimit, asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    if (!config.credentialEncryptionKey || typeof store.getPreferredProviderCredential !== 'function') {
+      return res.status(428).json({ error: 'Connect a media AI key before using Same Vibe Search.' });
+    }
+    const mediaCredential = await store.getPreferredProviderCredential(req.user.id, 'media', config.credentialEncryptionKey);
+    const described = await describeLensCrop({ dataUrl: req.body?.imageDataUrl, credential: mediaCredential });
+    const allItems = await store.getItems(req.user.id);
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 24, 60));
+    const results = findSimilarVisualItems(allItems, described.analysis, { limit });
+    const searchEventId = createSearchEventId();
+    if (typeof store.recordSearchEvent === 'function') {
+      await store.recordSearchEvent({
+        id: searchEventId,
+        userId: req.user.id,
+        query: '',
+        queryLength: 0,
+        filters: { type: 'visual' },
+        resultCount: results.length,
+        includeAi: false,
+        resultIds: results.map((item) => item.id),
+      });
+    }
+    captureWorkflow(req, 'visual search completed', {
+      searchEventId,
+      resultCount: results.length,
+      hasImageAnalysis: true,
+    });
+    res.json({
+      results,
+      searchEventId,
+      visualSearch: publicVisualSearchAnalysis(described.analysis, described.query),
+    });
+  }));
+
   app.post('/api/search/feedback', searchRateLimit, asyncRoute(async (req, res) => {
     if (typeof store.recordSearchFeedback !== 'function') {
       return res.status(501).json({ error: 'Search feedback is not available for this store.' });
@@ -2234,7 +2704,7 @@ function createApp({ store, config = {}, observability = createObservability(con
   }));
 
   app.use((error, req, res, _next) => {
-    const statusCode = error.statusCode || (error instanceof multer.MulterError || /Upload Instagram/.test(error.message) ? 400 : 500);
+    const statusCode = error.statusCode || (error instanceof multer.MulterError || /Upload Instagram|bookmark export/.test(error.message) ? 400 : 500);
     const properties = contextForRequest(req, { statusCode });
     if (statusCode >= 500) {
       req.app?.locals?.observability?.captureError(error, properties, req.user?.id || 'server');

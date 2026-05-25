@@ -116,3 +116,100 @@ test('localStore listItemsPage applies filters and stable cursors', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('localStore stores item archives and removes them with saved items', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+
+  try {
+    const [created] = store.upsertImportData({
+      userId: 'archive-user',
+      importId: 'archive-import',
+      parsed: {
+        collections: [],
+        items: [{
+          id: 'web-archive',
+          url: 'https://example.com/archive',
+          contentType: 'unknown',
+          caption: 'Archive me',
+          collections: ['Research'],
+          platform: 'Web',
+          platformKey: 'web',
+          sourceTitle: 'Archive me',
+        }],
+      },
+      initialStatus: 'done',
+    });
+
+    const archive = store.upsertItemArchive('archive-user', created.id, {
+      status: 'ready',
+      sourceUrl: created.url,
+      finalUrl: created.url,
+      title: 'Saved copy',
+      contentText: 'Readable article text',
+      contentHtml: '<p>Readable article text</p>',
+      textLength: 21,
+      byteSize: 48,
+      contentHash: 'hash',
+      capturedAt: new Date().toISOString(),
+    });
+
+    assert.equal(archive.status, 'ready');
+    assert.equal(store.getItems('archive-user')[0].archive.contentText, undefined);
+    assert.equal(store.getItem('archive-user', created.id).archive.contentText, 'Readable article text');
+    assert.equal(store.getPrivacyExport('archive-user').itemArchives.length, 1);
+
+    store.deleteSavedItem('archive-user', created.id);
+    assert.equal(store.getItemArchive('archive-user', created.id), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('localStore stores link checks and idempotent reminders', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+
+  try {
+    const [created] = store.upsertImportData({
+      userId: 'care-user',
+      importId: 'care-import',
+      parsed: {
+        collections: [],
+        items: [{
+          id: 'care-link',
+          url: 'https://example.com/care',
+          contentType: 'unknown',
+          caption: 'Care link',
+          collections: ['Research'],
+          platform: 'Web',
+          platformKey: 'web',
+          sourceTitle: 'Care link',
+        }],
+      },
+      initialStatus: 'done',
+    });
+
+    const check = store.upsertLinkHealthCheck('care-user', created.id, {
+      status: 'broken',
+      sourceUrl: created.url,
+      httpStatus: 404,
+      errorCode: 'http_status',
+      checkedAt: '2026-05-25T00:00:00.000Z',
+    });
+    assert.equal(check.status, 'broken');
+    assert.equal(store.listLinkHealthChecks('care-user').length, 1);
+
+    const remindAt = '2026-06-01T00:00:00.000Z';
+    const first = store.createItemReminder('care-user', created.id, { remindAt, reason: 'week', note: '' });
+    const second = store.createItemReminder('care-user', created.id, { remindAt, reason: 'week', note: '' });
+    assert.equal(first.id, second.id);
+    assert.equal(store.listItemReminders('care-user', { status: 'pending' }).length, 1);
+
+    store.deleteSavedItem('care-user', created.id);
+    assert.equal(store.listLinkHealthChecks('care-user').length, 0);
+    assert.equal(store.listItemReminders('care-user').length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

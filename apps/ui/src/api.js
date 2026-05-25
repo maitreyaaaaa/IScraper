@@ -76,6 +76,76 @@ export function getItemsPage(params = {}) {
   return getItems({ limit: 60, ...params });
 }
 
+export function getSmartCollections(params = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === '' || value === false) continue;
+    query.set(key, String(value));
+  }
+  return request(`/smart-collections${query.toString() ? `?${query}` : ''}`);
+}
+
+export function refreshSmartCollections() {
+  return request('/smart-collections/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
+export function getSmartCollectionItems(id, params = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === '' || value === 'all') continue;
+    query.set(key, String(value));
+  }
+  return request(`/smart-collections/${id}/items${query.toString() ? `?${query}` : ''}`);
+}
+
+export function updateSmartCollection(id, payload) {
+  return request(`/smart-collections/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function setSmartCollectionItemOverride(id, itemId, action) {
+  return request(`/smart-collections/${id}/items/${itemId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  });
+}
+
+export function getLibraryCare() {
+  return request('/library-care');
+}
+
+export function checkLibraryLinks(limit = 20) {
+  return request('/library-care/check-links', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit }),
+  });
+}
+
+export function createItemReminder(id, payload) {
+  return request(`/items/${id}/reminders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateItemReminder(id, payload) {
+  return request(`/reminders/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getPrivacyExportData() {
   return request('/privacy-export');
 }
@@ -118,6 +188,14 @@ export function submitPublicFeedback(payload) {
 
 export function getItem(id) {
   return request(`/items/${id}`);
+}
+
+export function archiveItem(id) {
+  return request(`/items/${id}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
 }
 
 export function updateReviewItem(id, payload) {
@@ -207,11 +285,11 @@ export function getExtensionTokens() {
   return request('/extension-tokens');
 }
 
-export function createExtensionToken(name = 'Browser extension') {
+export function createExtensionToken(name = 'Browser extension', scopes = null) {
   return request('/extension-tokens', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, ...(Array.isArray(scopes) ? { scopes } : {}) }),
   });
 }
 
@@ -405,6 +483,14 @@ export function searchItems(query, filters = {}, options = {}) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, filters, ...options }),
+  });
+}
+
+export function searchVisuals(imageDataUrl, options = {}) {
+  return request('/visual-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ imageDataUrl, ...options }),
   });
 }
 

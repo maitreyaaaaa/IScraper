@@ -28,6 +28,8 @@ function getConfig() {
     credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY,
     adminApiKey: process.env.ADMIN_API_KEY,
     adminPassword: process.env.ADMIN_PASSWORD,
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+    telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET,
     workerApiKey: process.env.WORKER_API_KEY || process.env.CRON_SECRET,
     workerBatchSize: Number(process.env.WORKER_BATCH_SIZE || 5),
     workerScanLimit: Number(process.env.WORKER_SCAN_LIMIT || 20),

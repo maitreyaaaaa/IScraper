@@ -36,3 +36,22 @@ test('parseImportExport reads Instagram saved files from nested ZIP path only', 
   assert.equal(parsed.items[0].id, 'POST111');
   assert.deepEqual(parsed.items[0].collections, ['Instagram saved posts', 'Ideas']);
 });
+
+test('parseImportExport reads X bookmark files from a ZIP', async () => {
+  const zip = new JSZip();
+  zip.file('twitter-archive/data/bookmark.js', 'window.YTD.bookmark.part0 = [{"bookmark":{"tweet":{"id":"1777000000000000100","full_text":"Saved startup thread #ideas","screen_name":"founder"}}}];');
+  zip.file('twitter-archive/data/profile.js', 'https://x.com/nope/status/1777000000000000101');
+
+  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+  const parsed = await parseImportExport([{
+    originalname: 'twitter-archive.zip',
+    mimetype: 'application/zip',
+    size: buffer.length,
+    buffer,
+  }]);
+
+  assert.equal(parsed.source, 'x-bookmarks');
+  assert.equal(parsed.items.length, 1);
+  assert.equal(parsed.items[0].url, 'https://x.com/founder/status/1777000000000000100');
+  assert.deepEqual(parsed.items[0].collections, ['X bookmarks']);
+});

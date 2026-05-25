@@ -2,6 +2,7 @@ const path = require('path');
 const JSZip = require('jszip');
 const { parseInstagramExport } = require('./instagramParser');
 const { parsePinterestExport } = require('./pinterestParser');
+const { parseXBookmarksExport } = require('./xBookmarksParser');
 
 const INSTAGRAM_EXPORT_EXTENSIONS = new Set(['.html', '.htm', '.json']);
 const INSTAGRAM_SAVED_EXPORT_NAMES = new Set([
@@ -88,11 +89,17 @@ async function parseImportExport(files = []) {
   const instagramFiles = await instagramFilesFromUploads(files);
   const instagramParsed = instagramFiles.length ? parseInstagramExport(instagramFiles) : { items: [], collections: [] };
   const pinterestParsed = await parsePinterestExport(files);
-  const parsed = mergeParsedResults([instagramParsed, pinterestParsed]);
+  const xParsed = await parseXBookmarksExport(files);
+  const parsed = mergeParsedResults([instagramParsed, pinterestParsed, xParsed]);
+  const source = [
+    [instagramParsed, 'instagram-export'],
+    [pinterestParsed, 'pinterest-export'],
+    [xParsed, 'x-bookmarks'],
+  ].filter(([result]) => result.items.length);
 
   return {
     ...parsed,
-    source: pinterestParsed.items.length && !instagramParsed.items.length ? 'pinterest-export' : 'user-export',
+    source: source.length === 1 ? source[0][1] : 'user-export',
   };
 }
 

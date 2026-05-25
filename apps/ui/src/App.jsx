@@ -12,6 +12,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  Clock,
   Columns2,
   Columns3,
   Copy,
@@ -22,8 +23,10 @@ import {
   Eye,
   FileText,
   Filter,
+  Folder,
   GitBranch,
   Hash,
+  Images,
   KeyRound,
   LifeBuoy,
   List,
@@ -50,6 +53,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import {
+  archiveItem,
   approveReviewItem,
   cancelAccountDeletion,
   createAgentAccessToken,
@@ -76,16 +80,27 @@ import {
   revealProviderCredential,
   requestAccountDeletion,
   revokeAgentAccessToken,
+  getSmartCollectionItems,
+  getSmartCollections,
+  refreshSmartCollections,
   saveLink,
   saveProfile,
   saveProviderCredential,
   searchItems,
+  searchVisuals,
+  setSmartCollectionItemOverride,
   setApiAccessToken,
   submitSearchFeedback,
   submitPublicFeedback,
   testProviderCredential,
+  updateSmartCollection,
   updateReviewItem,
+  checkLibraryLinks,
+  createItemReminder,
+  getLibraryCare,
+  updateItemReminder,
 } from './api';
+import SmartCollectionsView from './components/SmartCollectionsView';
 import VirtualLibraryGrid from './components/VirtualLibraryGrid';
 import { identifyPostHogUser, resetPostHogUser } from './posthog';
 import { supabase } from './supabaseClient';
@@ -117,15 +132,19 @@ const TYPE_FILTERS = ['all', 'uploaded', 'links', 'notes'];
 const STATE_FILTERS = ['all', 'needs_review', 'searchable', 'enriched', 'failed'];
 const SORT_OPTIONS = ['newest', 'oldest'];
 const LIBRARY_LAYOUT_STORAGE_KEY = 'iscraper.libraryLayout.v1';
-const LIBRARY_LAYOUT_OPTIONS = ['grid-2', 'grid-3', 'list'];
+const LIBRARY_LAYOUT_OPTIONS = ['grid-2', 'grid-3', 'gallery', 'list'];
 const LIBRARY_LAYOUT_ITEMS = [
   { value: 'grid-2', label: '2 columns', shortLabel: '2', icon: Columns2 },
   { value: 'grid-3', label: '3 columns', shortLabel: '3', icon: Columns3 },
+  { value: 'gallery', label: 'Gallery', shortLabel: 'Gallery', icon: Images },
   { value: 'list', label: 'List', shortLabel: 'List', icon: List },
 ];
 const NOTE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const VISUAL_SEARCH_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const MAX_NOTE_IMAGES = 5;
 const MAX_NOTE_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_VISUAL_SEARCH_SOURCE_BYTES = 8 * 1024 * 1024;
+const MAX_VISUAL_SEARCH_DATA_URL_BYTES = 700 * 1024;
 const FEEDBACK_FEATURE_OPTIONS = ['Search', 'Dashboard', 'Collections', 'AI summaries', 'Exporting', 'Mobile experience', 'Privacy', 'Other'];
 const HERO_PLATFORMS = [
   { name: 'Instagram', src: '/platforms/instagram.svg', bg: 'transparent', scale: 1.08 },
@@ -141,9 +160,10 @@ const HERO_PLATFORMS = [
 const HERO_OUTCOME_WORDS = ['usable', 'searchable', 'exportable', 'organized', 'summarized', 'findable'];
 const IMPORT_STORAGE_BUCKET = import.meta.env.VITE_SUPABASE_IMPORT_BUCKET || 'instagram-assets';
 const VERCEL_SAFE_UPLOAD_BYTES = 4 * 1024 * 1024;
-const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv']);
+const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv', '.js', '.txt']);
 const INSTAGRAM_SAVED_EXPORT_RE = /(^|\/)your_instagram_activity\/saved\/saved_(posts|collections)\.(html|htm|json)$/i;
 const INSTAGRAM_SAVED_FILE_RE = /^saved_(posts|collections)\.(html|htm|json)$/i;
+const X_BOOKMARK_FILE_RE = /(^|\/)(data\/)?(bookmarks?|x[-_ ]?bookmarks?|twitter[-_ ]?bookmarks?|pauch[-_ ]?.*)\.(json|js|csv|txt)$/i;
 
 function fileImportName(file) {
   return String(file?.webkitRelativePath || file?.name || '').replace(/\\/g, '/');
@@ -160,26 +180,35 @@ function isInstagramSavedFile(file) {
   return INSTAGRAM_SAVED_EXPORT_RE.test(name) || INSTAGRAM_SAVED_FILE_RE.test(baseName) || fileExtension(name) === '.zip';
 }
 
+function isXBookmarkFile(file) {
+  const name = fileImportName(file);
+  const baseName = name.split('/').pop() || name;
+  return X_BOOKMARK_FILE_RE.test(name) || X_BOOKMARK_FILE_RE.test(baseName) || fileExtension(name) === '.zip';
+}
+
 function importCandidateFiles(files = [], sourceType = 'auto') {
   const candidates = files.filter((file) => EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(fileImportName(file) || file.name)));
   if (sourceType === 'instagram') return candidates.filter(isInstagramSavedFile);
   if (sourceType === 'pinterest') return candidates;
+  if (sourceType === 'x') return candidates;
 
   const zipFiles = candidates.filter((file) => fileExtension(fileImportName(file) || file.name) === '.zip');
   if (zipFiles.length) return zipFiles;
 
   const instagramSavedFiles = candidates.filter(isInstagramSavedFile);
-  return instagramSavedFiles.length ? instagramSavedFiles : candidates;
+  if (instagramSavedFiles.length) return instagramSavedFiles;
+  const xBookmarkFiles = candidates.filter(isXBookmarkFile);
+  return xBookmarkFiles.length ? xBookmarkFiles : candidates;
 }
 
 function validateExportFiles(files = [], sourceType = 'auto') {
-  if (!files.length) throw new Error('Upload an Instagram ZIP/HTML/JSON file or your Pinterest export ZIP/JSON/CSV.');
+  if (!files.length) throw new Error('Upload Instagram, Pinterest, or X bookmark export files.');
   for (const file of files) {
     if (!EXPORT_UPLOAD_EXTENSIONS.has(fileExtension(fileImportName(file) || file.name))) {
-      throw new Error('Upload Instagram HTML files or Pinterest ZIP/JSON/CSV exports. The selected file is missing a supported extension.');
+      throw new Error('Upload ZIP, HTML, JSON, CSV, JS, or TXT export files.');
     }
     if (!file.size) {
-      throw new Error('The selected export file is empty. Re-export from Instagram or Pinterest, then upload the .html, .zip, .json, or .csv file.');
+      throw new Error('The selected export file is empty. Re-export from Instagram, Pinterest, or X, then upload the file again.');
     }
   }
   if (sourceType === 'instagram' && !files.some(isInstagramSavedFile)) {
@@ -462,6 +491,7 @@ function mapItem(item) {
     sourceDescription: item.sourceDescription || '',
     thumbnailUrl: item.thumbnailUrl || firstImageAsset?.url || '',
     assets: item.assets || [],
+    archive: normalizeArchive(item.archive),
     note: item.note || null,
     saved: item.savedAt || '',
     status: normalizeStatus(item.status || 'queued'),
@@ -477,6 +507,23 @@ function mapItem(item) {
   };
   mapped.card = cardViewForItem(mapped);
   return mapped;
+}
+
+function normalizeArchive(archive) {
+  if (!archive) return null;
+  return {
+    ...archive,
+    status: archive.status || 'failed',
+    title: archive.title || '',
+    siteName: archive.siteName || '',
+    excerpt: archive.excerpt || '',
+    contentText: archive.contentText || '',
+    errorCode: archive.errorCode || '',
+    errorMessage: archive.errorMessage || '',
+    capturedAt: archive.capturedAt || null,
+    textLength: Number(archive.textLength || 0),
+    byteSize: Number(archive.byteSize || 0),
+  };
 }
 
 function unique(values) {
@@ -527,6 +574,64 @@ function noteImageError(file, existingCount = 0) {
   if (file.size > MAX_NOTE_IMAGE_BYTES) return 'Note images must be 5 MB or smaller.';
   if (existingCount >= MAX_NOTE_IMAGES) return `Notes support up to ${MAX_NOTE_IMAGES} images.`;
   return '';
+}
+
+function visualSearchImageError(file) {
+  if (!VISUAL_SEARCH_IMAGE_TYPES.has(file.type)) return 'Same Vibe Search supports PNG, JPEG, or WebP images.';
+  if (file.size > MAX_VISUAL_SEARCH_SOURCE_BYTES) return 'Use an image smaller than 8 MB for Same Vibe Search.';
+  return '';
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read that image.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not open that image.'));
+    };
+    image.src = url;
+  });
+}
+
+async function imageFileToVisualSearchDataUrl(file) {
+  if (file.size <= MAX_VISUAL_SEARCH_DATA_URL_BYTES * 0.72) {
+    return readFileAsDataUrl(file);
+  }
+
+  const image = await loadImageFromFile(file);
+  const maxSide = 1000;
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+  const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+  const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not prepare that image for search.');
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+
+  for (const quality of [0.82, 0.72, 0.62, 0.52]) {
+    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+    if (dataUrl.length < MAX_VISUAL_SEARCH_DATA_URL_BYTES) return dataUrl;
+  }
+
+  throw new Error('That image is still too large after resizing. Try a smaller screenshot or crop.');
 }
 
 function cardViewForItem(item) {
@@ -582,6 +687,7 @@ function filterLabel(value) {
     title: 'Title',
     'grid-2': '2 columns',
     'grid-3': '3 columns',
+    gallery: 'Gallery',
     list: 'List',
   };
   return labels[value] || String(value || '').replace(/_/g, ' ');
@@ -872,14 +978,16 @@ function canonicalizeLegacyHashRoute() {
 
 function pendingSaveFromLocation() {
   const params = appParamsFromLocation();
-  const url = params.get('url') || params.get('saveUrl');
+  const sharedText = params.get('text') || '';
+  const url = params.get('url') || params.get('saveUrl') || firstUrlInText(sharedText);
   if (!url) return null;
+  const note = params.get('note') || sharedText.replace(url, '').trim();
   return {
     url,
     title: params.get('title') || '',
     description: params.get('description') || '',
     platform: params.get('platform') || '',
-    note: params.get('note') || '',
+    note,
     author: params.get('author') || '',
     thumbnailUrl: params.get('thumbnailUrl') || '',
     source: params.get('source') || '',
@@ -888,13 +996,18 @@ function pendingSaveFromLocation() {
   };
 }
 
+function firstUrlInText(value = '') {
+  const match = String(value || '').match(/https?:\/\/[^\s<>"')\]]+/i);
+  return match ? match[0].replace(/[.,!?;:]+$/, '') : '';
+}
+
 function itemIdFromLocation() {
   return appParamsFromLocation().get('item') || '';
 }
 
 function dashboardTabFromLocation() {
   const tab = appParamsFromLocation().get('tab');
-  return ['library', 'graph', 'upload', 'settings'].includes(tab) ? tab : 'library';
+  return ['library', 'gallery', 'smart', 'care', 'graph', 'upload', 'settings'].includes(tab) ? tab : 'library';
 }
 
 function cleanAuthCallbackUrl() {
@@ -3052,13 +3165,22 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [libraryNextCursor, setLibraryNextCursor] = useState(null);
   const [libraryFacets, setLibraryFacets] = useState({ collections: ['all'], platforms: ['all'] });
   const [libraryLoading, setLibraryLoading] = useState(false);
+  const [smartCollections, setSmartCollections] = useState([]);
+  const [smartCollectionsLoading, setSmartCollectionsLoading] = useState(false);
+  const [selectedSmartCollection, setSelectedSmartCollection] = useState(null);
+  const [smartCollectionItems, setSmartCollectionItems] = useState([]);
+  const [smartCollectionItemsLoading, setSmartCollectionItemsLoading] = useState(false);
+  const [libraryCare, setLibraryCare] = useState(null);
+  const [libraryCareLoading, setLibraryCareLoading] = useState(false);
   const [indexingSummary, setIndexingSummary] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
   const [searchMeta, setSearchMeta] = useState({ eventId: '', ai: null, feedback: {} });
+  const [visualSearch, setVisualSearch] = useState(null);
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
   const [importSourceType, setImportSourceType] = useState('auto');
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
+  const [uploadInitialMode, setUploadInitialMode] = useState('upload');
   const [noteForm, setNoteForm] = useState({ title: '', body: '', links: '', images: [] });
   const [credentials, setCredentials] = useState([]);
   const [agentTokens, setAgentTokens] = useState([]);
@@ -3170,6 +3292,70 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   }, [collectionFilter, platformFilter, sortOrder, stateFilter, typeFilter]);
 
+  const mapSmartCollection = useCallback((collection) => ({
+    ...collection,
+    previewItems: (collection.previewItems || []).map(mapItem),
+  }), []);
+
+  const loadSmartCollections = useCallback(async () => {
+    setSmartCollectionsLoading(true);
+    try {
+      const body = await getSmartCollections();
+      const nextCollections = (body.collections || []).map(mapSmartCollection);
+      setSmartCollections(nextCollections);
+      setSelectedSmartCollection((current) => {
+        if (!current) return nextCollections[0] || null;
+        return nextCollections.find((collection) => collection.id === current.id) || nextCollections[0] || null;
+      });
+      return nextCollections;
+    } catch (err) {
+      setError(err.message);
+      return [];
+    } finally {
+      setSmartCollectionsLoading(false);
+    }
+  }, [mapSmartCollection]);
+
+  const loadSmartCollectionItems = useCallback(async (collectionId) => {
+    if (!collectionId) {
+      setSmartCollectionItems([]);
+      return;
+    }
+    setSmartCollectionItemsLoading(true);
+    try {
+      const body = await getSmartCollectionItems(collectionId, { limit: 60 });
+      setSmartCollectionItems((body.items || []).map(mapItem));
+      if (body.collection) setSelectedSmartCollection(mapSmartCollection(body.collection));
+    } catch (err) {
+      setError(err.message);
+      setSmartCollectionItems([]);
+    } finally {
+      setSmartCollectionItemsLoading(false);
+    }
+  }, [mapSmartCollection]);
+
+  const loadLibraryCare = useCallback(async () => {
+    setLibraryCareLoading(true);
+    try {
+      const body = await getLibraryCare();
+      setLibraryCare(body);
+      return body;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      setLibraryCareLoading(false);
+    }
+  }, []);
+
+  const clearSearchState = useCallback(() => {
+    activeSearchRef.current += 1;
+    setSearchResults(null);
+    setSearchMeta({ eventId: '', ai: null, feedback: {} });
+    setVisualSearch(null);
+    setQuery('');
+  }, []);
+
   const loadControls = useCallback(async () => {
     const [credentialBody, agentBody] = await Promise.all([
       getProviderCredentials(),
@@ -3198,6 +3384,81 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       return null;
     }
   }, [mergeUpdatedItem]);
+
+  const handleArchiveRetry = useCallback(async (item) => {
+    if (!item || !requireSignIn('save a readable copy')) return null;
+    if (!requireProfile('save a readable copy')) return null;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await archiveItem(item.id);
+      const nextItem = body.item ? mergeUpdatedItem(body.item) : null;
+      setNotice(body.archive?.status === 'ready' ? 'Readable copy saved.' : 'Could not save a readable copy for this site.');
+      return nextItem;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }, [mergeUpdatedItem, requireProfile, requireSignIn]);
+
+  const handleCheckLibraryLinks = useCallback(async () => {
+    if (!requireSignIn('check your library')) return;
+    if (!requireProfile('check your library')) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await checkLibraryLinks(20);
+      setLibraryCare(body);
+      const checked = body.checked?.length || 0;
+      setNotice(checked ? `Checked ${checked} saved links.` : 'Your recent link checks are up to date.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [requireProfile, requireSignIn]);
+
+  const handleCreateReminder = useCallback(async (item, preset = 'week') => {
+    if (!item || !requireSignIn('set reminders')) return null;
+    if (!requireProfile('set reminders')) return null;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await createItemReminder(item.id, { preset });
+      setNotice(preset === 'tomorrow' ? 'Reminder set for tomorrow.' : preset === 'month' ? 'Reminder set for next month.' : 'Reminder set for next week.');
+      await loadLibraryCare();
+      return body.reminder;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }, [loadLibraryCare, requireProfile, requireSignIn]);
+
+  const handleUpdateReminder = useCallback(async (reminderId, status = 'done') => {
+    if (!requireSignIn('update reminders')) return null;
+    if (!requireProfile('update reminders')) return null;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await updateItemReminder(reminderId, { status });
+      await loadLibraryCare();
+      setNotice(status === 'dismissed' ? 'Reminder hidden.' : 'Reminder completed.');
+      return body.reminder;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }, [loadLibraryCare, requireProfile, requireSignIn]);
 
   const applyProfileState = (nextProfile, required) => {
     setProfile(nextProfile || null);
@@ -3245,7 +3506,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setLibraryItems([]);
           setLibraryTotalCount(0);
           setLibraryNextCursor(null);
+          setSmartCollections([]);
+          setSelectedSmartCollection(null);
+          setSmartCollectionItems([]);
+          setLibraryCare(null);
           setSearchResults(null);
+          setVisualSearch(null);
           setCredentials([]);
           setAgentTokens([]);
           setCreatedAgentAccess(null);
@@ -3264,7 +3530,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setLibraryItems([]);
         setLibraryTotalCount(0);
         setLibraryNextCursor(null);
+        setSmartCollections([]);
+        setSelectedSmartCollection(null);
+        setSmartCollectionItems([]);
+        setLibraryCare(null);
         setSearchResults(null);
+        setVisualSearch(null);
         setCredentials([]);
         setAgentTokens([]);
         setCreatedAgentAccess(null);
@@ -3302,6 +3573,21 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (!canUsePrivateActions || searchResults !== null) return;
     loadLibraryPage({ reset: true });
   }, [canUsePrivateActions, loadLibraryPage, searchResults]);
+
+  useEffect(() => {
+    if (!canUsePrivateActions || tab !== 'smart') return;
+    loadSmartCollections();
+  }, [canUsePrivateActions, loadSmartCollections, tab]);
+
+  useEffect(() => {
+    if (!canUsePrivateActions || tab !== 'smart') return;
+    loadSmartCollectionItems(selectedSmartCollection?.id);
+  }, [canUsePrivateActions, loadSmartCollectionItems, selectedSmartCollection?.id, tab]);
+
+  useEffect(() => {
+    if (!canUsePrivateActions || tab !== 'care') return;
+    loadLibraryCare();
+  }, [canUsePrivateActions, loadLibraryCare, tab]);
 
   useEffect(() => {
     if (!canUsePrivateActions || pendingExtensionConnectHandledRef.current) return;
@@ -3440,8 +3726,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       if (!searchText) {
         setSearchResults(null);
         setSearchMeta({ eventId: '', ai: null, feedback: {} });
+        setVisualSearch(null);
         await loadItems();
       } else {
+        setVisualSearch(null);
         const body = await searchItems(searchText, {}, { includeAi: true });
         const mappedResults = (body.results || []).map(mapItem);
         setSearchResults(mappedResults);
@@ -3505,10 +3793,17 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const result = await saveLink({ ...payload, review: options.review === true, startProcessing: false });
       const duplicate = result.skippedDuplicateCount > 0;
       const queued = result.item?.status === 'queued' || result.queuedJobCount > 0;
-      setNotice(duplicate ? 'That link was already in your library.' : queued ? 'Link saved to your Library and queued for indexing.' : 'Link saved to your Library.');
+      const backingUp = result.item?.archive?.status === 'pending';
+      setNotice(duplicate
+        ? 'That link was already in your library.'
+        : backingUp
+          ? 'Link saved to your Library. Readable copy is saving in the background.'
+          : queued
+            ? 'Link saved to your Library and queued for indexing.'
+            : 'Link saved to your Library.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
-      await Promise.all([loadItems(), loadLibraryPage({ reset: true })]);
+      await Promise.all([loadItems(), loadLibraryPage({ reset: true }), loadSmartCollections()]);
       options.onSuccess?.();
       return true;
     } catch (err) {
@@ -3517,7 +3812,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     } finally {
       setBusy(false);
     }
-  }, [linkForm, loadItems, loadLibraryPage, requireProfile, requireSignIn]);
+  }, [linkForm, loadItems, loadLibraryPage, loadSmartCollections, requireProfile, requireSignIn]);
 
   const handleCreateNote = useCallback(async (event, options = {}) => {
     event.preventDefault();
@@ -3543,6 +3838,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       replaceAppTabUrl('library');
       setTypeFilter('notes');
       setNotice('Note saved to Library.');
+      await loadSmartCollections();
       options.onSuccess?.();
       return true;
     } catch (err) {
@@ -3551,7 +3847,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     } finally {
       setBusy(false);
     }
-  }, [noteForm, requireProfile, requireSignIn]);
+  }, [loadSmartCollections, noteForm, requireProfile, requireSignIn]);
 
   useEffect(() => {
     if (pendingSaveHandledRef.current || loading || (authEnabled && (!session || profileRequired))) return;
@@ -3563,6 +3859,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       pendingSaveHandledRef.current = true;
       timer = window.setTimeout(() => {
         setTab('upload');
+        setUploadInitialMode('link');
         replaceAppTabUrl('upload');
         resetPageScroll();
         setLinkForm({
@@ -3603,7 +3900,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (!requireSignIn('import saves')) return false;
     if (!requireProfile('import saves')) return false;
     if (!files.length) {
-      setError('Upload an Instagram ZIP/HTML/JSON file or your Pinterest export ZIP/JSON/CSV.');
+      setError('Upload Instagram, Pinterest, or X bookmark export files.');
       return false;
     }
     setBusy(true);
@@ -3628,7 +3925,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         const skippedCount = result.skippedDuplicateCount ?? 0;
         setNotice(`Added ${newCount} new saves. ${skippedCount} already existed.`);
       }
-      await Promise.all([loadItems(), loadLibraryPage({ reset: true })]);
+      await Promise.all([loadItems(), loadLibraryPage({ reset: true }), loadSmartCollections()]);
       return true;
     } catch (err) {
       setError(err.message);
@@ -3671,6 +3968,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
       setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
       setNotice('Added to Library.');
+      await loadSmartCollections();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -3775,8 +4073,72 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   };
 
+  const handleSmartRefresh = useCallback(async () => {
+    if (!requireSignIn('refresh Smart Collections')) return;
+    if (!requireProfile('refresh Smart Collections')) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const body = await refreshSmartCollections();
+      const nextCollections = (body.collections || []).map(mapSmartCollection);
+      setSmartCollections(nextCollections);
+      setSelectedSmartCollection((current) => (
+        current ? nextCollections.find((collection) => collection.id === current.id) || nextCollections[0] || null : nextCollections[0] || null
+      ));
+      setNotice('Smart Collections refreshed.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [mapSmartCollection, requireProfile, requireSignIn]);
+
+  const handleSmartUpdate = useCallback(async (id, patch) => {
+    if (!requireSignIn('edit Smart Collections')) return;
+    if (!requireProfile('edit Smart Collections')) return;
+    setBusy(true);
+    setError('');
+    try {
+      const body = await updateSmartCollection(id, patch);
+      const nextCollection = mapSmartCollection(body.collection);
+      setSmartCollections((current) => {
+        const next = current
+          .map((collection) => (collection.id === id ? nextCollection : collection))
+          .filter((collection) => !collection.hidden);
+        return next.length ? next : current.filter((collection) => collection.id !== id);
+      });
+      setSelectedSmartCollection((current) => (current?.id === id ? (nextCollection.hidden ? null : nextCollection) : current));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [mapSmartCollection, requireProfile, requireSignIn]);
+
+  const handleSmartRemoveItem = useCallback(async (collectionId, itemId) => {
+    if (!requireSignIn('edit Smart Collections')) return;
+    if (!requireProfile('edit Smart Collections')) return;
+    setBusy(true);
+    setError('');
+    try {
+      const body = await setSmartCollectionItemOverride(collectionId, itemId, 'exclude');
+      const nextCollection = mapSmartCollection(body.collection);
+      setSmartCollections((current) => current.map((collection) => (collection.id === collectionId ? nextCollection : collection)));
+      setSelectedSmartCollection((current) => (current?.id === collectionId ? nextCollection : current));
+      await loadSmartCollectionItems(collectionId);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [loadSmartCollectionItems, mapSmartCollection, requireProfile, requireSignIn]);
+
   const navItems = [
     ['library', 'Saved library', Brain],
+    ['gallery', 'Gallery', Images],
+    ['smart', 'Smart Collections', Folder],
+    ['care', 'Library checkup', ShieldCheck],
     ['upload', 'Add saves', Upload],
   ];
   const advancedNavItems = [
@@ -3789,11 +4151,48 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const advancedExpanded = sidebarVisibleExpanded && (advancedOpen || advancedActive);
 
   const selectTab = useCallback((nextTab) => {
-    if (!['library', 'graph', 'upload', 'settings'].includes(nextTab)) return;
+    if (!['library', 'gallery', 'smart', 'care', 'graph', 'upload', 'settings'].includes(nextTab)) return;
+    if (nextTab === 'upload') setUploadInitialMode('upload');
     setTab(nextTab);
     replaceAppTabUrl(nextTab);
     resetPageScroll();
   }, []);
+
+  const handleVisualSearch = useCallback(async (file) => {
+    if (!requireSignIn('search by image')) return;
+    if (!requireProfile('search by image')) return;
+    const validationMessage = visualSearchImageError(file);
+    if (validationMessage) {
+      setError(validationMessage);
+      return;
+    }
+    const searchRun = activeSearchRef.current + 1;
+    activeSearchRef.current = searchRun;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const imageDataUrl = await imageFileToVisualSearchDataUrl(file);
+      const body = await searchVisuals(imageDataUrl, { limit: 24 });
+      if (activeSearchRef.current !== searchRun) return;
+      const mappedResults = (body.results || []).map(mapItem);
+      setQuery('');
+      setSearchResults(mappedResults);
+      setSearchMeta({ eventId: body.searchEventId || '', ai: null, feedback: {} });
+      setVisualSearch({
+        imageDataUrl,
+        fileName: file.name || 'Uploaded image',
+        analysis: body.visualSearch || null,
+        resultCount: mappedResults.length,
+      });
+      selectTab('library');
+      setNotice(mappedResults.length ? `Found ${mappedResults.length} saved visuals with a similar vibe.` : 'No similar saved visuals found yet.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [requireProfile, requireSignIn, selectTab]);
 
   const tryActivationSearch = useCallback((searchText) => {
     const nextQuery = String(searchText || '').trim();
@@ -4089,13 +4488,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     searchResultCount={boardItems.length}
                     query={query}
                     setQuery={setQuery}
-                    onClearSearch={() => {
-                      activeSearchRef.current += 1;
-                      setSearchResults(null);
-                      setSearchMeta({ eventId: '', ai: null, feedback: {} });
-                      setQuery('');
-                    }}
+                    onClearSearch={clearSearchState}
                     onSearch={handleSearch}
+                    onVisualSearch={handleVisualSearch}
+                    visualSearch={visualSearch}
                     busy={busy}
                     typeFilter={typeFilter}
                     setTypeFilter={setTypeFilter}
@@ -4124,6 +4520,117 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     onLoadMore={() => {
                       if (!libraryLoading && libraryNextCursor) loadLibraryPage({ cursor: libraryNextCursor });
                     }}
+                  />
+                )}
+                {authEnabled && !session && tab === 'gallery' && (
+                  <AuthRequiredPanel
+                    title="Sign in to view Gallery."
+                    copy="Gallery is a private visual view of your saved library."
+                    busy={busy}
+                    onSignIn={onOpenLogin}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'gallery' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'gallery' && (
+                  <GalleryTab
+                    items={filtered}
+                    totalCount={searchActive ? items.length : libraryTotalCount}
+                    searchActive={searchActive}
+                    searchResultCount={boardItems.length}
+                    query={query}
+                    visualSearch={visualSearch}
+                    onClearSearch={clearSearchState}
+                    typeFilter={typeFilter}
+                    setTypeFilter={setTypeFilter}
+                    stateFilter={stateFilter}
+                    setStateFilter={setStateFilter}
+                    sortOrder={sortOrder}
+                    setSortOrder={setSortOrder}
+                    collectionFilter={collectionFilter}
+                    setCollectionFilter={setCollectionFilter}
+                    collections={collections}
+                    platformFilter={platformFilter}
+                    setPlatformFilter={setPlatformFilter}
+                    platforms={platforms}
+                    onSelect={openDetail}
+                    indexingActivity={indexingActivity}
+                    activationState={activationState}
+                    onOpenAdd={() => selectTab('upload')}
+                    onOpenLibrarySearch={() => selectTab('library')}
+                    scrollRef={dashPanelRef}
+                    hasMore={!searchActive && Boolean(libraryNextCursor)}
+                    loadingMore={libraryLoading}
+                    onLoadMore={() => {
+                      if (!libraryLoading && libraryNextCursor) loadLibraryPage({ cursor: libraryNextCursor });
+                    }}
+                  />
+                )}
+                {authEnabled && !session && tab === 'smart' && (
+                  <AuthRequiredPanel
+                    title="Sign in to view Smart Collections."
+                    copy="Smart Collections are built from your private saved library."
+                    busy={busy}
+                    onSignIn={onOpenLogin}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'smart' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'smart' && (
+                  <SmartCollectionsView
+                    collections={smartCollections}
+                    selectedCollection={selectedSmartCollection}
+                    items={smartCollectionItems}
+                    loading={smartCollectionsLoading}
+                    itemsLoading={smartCollectionItemsLoading}
+                    busy={busy}
+                    onRefresh={handleSmartRefresh}
+                    onSelectCollection={setSelectedSmartCollection}
+                    onUpdateCollection={handleSmartUpdate}
+                    onRemoveItem={handleSmartRemoveItem}
+                    onOpenItem={openDetail}
+                  />
+                )}
+                {authEnabled && !session && tab === 'care' && (
+                  <AuthRequiredPanel
+                    title="Sign in to check your library."
+                    copy="Library checkup works on your private saved links and reminders."
+                    busy={busy}
+                    onSignIn={onOpenLogin}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'care' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'care' && (
+                  <LibraryCheckupTab
+                    care={libraryCare}
+                    loading={libraryCareLoading}
+                    busy={busy}
+                    onCheckLinks={handleCheckLibraryLinks}
+                    onOpenItem={openDetail}
+                    onRemind={handleCreateReminder}
+                    onUpdateReminder={handleUpdateReminder}
                   />
                 )}
                 {authEnabled && !session && tab === 'graph' && (
@@ -4175,10 +4682,12 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 )}
                 {canUsePrivateActions && tab === 'upload' && (
                   <UploadTab
+                    key={uploadInitialMode}
                     files={files}
                     setFiles={setFiles}
                     importSourceType={importSourceType}
                     setImportSourceType={setImportSourceType}
+                    initialAddMode={uploadInitialMode}
                     linkForm={linkForm}
                     setLinkForm={setLinkForm}
                     noteForm={noteForm}
@@ -4240,6 +4749,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     busy={busy}
                     authEnabled={authEnabled}
                     onOpenHowTo={onOpenHowTo}
+                    onNotice={setNotice}
+                    onError={setError}
                   />
                 )}
               </>
@@ -4271,7 +4782,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           onError={setError}
         />
       )}
-      {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} busy={busy} />}
+      {selected && <DetailDrawer item={selected} onClose={() => setSelected(null)} onApprove={handleApproveReview} onArchiveRetry={handleArchiveRetry} onRemind={handleCreateReminder} busy={busy} />}
       {accountSettingsOpen && (
         <AccountSettingsModal
           open
@@ -5096,7 +5607,7 @@ function QuickAddModal({
       setMode('upload');
     }
     if (unsupported.length && !images.length && !exports.length) {
-      onError('Upload images, links, or Instagram/Pinterest download files.');
+      onError('Upload images, links, or Instagram/Pinterest/X download files.');
     }
   }, [addImagesToNote, onError, setFiles, setImportSourceType]);
 
@@ -5104,7 +5615,7 @@ function QuickAddModal({
   const choices = [
     { mode: 'link', title: 'Paste a link', copy: 'Save one post, product, article, or idea.', icon: ExternalLink },
     { mode: 'note', title: 'Write a note', copy: 'Capture a thought, image, reminder, or useful context.', icon: FileText },
-    { mode: 'upload', title: 'Upload files', copy: 'Add Instagram or Pinterest exports from your device.', icon: Upload },
+    { mode: 'upload', title: 'Upload files', copy: 'Add Instagram, Pinterest, or X bookmark exports from your device.', icon: Upload },
   ];
 
   return (
@@ -5289,7 +5800,7 @@ function QuickAddModal({
               <div>
                 <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Upload files</div>
                 <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose export files</h3>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">Use this for Instagram or Pinterest downloads. For folders, open the full Add Saves page.</p>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">Use this for Instagram, Pinterest, or X bookmark downloads. For folders, open the full Add Saves page.</p>
               </div>
               <button
                 type="button"
@@ -5369,7 +5880,7 @@ function QuickAddModal({
             <Upload className="mx-auto mb-3 h-8 w-8 text-primary" />
             <h3 className="font-display text-xl font-bold">Drop images, ZIPs, folders, or files here</h3>
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Images become note attachments. Instagram or Pinterest files are detected automatically.
+              Images become note attachments. Instagram, Pinterest, and X bookmark files are detected automatically.
             </p>
             <div className="mt-5 flex flex-wrap justify-center gap-3">
               <button
@@ -5525,8 +6036,8 @@ function QuickAddModal({
 
               <section className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
                 <div>
-                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Instagram or Pinterest</div>
-                  <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Upload a ZIP or folder</h3>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Instagram, Pinterest, or X</div>
+                  <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Upload a ZIP, folder, or bookmark file</h3>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">Auto-detect is on, so you can upload the file you downloaded.</p>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-black p-4">
@@ -5568,6 +6079,203 @@ function QuickAddModal({
   );
 }
 
+function LibraryCheckupTab({ care, loading, busy, onCheckLinks, onOpenItem, onRemind, onUpdateReminder }) {
+  const cleanup = care?.cleanup || { duplicateGroups: [], brokenLinks: [], duplicateGroupCount: 0, brokenLinkCount: 0, checkedLinkCount: 0 };
+  const resurface = care?.resurface || { dueReminders: [], oldItems: [], weeklyItems: [], randomItem: null };
+  const oldSaves = resurface.oldItems || [];
+  const weeklyItems = resurface.weeklyItems || [];
+  const duplicateGroups = cleanup.duplicateGroups || [];
+  const brokenLinks = cleanup.brokenLinks || [];
+  const hasCleanResults = duplicateGroups.length > 0 || brokenLinks.length > 0;
+  return (
+    <div className="mx-auto max-w-[1320px] px-4 pb-28 pt-8 sm:px-6 md:px-10 md:py-12">
+      <div className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+        <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="p-6 md:p-8">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Library checkup
+            </div>
+            <h1 className="font-display text-4xl font-bold tracking-tight md:text-5xl">Clean up and rediscover</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+              Find possible duplicates, links that may not open, and older saves worth revisiting. Nothing changes unless you choose what to do.
+            </p>
+          </div>
+          <div className="border-t border-white/10 bg-black/30 p-6 md:p-8 lg:border-l lg:border-t-0">
+            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              <CheckupMetric icon={Copy} label="Possible duplicates" value={cleanup.duplicateGroupCount || 0} />
+              <CheckupMetric icon={ExternalLink} label="Links that may not open" value={cleanup.brokenLinkCount || 0} />
+              <CheckupMetric icon={Clock} label="Reminders ready" value={resurface.dueReminders?.length || 0} />
+            </div>
+            <button
+              type="button"
+              onClick={onCheckLinks}
+              disabled={busy || loading}
+              className="mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+            >
+              {busy || loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+              Check my library
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1fr_0.95fr]">
+        <section className="space-y-5">
+          <SectionHeader icon={ShieldCheck} title="Clean up your saved links" copy="Review possible duplicates and original links that may not open." />
+          {!hasCleanResults && (
+            <EmptyCheckup icon={CheckCircle2} title="Your library looks clean for now." copy="Run a check whenever you want to look for possible duplicates or links that may not open." />
+          )}
+          {duplicateGroups.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-foreground">Possible duplicates</h3>
+              {duplicateGroups.slice(0, 8).map((group) => (
+                <div key={group.id} className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-foreground">{group.title}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{group.duplicateCount + 1} saves from {group.host}</div>
+                    </div>
+                    <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-xs text-amber-200">Review first</span>
+                  </div>
+                  <div className="mt-4 grid gap-2">
+                    {group.items.map((item) => (
+                      <CareItemRow key={item.id} item={item} reason={item.id === group.keepItemId ? 'Oldest saved copy' : 'Possible extra copy'} onOpen={onOpenItem} onRemind={onRemind} busy={busy} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {brokenLinks.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-foreground">Links that may not open</h3>
+              {brokenLinks.slice(0, 10).map((entry) => (
+                <CareItemRow
+                  key={entry.itemId}
+                  item={entry.item}
+                  reason={entry.httpStatus ? `Original returned ${entry.httpStatus}` : 'The original page may be unavailable'}
+                  onOpen={onOpenItem}
+                  onRemind={onRemind}
+                  busy={busy}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-5">
+          <SectionHeader icon={Clock} title="Rediscover old saves" copy="Bring back useful things you saved but have not opened lately." />
+          {resurface.dueReminders?.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-foreground">Reminders ready</h3>
+              {resurface.dueReminders.map((entry) => (
+                <CareItemRow
+                  key={entry.id}
+                  item={entry.item}
+                  reason={`Reminder for ${formatUsageDate(entry.remindAt)}`}
+                  onOpen={onOpenItem}
+                  onRemind={onRemind}
+                  busy={busy}
+                  extraAction={(
+                    <button type="button" onClick={() => onUpdateReminder(entry.id, 'done')} disabled={busy} className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-foreground hover:border-primary disabled:opacity-60">
+                      Done
+                    </button>
+                  )}
+                />
+              ))}
+            </div>
+          )}
+          {resurface.randomItem && (
+            <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-primary">
+                <Zap className="h-4 w-4" /> Surprise me with an old save
+              </div>
+              <CareItemRow item={resurface.randomItem} reason="Picked for today" onOpen={onOpenItem} onRemind={onRemind} busy={busy} />
+            </div>
+          )}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-foreground">Saved 3+ months ago</h3>
+            {oldSaves.length ? oldSaves.map((item) => (
+              <CareItemRow key={item.id} item={item} reason="Saved 3+ months ago" onOpen={onOpenItem} onRemind={onRemind} busy={busy} />
+            )) : <EmptyCheckup icon={Clock} title="No older saves yet." copy="This section fills in as your library grows." />}
+          </div>
+          {weeklyItems.length > 0 && (
+            <details className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground">
+                <span>Show me a few old saves each week</span>
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              </summary>
+              <div className="mt-4 grid gap-2">
+                {weeklyItems.map((item) => (
+                  <CareItemRow key={item.id} item={item} reason="This week's rediscovery" onOpen={onOpenItem} onRemind={onRemind} busy={busy} />
+                ))}
+              </div>
+            </details>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function CheckupMetric({ icon: Icon, label, value }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/35 p-4">
+      <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+        <Icon className="h-3.5 w-3.5" /> {label}
+      </div>
+      <div className="font-display text-2xl font-bold text-foreground">{formatUsageNumber(value)}</div>
+    </div>
+  );
+}
+
+function SectionHeader({ icon: Icon, title, copy }) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-primary">
+        <Icon className="h-3.5 w-3.5" /> {title}
+      </div>
+      <p className="text-sm leading-6 text-muted-foreground">{copy}</p>
+    </div>
+  );
+}
+
+function EmptyCheckup({ icon: Icon, title, copy }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-white/10 p-6 text-center">
+      <Icon className="mx-auto h-5 w-5 text-primary" />
+      <div className="mt-3 text-sm font-semibold text-foreground">{title}</div>
+      <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">{copy}</p>
+    </div>
+  );
+}
+
+function CareItemRow({ item, reason, onOpen, onRemind, busy, extraAction = null }) {
+  if (!item) return null;
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/35 p-3 sm:flex-row sm:items-center">
+      <button type="button" onClick={() => onOpen?.(item)} className="min-w-0 flex-1 text-left">
+        <div className="truncate text-sm font-semibold text-foreground">{item.title || 'Untitled save'}</div>
+        <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+          <span>{reason}</span>
+          {item.collection ? <span>{item.collection}</span> : null}
+          {item.createdAt ? <span>Saved {formatUsageDate(item.createdAt)}</span> : null}
+        </div>
+      </button>
+      <div className="flex shrink-0 flex-wrap gap-2">
+        {extraAction}
+        <button type="button" onClick={() => onRemind?.(item, 'week')} disabled={busy} className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-foreground hover:border-primary disabled:opacity-60">
+          <Clock className="h-3 w-3" /> Remind me later
+        </button>
+        <button type="button" onClick={() => onOpen?.(item)} className="inline-flex items-center gap-2 rounded-full bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground">
+          Open <ArrowRight className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOpenAccount }) {
   const avatarUrl = avatarUrlForSession(session, profile);
   const initial = initialForSession(session, profile);
@@ -5591,14 +6299,18 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
           </button>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-5 gap-2">
         {[
           ['library', 'Library'],
-          ['upload', 'Add saves'],
+          ['gallery', 'Gallery'],
+          ['smart', 'Smart'],
+          ['care', 'Check'],
+          ['upload', 'Add'],
         ].map(([key, label]) => (
           <button
             key={key}
             onClick={() => setTab(key)}
+            aria-current={tab === key ? 'page' : undefined}
             className={`rounded-lg px-3 py-2 text-xs ${tab === key ? 'bg-primary text-primary-foreground' : 'border border-white/10 text-muted-foreground'}`}
           >
             {label}
@@ -5933,6 +6645,8 @@ function LibraryTab({
   setQuery,
   onClearSearch,
   onSearch,
+  onVisualSearch,
+  visualSearch,
   busy,
   typeFilter,
   setTypeFilter,
@@ -5959,6 +6673,7 @@ function LibraryTab({
   onLoadMore,
 }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const visualSearchInputRef = useRef(null);
   const activeFilters = (typeFilter !== 'all' ? 1 : 0) + (stateFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
   const updateFilter = useCallback((setter) => (value) => {
     setter(value);
@@ -6006,9 +6721,29 @@ function LibraryTab({
                 <Search className="h-4 w-4 text-primary" />
                 Search
               </span>
+              <input
+                ref={visualSearchInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="sr-only"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  if (file) onVisualSearch(file);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => visualSearchInputRef.current?.click()}
+                disabled={busy}
+                className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 px-4 text-sm font-medium text-foreground transition hover:border-primary hover:bg-white/5 disabled:opacity-60"
+              >
+                <Images className="h-4 w-4 text-primary" />
+                Same vibe
+              </button>
               {searchActive && (
                 <span className="hidden text-xs text-muted-foreground sm:inline">
-                  {searchResultCount} matching saves
+                  {visualSearch ? `${searchResultCount} visual matches` : `${searchResultCount} matching saves`}
                 </span>
               )}
             </div>
@@ -6031,6 +6766,27 @@ function LibraryTab({
             </div>
           </div>
         </form>
+        {visualSearch && (
+          <div className="mt-3 flex flex-col gap-3 rounded-2xl border border-primary/25 bg-primary/5 p-4 md:flex-row md:items-center">
+            <img src={visualSearch.imageDataUrl} alt="" className="h-20 w-20 shrink-0 rounded-xl object-cover" />
+            <div className="min-w-0 flex-1">
+              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Same Vibe Search</div>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                Using your uploaded image to find saved visuals with similar visual notes, text, topics, brands, and tags.
+              </p>
+              {visualSearch.analysis?.visualDescription && (
+                <p className="mt-2 line-clamp-2 text-sm text-foreground">{visualSearch.analysis.visualDescription}</p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={onClearSearch}
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-white/10 px-4 text-sm font-semibold text-foreground transition hover:bg-white/5"
+            >
+              <X className="h-4 w-4" /> Clear
+            </button>
+          </div>
+        )}
       </div>
 
       <IndexingProgressCard activity={indexingActivity} />
@@ -6174,6 +6930,16 @@ function LibraryTab({
                   feedback={searchFeedback?.[item.id]}
                   onSearchFeedback={onSearchFeedback}
                 />
+              ) : libraryLayout === 'gallery' ? (
+                <GalleryCard
+                  key={item.id}
+                  item={item}
+                  height={cardHeight}
+                  onClick={onSelect}
+                  searchActive={searchActive}
+                  feedback={searchFeedback?.[item.id]}
+                  onSearchFeedback={onSearchFeedback}
+                />
               ) : (
                 <PinCard
                   key={item.id}
@@ -6186,6 +6952,221 @@ function LibraryTab({
                   onSearchFeedback={onSearchFeedback}
                 />
               )
+            )}
+          />
+        )}
+      </div>
+
+      {hasMore && (
+        <div className="mt-4 flex justify-center">
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="rounded-full border border-white/10 bg-white/[0.04] px-6 py-3 text-sm font-semibold transition hover:border-primary hover:text-primary"
+          >
+            {loadingMore ? 'Loading...' : 'Show more saves'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GalleryTab({
+  items,
+  totalCount,
+  searchActive,
+  searchResultCount,
+  query,
+  visualSearch,
+  onClearSearch,
+  typeFilter,
+  setTypeFilter,
+  stateFilter,
+  setStateFilter,
+  sortOrder,
+  setSortOrder,
+  collectionFilter,
+  setCollectionFilter,
+  collections,
+  platformFilter,
+  setPlatformFilter,
+  platforms,
+  onSelect,
+  indexingActivity,
+  activationState,
+  onOpenAdd,
+  onOpenLibrarySearch,
+  scrollRef,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
+}) {
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeFilters = (typeFilter !== 'all' ? 1 : 0) + (stateFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
+  const visualPreviewCount = items.filter((item) => Boolean(item.thumbnailUrl)).length;
+  const pendingPreviewCount = Math.max(0, items.length - visualPreviewCount);
+  const updateFilter = useCallback((setter) => (value) => {
+    setter(value);
+  }, []);
+  const mobileFilterGroups = useMemo(() => [
+    { label: 'Type', value: typeFilter, options: TYPE_FILTERS, onChange: updateFilter(setTypeFilter) },
+    { label: 'Status', value: stateFilter, options: STATE_FILTERS, onChange: updateFilter(setStateFilter) },
+    { label: 'Platform', value: platformFilter, options: platforms, onChange: updateFilter(setPlatformFilter) },
+    { label: 'Collection', value: collectionFilter, options: collections, onChange: updateFilter(setCollectionFilter) },
+    { label: 'Sort', value: sortOrder, options: SORT_OPTIONS, onChange: updateFilter(setSortOrder) },
+  ], [collectionFilter, collections, platformFilter, platforms, sortOrder, stateFilter, typeFilter, updateFilter, setCollectionFilter, setPlatformFilter, setSortOrder, setStateFilter, setTypeFilter]);
+
+  return (
+    <div className="mx-auto max-w-[1520px] px-4 pb-28 pt-8 sm:px-6 md:px-10 md:py-12">
+      <div className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+        <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="p-6 md:p-8">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+              <Images className="h-3.5 w-3.5" />
+              Private visual view
+            </div>
+            <h1 className="font-display text-4xl font-bold tracking-tight md:text-5xl">Gallery</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+              A visual board for screenshots, products, memes, UI references, and image-heavy saves from the same private library.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2 text-xs">
+              <span className="rounded-full border border-white/10 bg-black px-3 py-2 text-muted-foreground">
+                {items.length} shown from {totalCount || items.length} saves
+              </span>
+              <span className="rounded-full border border-white/10 bg-black px-3 py-2 text-muted-foreground">
+                {visualPreviewCount} with previews
+              </span>
+              {pendingPreviewCount > 0 && (
+                <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-amber-200">
+                  {pendingPreviewCount} preview pending
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="border-t border-white/10 bg-black/30 p-6 md:p-8 lg:border-l lg:border-t-0">
+            <div className="flex h-full flex-col justify-between gap-5">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Creator board</div>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Open a card to inspect the original save, source, notes, collection, status, and full image preview.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenAdd}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+                >
+                  <Plus className="h-4 w-4" /> Add saves
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenLibrarySearch}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold text-foreground transition hover:border-primary"
+                >
+                  <Search className="h-4 w-4" /> Search library
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <IndexingProgressCard activity={indexingActivity} />
+
+      {searchActive && (
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/25 bg-primary/5 p-4 text-sm">
+          <span className="min-w-0 text-muted-foreground">
+            {visualSearch
+              ? `Showing Same Vibe matches for ${visualSearch.fileName}: ${searchResultCount} matches.`
+              : `Showing Library search results${query ? ` for "${query}"` : ''}: ${searchResultCount} matches.`}
+          </span>
+          <button
+            type="button"
+            onClick={onClearSearch}
+            className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-foreground transition hover:bg-white/5"
+          >
+            <X className="h-3.5 w-3.5" /> Clear search
+          </button>
+        </div>
+      )}
+
+      <div className="sticky top-0 z-20 -mx-4 mt-5 border-y border-white/5 bg-black/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:-mx-10 md:px-10">
+        <div className="flex flex-col gap-3 text-xs font-mono text-muted-foreground md:flex-row md:items-center md:justify-between">
+          <span>
+            Visual board | {items.length} shown{activeFilters > 0 ? ` | ${activeFilters} filters active` : ''}
+          </span>
+          <button
+            type="button"
+            onClick={() => setFiltersOpen(true)}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-white/10 px-4 py-2 font-sans text-sm font-semibold text-foreground transition hover:border-primary md:hidden"
+          >
+            <Filter className="h-4 w-4 text-primary" />
+            Filters {activeFilters > 0 ? `(${activeFilters})` : ''}
+          </button>
+          <div className="hidden flex-wrap gap-2 md:flex">
+            <DashboardFilterSelect label="Type" ariaLabel="Filter by content type" icon={Filter} value={typeFilter} options={TYPE_FILTERS} onChange={setTypeFilter} />
+            <DashboardFilterSelect label="Status" ariaLabel="Filter by status" icon={CheckCircle2} value={stateFilter} options={STATE_FILTERS} onChange={setStateFilter} />
+            <DashboardFilterSelect label="Platform" ariaLabel="Filter by platform" value={platformFilter} options={platforms} onChange={setPlatformFilter} />
+            <DashboardFilterSelect label="Collection" ariaLabel="Filter by collection" value={collectionFilter} options={collections} onChange={setCollectionFilter} />
+            <DashboardFilterSelect label="Sort" ariaLabel="Sort gallery" icon={ChevronDown} value={sortOrder} options={SORT_OPTIONS} onChange={setSortOrder} />
+            {activeFilters > 0 && <span className="rounded-full bg-primary px-3 py-2 text-primary-foreground">{activeFilters} active</span>}
+          </div>
+        </div>
+      </div>
+
+      <MobileFiltersSheet open={filtersOpen} onClose={() => setFiltersOpen(false)} groups={mobileFilterGroups} activeFilters={activeFilters} />
+
+      <div className="mt-8">
+        {items.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center md:p-14">
+            <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary">
+              <Images className="h-5 w-5" />
+            </div>
+            <h3 className="mt-4 font-display text-2xl font-bold tracking-tight">
+              {searchActive && searchResultCount === 0
+                ? 'No visual matches yet'
+                : activeFilters > 0
+                  ? 'No saves match these filters'
+                  : activationState.needsReview
+                    ? 'Check one save to build your Gallery'
+                    : 'Add visual saves to start'}
+            </h3>
+            <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+              {searchActive && searchResultCount === 0
+                ? 'Clear the Library search or try another term from the Saved library tab.'
+                : activeFilters > 0
+                  ? 'Clear filters or switch back to All to see your visual board.'
+                  : activationState.needsReview
+                    ? 'Open Add saves, check one saved link, and add it to your Library.'
+                    : 'Paste a link, upload Instagram, Pinterest, or X files, or create a note with images.'}
+            </p>
+            <button
+              type="button"
+              onClick={onOpenAdd}
+              className="mt-5 inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
+            >
+              <Upload className="h-4 w-4" /> Add saves
+            </button>
+          </div>
+        ) : (
+          <VirtualLibraryGrid
+            items={items}
+            scrollRef={scrollRef}
+            layoutMode="gallery"
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={onLoadMore}
+            renderItem={(item, index, cardHeight) => (
+              <GalleryCard
+                key={item.id}
+                item={item}
+                height={cardHeight}
+                onClick={onSelect}
+                searchActive={searchActive}
+              />
             )}
           />
         )}
@@ -6229,6 +7210,7 @@ function shortCardText(value = '') {
 function firstSearchReason(item) {
   const match = item.searchMatch;
   const field = match?.matchedFields?.[0];
+  if (match?.type === 'visual' && field?.snippet) return field.snippet;
   if (field?.label && field?.terms?.length) return `Matched ${field.label.toLowerCase()}: ${field.terms.slice(0, 3).join(', ')}`;
   if (field?.label) return `Matched ${field.label.toLowerCase()}`;
   if (match?.matchTypes?.includes('semantic')) return 'Matched related meaning';
@@ -6418,6 +7400,91 @@ const LibraryListRow = memo(function LibraryListRow({ item, height = 172, onClic
   );
 });
 
+const GalleryCard = memo(function GalleryCard({ item, height = 380, onClick, searchActive = false, feedback = null, onSearchFeedback = null }) {
+  const card = item.card || cardViewForItem(item);
+  const { capture, note, meta } = card;
+  const Icon = meta.icon;
+  const searchReason = searchActive ? firstSearchReason(item) : '';
+  const hasPreview = Boolean(item.thumbnailUrl);
+  const statusText = item.sourceStatus === 'needs_review' ? 'Needs check' : card.statusLabel || (hasPreview ? 'Preview ready' : 'Preview pending');
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${card.title || 'saved item'} in Gallery`}
+      onClick={() => onClick(item)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onClick(item);
+        }
+      }}
+      className="group flex w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] text-left shadow-[0_12px_32px_rgba(0,0,0,0.24)] outline-none transition hover:border-primary/60 hover:bg-white/[0.055] focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/40"
+      style={{ height, contain: 'layout paint style' }}
+    >
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-[#10100f]">
+        {hasPreview ? (
+          <img
+            src={item.thumbnailUrl}
+            alt=""
+            className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.025]"
+            loading="lazy"
+            decoding="async"
+            width="420"
+            height="300"
+          />
+        ) : (
+          <div className="grid h-full place-items-center bg-[linear-gradient(135deg,#141414_0%,#20201d_48%,#111_100%)] p-6">
+            <div className="text-center">
+              <span className="mx-auto grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.045] text-primary">
+                {note ? <FileText className="h-5 w-5" /> : <Images className="h-5 w-5" />}
+              </span>
+              <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Preview pending</div>
+              <p className="mt-2 line-clamp-3 text-sm leading-5 text-foreground">{card.preview}</p>
+            </div>
+          </div>
+        )}
+        <div className="absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-wrap gap-2">
+          <span className="max-w-full rounded-full bg-black/75 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-white backdrop-blur">
+            <span className="block truncate">{capture ? 'Screen capture' : note ? 'My note' : item.platform}</span>
+          </span>
+          {card.imageCount > 1 && (
+            <span className="rounded-full bg-black/75 px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-white backdrop-blur">
+              {card.imageCount} images
+            </span>
+          )}
+        </div>
+        <div className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-white/85 text-black shadow-lg shadow-black/30">
+          <Icon className={`h-4 w-4 ${meta.icon === Loader2 ? 'animate-spin' : ''}`} />
+        </div>
+      </div>
+      <div className="flex min-h-[132px] flex-col p-4">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <span className="min-w-0 truncate font-mono text-[11px] uppercase tracking-[0.18em] text-primary">{card.source}</span>
+          <span className={`shrink-0 rounded-full border border-white/10 px-2 py-1 text-[10px] ${item.sourceStatus === 'needs_review' ? 'text-accent' : 'text-muted-foreground'}`}>
+            {statusText}
+          </span>
+        </div>
+        <h3 className="line-clamp-2 font-display text-xl font-bold leading-tight tracking-tight">{card.title}</h3>
+        <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{searchReason || card.preview}</p>
+        <div className="mt-auto flex items-center justify-between gap-3 pt-3">
+          {card.chip ? (
+            <span className="min-w-0 truncate rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-muted-foreground">{card.chip}</span>
+          ) : (
+            <span />
+          )}
+          {searchActive && onSearchFeedback ? (
+            <CompactSearchResultFeedback itemId={item.id} value={feedback} onVote={onSearchFeedback} />
+          ) : (
+            <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 const PinCard = memo(function PinCard({ item, index, height = 420, onClick, searchActive = false, feedback = null, onSearchFeedback = null }) {
   const card = item.card || cardViewForItem(item);
   const { capture, note, meta } = card;
@@ -6505,6 +7572,7 @@ function UploadTab({
   setFiles,
   importSourceType,
   setImportSourceType,
+  initialAddMode = 'upload',
   linkForm,
   setLinkForm,
   noteForm,
@@ -6523,7 +7591,7 @@ function UploadTab({
   onTrySearch,
 }) {
   const [dragging, setDragging] = useState(false);
-  const [activeAddMode, setActiveAddMode] = useState('upload');
+  const [activeAddMode, setActiveAddMode] = useState(() => (['link', 'note', 'upload'].includes(initialAddMode) ? initialAddMode : 'upload'));
   const linkInputRef = useRef(null);
   const noteImageInputRef = useRef(null);
   const importHealth = useMemo(() => importHealthForFiles(files, importSourceType), [files, importSourceType]);
@@ -6536,13 +7604,14 @@ function UploadTab({
     { value: 'auto', label: 'Choose for me', help: 'Best if you are not sure.' },
     { value: 'instagram', label: 'Instagram', help: 'For files downloaded from Instagram.' },
     { value: 'pinterest', label: 'Pinterest', help: 'For files downloaded from Pinterest.' },
+    { value: 'x', label: 'X bookmarks', help: 'For bookmark CSV, JSON, JS, TXT, or ZIP files.' },
   ];
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-6 py-20">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <h1 className="font-display text-4xl font-bold tracking-tight">Add to your library</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Save a note, paste a link, or upload files from Instagram or Pinterest.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Save a note, paste a link, or upload files from Instagram, Pinterest, or X.</p>
         </div>
         <button
           type="button"
@@ -6588,7 +7657,7 @@ function UploadTab({
       >
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
         <h3 className="mb-2 font-display text-xl font-bold">Drop your files here</h3>
-        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV</p>
+        <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV · X bookmark ZIP/JS/JSON/CSV/TXT</p>
         <button
           type="button"
           onClick={onOpenHowTo}
@@ -6599,7 +7668,7 @@ function UploadTab({
         <br />
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
           Choose export files
-          <input type="file" multiple accept=".html,.htm,.zip,.json,.csv" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
+          <input type="file" multiple accept=".html,.htm,.zip,.json,.csv,.js,.txt" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
         </label>
         <label className="ml-3 inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/10 px-6 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5">
           Choose export folder
@@ -6622,7 +7691,7 @@ function UploadTab({
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">File source</div>
           <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Where did these files come from?</h2>
         </div>
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
           {sourceOptions.map((option) => (
             <button
               key={option.value}
@@ -6933,9 +8002,13 @@ function SettingsTab({
   busy,
   authEnabled,
   onOpenHowTo,
+  onNotice,
+  onError,
 }) {
   const selectedSetup = KEY_SETUP_OPTIONS[credentialForm.setup] || KEY_SETUP_OPTIONS.openrouter_all;
   const [providerWarning, setProviderWarning] = useState(null);
+  const [telegramCode, setTelegramCode] = useState('');
+  const [captureBusy, setCaptureBusy] = useState(false);
   const providerWarningCopy = providerWarning ? PROVIDER_WARNING_COPY[providerWarning] : null;
   const [copiedAgentValue, setCopiedAgentValue] = useState('');
   const agentAccessUrls = useMemo(() => {
@@ -6982,6 +8055,19 @@ function SettingsTab({
     groups[key].credentials.push(credential);
     return groups;
   }, {});
+  const createTelegramCode = async () => {
+    setCaptureBusy(true);
+    onError?.('');
+    try {
+      const body = await createExtensionToken('Telegram save bot', ['saves:create']);
+      setTelegramCode(body.secret || '');
+      onNotice?.('Telegram bot link code created. Send it to the bot with /connect.');
+    } catch (err) {
+      onError?.(err.message || 'Could not create a Telegram bot link code.');
+    } finally {
+      setCaptureBusy(false);
+    }
+  };
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 px-6 py-20">
@@ -7127,6 +8213,63 @@ function SettingsTab({
             </div>
           )}
         </div>
+      </section>
+
+      <section className="space-y-4 rounded-2xl border border-white/10 p-5">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Fast capture</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Mobile share and Telegram</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            IScraper can receive shared links from supported mobile browsers. Telegram bot linking uses a private code from this account.
+          </p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+            <div className="flex items-center gap-2 font-semibold">
+              <ExternalLink className="h-4 w-4 text-primary" /> Mobile share-sheet
+            </div>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              When IScraper is installed as an app, supported Android browsers can share links into the Add Saves screen.
+            </p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+            <div className="flex items-center gap-2 font-semibold">
+              <Bot className="h-4 w-4 text-primary" /> Telegram save bot
+            </div>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Create a code, send <span className="font-mono text-foreground">/connect</span> plus the code to the bot, then forward links.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={createTelegramCode}
+          disabled={busy || captureBusy}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60"
+        >
+          {captureBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
+          Create Telegram bot link code
+        </button>
+        {telegramCode && (
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Private bot link code</div>
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+              <code className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-white/10 bg-black px-3 py-2 text-xs text-foreground">
+                /connect {telegramCode}
+              </code>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(`/connect ${telegramCode}`).then(() => onNotice?.('Telegram connect command copied.'));
+                }}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-white/5"
+              >
+                <Copy className="h-4 w-4" /> Copy
+              </button>
+            </div>
+            <p className="mt-3 text-xs leading-5 text-muted-foreground">Treat this like a password. This code only allows saving links into your account.</p>
+          </div>
+        )}
       </section>
 
       <form onSubmit={onSave} className="space-y-4 rounded-2xl border border-white/10 p-5">
@@ -8020,7 +9163,7 @@ function buildDetailInsight(item) {
   };
 }
 
-function DetailDrawer({ item, onClose, onApprove, busy }) {
+function DetailDrawer({ item, onClose, onApprove, onArchiveRetry, onRemind, busy }) {
   const ref = useRef(null);
   const [assetPreview, setAssetPreview] = useState(null);
   const indexingMeta = INDEXING_META[item.indexingStage] || INDEXING_META.metadata_ready;
@@ -8076,6 +9219,8 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
                 Open original save <ExternalLink className="h-3 w-3" />
               </a>
             )}
+            {!note && <ArchivePanel item={item} busy={busy} onRetry={onArchiveRetry} />}
+            <ReminderPanel item={item} busy={busy} onRemind={onRemind} />
             {item.sourceStatus === 'needs_review' && (
               <button
                 type="button"
@@ -8131,6 +9276,121 @@ function DetailDrawer({ item, onClose, onApprove, busy }) {
           <img src={assetPreview.url} alt={assetPreview.label} className="max-h-[88vh] max-w-[92vw] rounded-2xl border border-white/10 object-contain shadow-2xl shadow-black" />
         </div>
       )}
+    </div>
+  );
+}
+
+function ArchivePanel({ item, busy, onRetry }) {
+  const archive = item.archive;
+  const status = archive?.status || 'none';
+  const blocked = ['blocked_host', 'blocked_port', 'unsupported_content_type', 'no_readable_content', 'unsupported_protocol'].includes(archive?.errorCode);
+  const ready = status === 'ready';
+  const pending = status === 'pending';
+  const failed = status === 'failed' || status === 'skipped';
+  const label = ready
+    ? 'Readable copy saved'
+    : pending
+      ? 'Saving readable copy...'
+      : failed && blocked
+        ? 'This site blocked page backup'
+        : failed
+          ? 'Could not save copy'
+          : 'No saved copy yet';
+  const help = ready
+    ? 'Article text and readable page content are saved in case the original link breaks later.'
+    : pending
+      ? 'The link is saved now. Page backup runs in the background.'
+      : 'Page backup saves article text and readable page content when the site allows it.';
+
+  return (
+    <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
+            {ready ? <CheckCircle2 className="h-3.5 w-3.5 text-primary" /> : pending ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : <FileText className="h-3.5 w-3.5" />}
+            Page backup
+          </div>
+          <div className="text-sm font-semibold text-foreground">{label}</div>
+          <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">{help}</p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {item.url && (
+            <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs text-muted-foreground hover:border-primary hover:text-primary">
+              Open original <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+          {!pending && !ready && (
+            <button
+              type="button"
+              onClick={() => onRetry?.(item)}
+              disabled={busy}
+              className="inline-flex items-center gap-2 rounded-full bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+              Try again
+            </button>
+          )}
+        </div>
+      </div>
+      {ready && (
+        <details className="mt-5 rounded-xl border border-white/10 bg-black/30 p-4">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground">
+            <span>{archive.title || item.sourceTitle || item.title}</span>
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          </summary>
+          <div className="mt-4 space-y-3">
+            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+              {archive.siteName ? <span>{archive.siteName}</span> : null}
+              {archive.capturedAt ? <span>Saved {new Date(archive.capturedAt).toLocaleDateString()}</span> : null}
+              {archive.textLength ? <span>{archive.textLength.toLocaleString()} characters</span> : null}
+            </div>
+            {archive.excerpt ? <p className="text-sm leading-relaxed text-foreground">{archive.excerpt}</p> : null}
+            {archive.contentText ? (
+              <div className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded-xl border border-white/10 bg-black/40 p-4 text-sm leading-relaxed text-muted-foreground">
+                {archive.contentText}
+              </div>
+            ) : null}
+          </div>
+        </details>
+      )}
+      {failed && archive?.errorMessage ? (
+        <p className="mt-3 text-xs text-muted-foreground">{archive.errorMessage}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function ReminderPanel({ item, busy, onRemind }) {
+  if (!item?.id) return null;
+  return (
+    <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
+            <Clock className="h-3.5 w-3.5" /> Reminder
+          </div>
+          <div className="text-sm font-semibold text-foreground">Bring this back later</div>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Useful for links, references, and ideas you want to revisit.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {[
+            ['tomorrow', 'Tomorrow'],
+            ['week', 'Next week'],
+            ['month', 'Next month'],
+          ].map(([preset, label]) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => onRemind?.(item, preset)}
+              disabled={busy}
+              className="inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Clock className="h-3 w-3" />}
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
