@@ -54,6 +54,25 @@ Parsed server logs showed `50` completed logged requests, all `200`, with `3` co
 
 Search fetch p95 dropped to about `1.02s` and search total p95 to about `1.10s`, so the remaining blocker is no longer AI or asset-heavy item loading. The remaining evidence points to Supabase request count and query/index cost. A final Phase 6I code adjustment changed Supabase user setup to read existing user and credit rows before writing, so normal existing users avoid repeated upserts when a new serverless instance handles its first request.
 
+## Final Deployed Result
+
+After deploying the read-before-write user setup change, the valid-token load profile passed all functional checks and improved again, but still missed the `1.5s` p95 target:
+
+| Route group | k6 p95 | k6 p99 | Result |
+| --- | ---: | ---: | --- |
+| authenticated | 3.91 s | 4.66 s | Above target |
+| search | 4.84 s | 4.94 s | Above target |
+
+Parsed server logs showed `50` completed logged requests, all `200`, with `2` cold starts. Server-side timings:
+
+| Route group | Server p95 | Main measured cost |
+| --- | ---: | --- |
+| authenticated | 2.17 s | account safety, item page fetch/map |
+| import/indexing summary | 2.07 s | account safety |
+| search | 3.50 s | bounded candidate fetch, account safety, search-event insert, occasional auth/setup miss |
+
+`userSetupMs` p95 dropped to `0ms` overall and for authenticated/import routes, confirming existing users no longer pay repeated user/credit upsert cost on normal hot paths. Search still spends about `1.02s` in candidate fetch and about `707ms` p95 inserting the search event. Phase 6I therefore ends with stable behavior and better evidence, but not the latency target. The next phase should be Supabase query-plan/index work and reducing per-request Supabase round trips, not Redis, hosting migration, or a region move.
+
 ## Validation
 
 Required checks:
