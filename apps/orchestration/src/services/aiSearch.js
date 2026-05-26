@@ -123,8 +123,70 @@ function buildOpenRouterLibraryChatRequest({
   };
 }
 
+function buildPlainTextRetryRequest(request) {
+  return {
+    ...request,
+    response_format: undefined,
+    max_tokens: Math.max(request.max_tokens || 900, 1200),
+    messages: request.messages.map((message, index) => index === 0
+      ? {
+          ...message,
+          content: `${message.content} If JSON mode is unavailable, write a concise plain-text answer using only the snippets.`,
+        }
+      : message),
+  };
+}
+
+async function fetchOpenRouterChat({ apiKey, request, fetchImpl }) {
+  const response = await fetchImpl(OPENROUTER_CHAT_ENDPOINT, {
+    method: 'POST',
+    headers: openRouterHeaders(apiKey),
+    body: JSON.stringify(request),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  return { response, body };
+}
+
 function parseJsonContent(content) {
-  return JSON.parse(String(content || '').replace(/```json|```/g, '').trim());
+  const text = String(content || '').replace(/```json|```/g, '').trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const objectStart = text.indexOf('{');
+    const objectEnd = text.lastIndexOf('}');
+    if (objectStart >= 0 && objectEnd > objectStart) {
+      const repaired = text
+        .slice(objectStart, objectEnd + 1)
+        .replace(/,\s*([}\]])/g, '$1');
+      return JSON.parse(repaired);
+    }
+    throw new Error('OpenRouter returned an answer that was not valid JSON.');
+  }
+}
+
+function plainTextAiSearchAnswer(content, results = []) {
+  const answer = compactText(content, 1800);
+  if (!answer) return null;
+  const citations = results
+    .slice(0, 3)
+    .map((item, index) => {
+      const snippet = publicResultSnippet(item, index);
+      return {
+        id: snippet.id,
+        title: compactText(snippet.title, 160),
+        url: snippet.url || '',
+        reason: compactText(`Matched this answer for ${snippet.title}.`, 320),
+        snippet: compactText(snippet.summary || snippet.transcript || snippet.ocrText || snippet.visualDescription, 260),
+      };
+    })
+    .filter((entry) => entry.id && (entry.reason || entry.snippet));
+  return {
+    answer,
+    resultReasons: citations.map((entry) => ({ id: entry.id, reason: entry.reason })),
+    citations,
+    suggestions: [],
+  };
 }
 
 function normalizeAiSearchAnswer(parsed = {}, results = []) {
@@ -177,20 +239,31 @@ async function createOpenRouterSearchAnswer({
   if (!apiKey || !compactText(query) || !results?.length) return null;
 
   const request = buildOpenRouterSearchAnswerRequest({ model, query, results });
-  const response = await fetchImpl(OPENROUTER_CHAT_ENDPOINT, {
-    method: 'POST',
-    headers: openRouterHeaders(apiKey),
-    body: JSON.stringify(request),
-  });
-
-  const body = await response.json().catch(() => ({}));
+  let { response, body } = await fetchOpenRouterChat({ apiKey, request, fetchImpl });
   if (!response.ok) {
     throw new Error(body?.error?.message || `OpenRouter search answer failed with ${response.status}`);
   }
 
-  const content = body?.choices?.[0]?.message?.content;
+  let content = body?.choices?.[0]?.message?.content;
+  if (!content) {
+    ({ response, body } = await fetchOpenRouterChat({
+      apiKey,
+      request: buildPlainTextRetryRequest(request),
+      fetchImpl,
+    }));
+    if (!response.ok) {
+      throw new Error(body?.error?.message || `OpenRouter search retry failed with ${response.status}`);
+    }
+    content = body?.choices?.[0]?.message?.content;
+  }
   if (!content) throw new Error('OpenRouter returned no search answer.');
-  return normalizeAiSearchAnswer(parseJsonContent(content), results);
+  try {
+    return normalizeAiSearchAnswer(parseJsonContent(content), results);
+  } catch {
+    const fallback = plainTextAiSearchAnswer(content, results);
+    if (fallback) return fallback;
+    throw new Error('OpenRouter returned an answer that could not be parsed.');
+  }
 }
 
 async function createOpenRouterLibraryChatAnswer({
@@ -204,20 +277,31 @@ async function createOpenRouterLibraryChatAnswer({
   if (!apiKey || !compactText(question) || !results?.length) return null;
 
   const request = buildOpenRouterLibraryChatRequest({ model, question, results, messages });
-  const response = await fetchImpl(OPENROUTER_CHAT_ENDPOINT, {
-    method: 'POST',
-    headers: openRouterHeaders(apiKey),
-    body: JSON.stringify(request),
-  });
-
-  const body = await response.json().catch(() => ({}));
+  let { response, body } = await fetchOpenRouterChat({ apiKey, request, fetchImpl });
   if (!response.ok) {
     throw new Error(body?.error?.message || `OpenRouter library chat failed with ${response.status}`);
   }
 
-  const content = body?.choices?.[0]?.message?.content;
+  let content = body?.choices?.[0]?.message?.content;
+  if (!content) {
+    ({ response, body } = await fetchOpenRouterChat({
+      apiKey,
+      request: buildPlainTextRetryRequest(request),
+      fetchImpl,
+    }));
+    if (!response.ok) {
+      throw new Error(body?.error?.message || `OpenRouter library chat retry failed with ${response.status}`);
+    }
+    content = body?.choices?.[0]?.message?.content;
+  }
   if (!content) throw new Error('OpenRouter returned no library chat answer.');
-  return normalizeAiSearchAnswer(parseJsonContent(content), results);
+  try {
+    return normalizeAiSearchAnswer(parseJsonContent(content), results);
+  } catch {
+    const fallback = plainTextAiSearchAnswer(content, results);
+    if (fallback) return fallback;
+    throw new Error('OpenRouter returned a library chat answer that could not be parsed.');
+  }
 }
 
 module.exports = {

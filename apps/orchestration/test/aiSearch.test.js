@@ -185,3 +185,82 @@ test('createOpenRouterLibraryChatAnswer returns citations from retrieved saves o
   ]);
   assert.deepEqual(answer.suggestions, ['show me control evidence']);
 });
+
+test('createOpenRouterSearchAnswer repairs common JSON formatting issues', async () => {
+  const answer = await createOpenRouterSearchAnswer({
+    apiKey: 'test-key',
+    model: 'deepseek/deepseek-v4-pro',
+    query: 'security audit',
+    results: [
+      {
+        id: 'save-1',
+        analysis: { title: 'SOC 2 checklist', summary: 'Security controls' },
+      },
+    ],
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: [
+                '```json',
+                '{',
+                '  "answer": "Use the SOC 2 checklist.",',
+                '  "citations": [{"id":"save-1","reason":"It mentions controls.","snippet":"Security controls",}],',
+                '  "suggestions": [],',
+                '}',
+                '```',
+              ].join('\n'),
+            },
+          },
+        ],
+      }),
+    }),
+  });
+
+  assert.equal(answer.answer, 'Use the SOC 2 checklist.');
+  assert.equal(answer.citations[0].id, 'save-1');
+});
+
+test('createOpenRouterSearchAnswer retries without JSON mode when content is empty', async () => {
+  const requests = [];
+  const answer = await createOpenRouterSearchAnswer({
+    apiKey: 'test-key',
+    model: 'deepseek/deepseek-v4-pro',
+    query: 'security audit',
+    results: [
+      {
+        id: 'save-1',
+        analysis: { title: 'SOC 2 checklist', summary: 'Security controls' },
+      },
+    ],
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      if (requests.length === 1) {
+        return {
+          ok: true,
+          json: async () => ({ choices: [{ message: { content: '' } }] }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: 'Use the SOC 2 checklist save for audit prep.',
+              },
+            },
+          ],
+        }),
+      };
+    },
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].response_format.type, 'json_object');
+  assert.equal(requests[1].response_format, undefined);
+  assert.equal(answer.answer, 'Use the SOC 2 checklist save for audit prep.');
+  assert.equal(answer.citations[0].id, 'save-1');
+});
