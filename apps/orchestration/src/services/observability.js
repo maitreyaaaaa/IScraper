@@ -7,6 +7,7 @@ const REQUEST_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{7,127}$/;
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 const SENSITIVE_KEY_RE = /(authorization|password|secret|token|api[_-]?key|credential|signature|cookie|encrypted|imageDataUrl|body|caption|transcript|ocr|query|url|filename|path|email|ip)/i;
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
+let nextRequestIsColdStart = true;
 
 function createObservability(config = {}) {
   const stdout = config.observabilityStdout || process.stdout;
@@ -113,10 +114,15 @@ function requestContextMiddleware(req, res, next) {
   const requestId = validRequestId(req.header(REQUEST_ID_HEADER)) || crypto.randomUUID();
   const clientAction = safeClientAction(req.header(CLIENT_ACTION_HEADER));
   const startedAt = process.hrtime.bigint();
+  const coldStart = nextRequestIsColdStart;
+  nextRequestIsColdStart = false;
   req.context = {
     requestId,
     clientAction,
+    coldStart,
+    processUptimeMs: Math.round(process.uptime() * 1000),
     startedAt,
+    timings: {},
     route: null,
   };
   res.setHeader(REQUEST_ID_HEADER, requestId);
@@ -129,9 +135,13 @@ function requestContextMiddleware(req, res, next) {
       requestId,
       clientAction,
       route,
+      routeGroup: routeGroupForRequest(req),
       method: req.method,
       statusCode: res.statusCode,
       durationMs: Math.round(durationMs),
+      coldStart,
+      processUptimeMs: req.context?.processUptimeMs,
+      timings: summarizeTimings(req.context?.timings),
       userId: req.user?.id,
     };
     if (res.statusCode >= 500) {
@@ -157,6 +167,66 @@ function routePattern(req) {
   const routePath = req.route?.path;
   if (routePath) return `${req.baseUrl || ''}${routePath}`;
   return req.path || 'unknown';
+}
+
+function routeGroupForRequest(req) {
+  return routeGroupForPath(routePattern(req));
+}
+
+function routeGroupForPath(pathname = '') {
+  const path = String(pathname || '').split('?')[0];
+  if (path.startsWith('/api/admin/')) return 'admin';
+  if (path.startsWith('/api/worker/')) return 'worker';
+  if (matchesPath(path, [
+    '/api/imports',
+    '/api/saves/link',
+    '/api/jobs',
+    '/api/indexing',
+  ])) return 'import';
+  if (matchesPath(path, [
+    '/api/search',
+    '/api/search/',
+    '/api/library-chat',
+    '/api/visual-search',
+    '/api/lens/search',
+    '/api/enrichment/intent-batch',
+    '/api/items/:id/similar-visuals',
+  ])) return 'search';
+  if (matchesPath(path, [
+    '/api/extension',
+    '/api/extension-tokens',
+    '/api/agent-access',
+    '/api/mcp',
+    '/api/telegram',
+    '/api/webhooks/stripe',
+    '/api/provider-credentials',
+    '/api/credits/checkout',
+  ])) return 'integration';
+  if (matchesPath(path, [
+    '/api/credit-packages',
+    '/api/feedback',
+  ])) return 'public';
+  if (path.startsWith('/api/')) return 'authenticated';
+  return 'public';
+}
+
+function matchesPath(path, prefixes) {
+  return prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+function recordRequestTiming(req, name, startedAt) {
+  if (!req?.context?.timings || !startedAt) return;
+  const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+  req.context.timings[name] = Math.round(durationMs);
+}
+
+function summarizeTimings(timings = {}) {
+  const output = {};
+  for (const [key, value] of Object.entries(timings || {})) {
+    if (!Number.isFinite(value)) continue;
+    output[key] = Math.max(0, Math.round(value));
+  }
+  return output;
 }
 
 function validRequestId(value) {
@@ -237,6 +307,8 @@ module.exports = {
   REQUEST_ID_HEADER,
   contextForRequest,
   createObservability,
+  recordRequestTiming,
+  routeGroupForPath,
   sanitize,
   validRequestId,
 };

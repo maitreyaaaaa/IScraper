@@ -10,52 +10,108 @@ const userId = __ENV.USER_ID || `load-user-${__VU}`;
 const userEmail = __ENV.USER_EMAIL || `${userId}@example.test`;
 const token = __ENV.AUTH_TOKEN || '';
 const adminKey = __ENV.ADMIN_API_KEY || '';
+const profile = String(__ENV.LOAD_PROFILE || 'custom').toLowerCase();
+const profileDefaults = {
+  local: {
+    duration: '20s',
+    browseRate: 3,
+    browseVus: 10,
+    browseMaxVus: 30,
+    importRate: 1,
+    importVus: 5,
+    importMaxVus: 15,
+    searchRate: 2,
+    searchVus: 8,
+    searchMaxVus: 25,
+    workerStatusRate: 1,
+  },
+  deployed: {
+    duration: '15s',
+    browseRate: 1,
+    browseVus: 4,
+    browseMaxVus: 10,
+    importRate: 1,
+    importVus: 3,
+    importMaxVus: 8,
+    searchRate: 1,
+    searchVus: 4,
+    searchMaxVus: 10,
+    workerStatusRate: 1,
+  },
+  custom: {
+    duration: '2m',
+    browseRate: 20,
+    browseVus: 50,
+    browseMaxVus: 200,
+    importRate: 2,
+    importVus: 10,
+    importMaxVus: 50,
+    searchRate: 5,
+    searchVus: 20,
+    searchMaxVus: 100,
+    workerStatusRate: 1,
+  },
+};
+const defaults = profileDefaults[profile] || profileDefaults.custom;
 
 export const options = {
   scenarios: {
     browse_reads: {
       executor: 'constant-arrival-rate',
-      rate: Number(__ENV.BROWSE_RATE || 20),
+      rate: envNumber('BROWSE_RATE', defaults.browseRate),
       timeUnit: '1s',
-      duration: __ENV.DURATION || '2m',
-      preAllocatedVUs: Number(__ENV.BROWSE_VUS || 50),
-      maxVUs: Number(__ENV.BROWSE_MAX_VUS || 200),
+      duration: __ENV.DURATION || defaults.duration,
+      preAllocatedVUs: envNumber('BROWSE_VUS', defaults.browseVus),
+      maxVUs: envNumber('BROWSE_MAX_VUS', defaults.browseMaxVus),
       exec: 'browseReads',
+      tags: { load_profile: profile, route_group: 'authenticated' },
     },
     upload_imports: {
       executor: 'constant-arrival-rate',
-      rate: Number(__ENV.IMPORT_RATE || 2),
+      rate: envNumber('IMPORT_RATE', defaults.importRate),
       timeUnit: '1s',
-      duration: __ENV.DURATION || '2m',
-      preAllocatedVUs: Number(__ENV.IMPORT_VUS || 10),
-      maxVUs: Number(__ENV.IMPORT_MAX_VUS || 50),
+      duration: __ENV.DURATION || defaults.duration,
+      preAllocatedVUs: envNumber('IMPORT_VUS', defaults.importVus),
+      maxVUs: envNumber('IMPORT_MAX_VUS', defaults.importMaxVus),
       exec: 'uploadImports',
+      tags: { load_profile: profile, route_group: 'import' },
     },
     search_chat: {
       executor: 'constant-arrival-rate',
-      rate: Number(__ENV.SEARCH_RATE || 5),
+      rate: envNumber('SEARCH_RATE', defaults.searchRate),
       timeUnit: '1s',
-      duration: __ENV.DURATION || '2m',
-      preAllocatedVUs: Number(__ENV.SEARCH_VUS || 20),
-      maxVUs: Number(__ENV.SEARCH_MAX_VUS || 100),
+      duration: __ENV.DURATION || defaults.duration,
+      preAllocatedVUs: envNumber('SEARCH_VUS', defaults.searchVus),
+      maxVUs: envNumber('SEARCH_MAX_VUS', defaults.searchMaxVus),
       exec: 'searchChat',
+      tags: { load_profile: profile, route_group: 'search' },
     },
     worker_status: {
       executor: 'constant-arrival-rate',
-      rate: Number(__ENV.WORKER_STATUS_RATE || 1),
+      rate: envNumber('WORKER_STATUS_RATE', defaults.workerStatusRate),
       timeUnit: '5s',
-      duration: __ENV.DURATION || '2m',
+      duration: __ENV.DURATION || defaults.duration,
       preAllocatedVUs: 2,
       maxVUs: 10,
       exec: 'workerStatus',
+      tags: { load_profile: profile, route_group: 'admin' },
     },
   },
   thresholds: {
     http_req_failed: ['rate<0.05'],
     http_req_duration: ['p(95)<1500', 'p(99)<3000'],
+    'http_req_duration{route_group:admin}': ['p(95)<1500', 'p(99)<3000'],
+    'http_req_duration{route_group:authenticated}': ['p(95)<1500', 'p(99)<3000'],
+    'http_req_duration{route_group:import}': ['p(95)<1500', 'p(99)<3000'],
+    'http_req_duration{route_group:search}': ['p(95)<1500', 'p(99)<3000'],
     iscraper_failed_checks: ['rate<0.05'],
   },
 };
+
+function envNumber(name, fallback) {
+  const parsed = Number(__ENV[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function authHeaders(extra = {}) {
   const headers = {
@@ -68,6 +124,10 @@ function authHeaders(extra = {}) {
   return headers;
 }
 
+function requestTags(routeGroup, routeName) {
+  return { load_profile: profile, route_group: routeGroup, route_name: routeName };
+}
+
 function record(response, expectations) {
   const ok = check(response, expectations);
   failureRate.add(!ok);
@@ -76,7 +136,10 @@ function record(response, expectations) {
 
 export function browseReads() {
   group('browse library pages', () => {
-    const response = http.get(`${baseUrl}/api/items?limit=24`, { headers: authHeaders() });
+    const response = http.get(`${baseUrl}/api/items?limit=24`, {
+      headers: authHeaders({ 'X-IScraper-Client-Action': 'load-browse' }),
+      tags: requestTags('authenticated', 'items_list'),
+    });
     record(response, {
       'browse returns 200 or bounded auth error': (res) => [200, 401, 423].includes(res.status),
       'browse is not overloaded': (res) => res.status !== 500,
@@ -97,7 +160,10 @@ export function uploadImports() {
       exportFiles: http.file(html, `load-${__VU}-${__ITER}.html`, 'text/html'),
     };
     const response = http.post(`${baseUrl}/api/imports`, form, {
-      headers: token ? { Authorization: `Bearer ${token}` } : { 'X-User-ID': userId, 'X-User-Email': userEmail },
+      headers: token
+        ? { Authorization: `Bearer ${token}`, 'X-IScraper-Client-Action': 'load-import' }
+        : { 'X-User-ID': userId, 'X-User-Email': userEmail, 'X-IScraper-Client-Action': 'load-import' },
+      tags: requestTags('import', 'imports_create'),
     });
     record(response, {
       'import is accepted, rejected by profile/auth, or throttled': (res) => [200, 400, 401, 403, 423, 429].includes(res.status),
@@ -110,7 +176,8 @@ export function uploadImports() {
 export function searchChat() {
   group('search and chat budget', () => {
     const search = http.post(`${baseUrl}/api/search`, JSON.stringify({ query: 'design inspiration', includeAi: false }), {
-      headers: authHeaders(),
+      headers: authHeaders({ 'X-IScraper-Client-Action': 'load-search' }),
+      tags: requestTags('search', 'search_post'),
     });
     record(search, {
       'search is served or deliberately throttled': (res) => [200, 401, 423, 429].includes(res.status),
@@ -122,8 +189,13 @@ export function searchChat() {
 
 export function workerStatus() {
   group('worker aggregate status', () => {
-    const headers = adminKey ? { 'X-Admin-API-Key': adminKey } : {};
-    const response = http.get(`${baseUrl}/api/admin/worker/status`, { headers });
+    const headers = adminKey
+      ? { 'X-Admin-API-Key': adminKey, 'X-IScraper-Client-Action': 'load-worker-status' }
+      : { 'X-IScraper-Client-Action': 'load-worker-status' };
+    const response = http.get(`${baseUrl}/api/admin/worker/status`, {
+      headers,
+      tags: requestTags('admin', 'admin_worker_status'),
+    });
     record(response, {
       'worker status is aggregate or locked': (res) => [200, 403, 503].includes(res.status),
       'worker status does not expose server errors': (res) => res.status < 500 || res.status === 503,

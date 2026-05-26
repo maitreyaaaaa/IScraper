@@ -1,7 +1,15 @@
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const test = require('node:test');
 
-const { createObservability, sanitize, validRequestId } = require('../src/services/observability');
+const {
+  REQUEST_ID_HEADER,
+  createObservability,
+  recordRequestTiming,
+  routeGroupForPath,
+  sanitize,
+  validRequestId,
+} = require('../src/services/observability');
 
 test('validRequestId accepts safe IDs and rejects unsafe IDs', () => {
   assert.equal(validRequestId('bug-12345678'), 'bug-12345678');
@@ -65,4 +73,59 @@ test('PostHog failures do not break logging or capture', () => {
   assert.equal(observability.enabled, true);
   assert.doesNotThrow(() => observability.capture('workflow event', { requestId: 'bug-12345678' }));
   assert.doesNotThrow(() => observability.captureError(new Error('boom'), { requestId: 'bug-12345678' }));
+});
+
+test('routeGroupForPath classifies API routes for observability only', () => {
+  assert.equal(routeGroupForPath('/api/admin/worker/status'), 'admin');
+  assert.equal(routeGroupForPath('/api/worker/process'), 'worker');
+  assert.equal(routeGroupForPath('/api/imports'), 'import');
+  assert.equal(routeGroupForPath('/api/jobs/job-1'), 'import');
+  assert.equal(routeGroupForPath('/api/search'), 'search');
+  assert.equal(routeGroupForPath('/api/search/feedback'), 'search');
+  assert.equal(routeGroupForPath('/api/extension/saves/link'), 'integration');
+  assert.equal(routeGroupForPath('/api/credit-packages'), 'public');
+  assert.equal(routeGroupForPath('/api/items'), 'authenticated');
+});
+
+test('request middleware logs sanitized timing metadata', () => {
+  const writes = [];
+  const observability = createObservability({
+    posthogEnabled: false,
+    observabilityStdout: { write: (entry) => writes.push(JSON.parse(entry)) },
+  });
+  const req = {
+    app: { locals: { observability } },
+    baseUrl: '',
+    header(name) {
+      if (name === REQUEST_ID_HEADER) return 'phase6f-12345678';
+      return '';
+    },
+    method: 'GET',
+    path: '/api/items',
+    route: { path: '/api/items' },
+    user: { id: 'user-1' },
+  };
+  const res = new EventEmitter();
+  res.statusCode = 200;
+  res.setHeader = () => {};
+  let nextCalled = false;
+
+  observability.requestMiddleware(req, res, () => {
+    nextCalled = true;
+  });
+  const startedAt = process.hrtime.bigint();
+  recordRequestTiming(req, 'authMs', startedAt);
+  res.emit('finish');
+
+  assert.equal(nextCalled, true);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].event, 'api request completed');
+  assert.equal(writes[0].requestId, 'phase6f-12345678');
+  assert.equal(writes[0].routeGroup, 'authenticated');
+  assert.equal(writes[0].method, 'GET');
+  assert.equal(writes[0].statusCode, 200);
+  assert.equal(typeof writes[0].durationMs, 'number');
+  assert.equal(typeof writes[0].coldStart, 'boolean');
+  assert.equal(typeof writes[0].processUptimeMs, 'number');
+  assert.equal(typeof writes[0].timings.authMs, 'number');
 });

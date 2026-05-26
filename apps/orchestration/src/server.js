@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const crypto = require('crypto');
-const { createObservability } = require('./services/observability');
+const { createObservability, recordRequestTiming } = require('./services/observability');
 const {
   MAX_NOTE_IMAGES,
   MAX_NOTE_IMAGE_BYTES,
@@ -140,8 +140,16 @@ function createApp({ store, config = {}, observability = createObservability(con
   registerPublicIntegrationRoutes(app, deps);
 
   app.use(asyncRoute(async (req, _res, next) => {
-    const user = await getUser(req, store);
+    const authStartedAt = process.hrtime.bigint();
+    let user;
+    try {
+      user = await getUser(req, store);
+    } finally {
+      recordRequestTiming(req, 'authMs', authStartedAt);
+    }
+    const storeStartedAt = process.hrtime.bigint();
     await store.ensureUser(user.id, user.email);
+    recordRequestTiming(req, 'storeEnsureUserMs', storeStartedAt);
     req.user = user;
     next();
   }));
