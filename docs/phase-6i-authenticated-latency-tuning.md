@@ -20,9 +20,20 @@ Sanitized Vercel logs showed warm requests only. Server p95 was `6555ms`; search
 - Successful user-row setup is cached briefly per runtime instance.
 - Deletion/account safety remains checked on every authenticated request.
 - `GET /api/profile` records `profileFetchMs`.
-- `GET /api/items?limit=...` can record `listPageQueryMs`, `listPageMapMs`, and `listFacetQueryMs`.
+- `GET /api/items?limit=...` can record `listPageFetchMs`, `listPageMapMs`, and `listFacetFetchMs`.
 - `POST /api/search` records search fetch/scoring/event timings and uses a lean keyword path when semantic search is not explicitly requested.
 - No-AI search no longer attempts semantic provider credential lookup by default.
+
+## First Deployed Result
+
+After deploying `0402f0e`, the valid-token load profile still passed all functional checks but missed latency thresholds:
+
+| Route group | k6 p95 | k6 p99 | Result |
+| --- | ---: | ---: | --- |
+| authenticated | 5.29 s | 6.27 s | Above target |
+| search | 9.15 s | 10.33 s | Above target |
+
+Parsed server logs confirmed `200` responses and no cold starts. Auth and user setup were effectively removed from the hot path (`authMs` p95 `0`, `userSetupMs` p95 `0`), but remaining costs were account safety, item/list mapping, and search item fetching. This led to a follow-up code adjustment in the same phase: timing keys were renamed to avoid sanitizer redaction, and lean search now first tries a bounded candidate fetch before falling back to the full searchable set.
 
 ## Validation
 

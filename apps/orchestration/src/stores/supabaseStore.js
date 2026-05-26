@@ -825,13 +825,13 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       const recordTiming = typeof options.recordTiming === 'function' ? options.recordTiming : null;
       const pageStartedAt = process.hrtime.bigint();
       const { rows, count } = await selectUserSavedItemPage(client, userId, normalized);
-      if (recordTiming) recordTiming('listPageQueryMs', pageStartedAt);
+      if (recordTiming) recordTiming('listPageFetchMs', pageStartedAt);
       const mapStartedAt = process.hrtime.bigint();
       const items = await Promise.all(rows.map((row) => mapItemWithAnalysis(row, client)));
       if (recordTiming) recordTiming('listPageMapMs', mapStartedAt);
       const facetStartedAt = process.hrtime.bigint();
       const facetRows = await selectUserRows(client, 'saved_items', userId, 'collections,platform', 10000);
-      if (recordTiming) recordTiming('listFacetQueryMs', facetStartedAt);
+      if (recordTiming) recordTiming('listFacetFetchMs', facetStartedAt);
       const facets = facetsForItems(facetRows.map((row) => ({
         collections: row.collections || [],
         platform: row.platform || 'Instagram',
@@ -1840,7 +1840,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async searchLean(userId, query, filters = {}, options = {}) {
       const fetchStartedAt = process.hrtime.bigint();
-      const rows = await selectSearchableSavedItems(client, userId);
+      const rows = await selectLeanSearchRows(client, userId, query, filters, options);
       if (typeof options.recordTiming === 'function') options.recordTiming('searchItemFetchMs', fetchStartedAt);
       const mapStartedAt = process.hrtime.bigint();
       const items = await Promise.all(rows.map((row) => mapItemWithAnalysis(row, null)));
@@ -2061,6 +2061,44 @@ async function selectSearchableSavedItems(client, userId) {
   }
 
   return rows;
+}
+
+async function selectLeanSearchRows(client, userId, query, filters = {}, options = {}) {
+  if (!String(query || '').trim()) return selectSearchableSavedItems(client, userId);
+
+  const candidateStartedAt = process.hrtime.bigint();
+  const candidates = await selectCandidateSearchableSavedItems(client, userId, query, options.searchCandidateLimit || 300);
+  if (typeof options.recordTiming === 'function') {
+    options.recordTiming('searchCandidateFetchMs', candidateStartedAt);
+  }
+
+  const desired = Math.max(1, Math.min(Number(filters.limit) || 30, 100));
+  if (candidates.length >= desired) return candidates;
+  return selectSearchableSavedItems(client, userId);
+}
+
+async function selectCandidateSearchableSavedItems(client, userId, query, limit = 300) {
+  const tokens = searchableQueryTokens(query);
+  if (!tokens.length) return [];
+  const columns = ['caption', 'source_title', 'source_description', 'source_author', 'owner_name', 'owner_username', 'platform'];
+  const clauses = [];
+  for (const token of tokens) {
+    for (const column of columns) clauses.push(`${column}.ilike.%${token}%`);
+  }
+  const { data, error } = await client
+    .from('saved_items')
+    .select(SEARCH_ITEM_COLUMNS)
+    .eq('user_id', userId)
+    .or(clauses.join(','))
+    .order('created_at', { ascending: false })
+    .limit(Math.max(30, Math.min(Number(limit) || 300, 1000)));
+  if (error) throw error;
+  return data || [];
+}
+
+function searchableQueryTokens(query) {
+  return [...new Set(String(query || '').toLowerCase().match(/[a-z0-9][a-z0-9_-]{1,}/g) || [])]
+    .slice(0, 4);
 }
 
 function encodePageCursor(offset, totalCount) {

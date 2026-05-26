@@ -21,7 +21,7 @@ Tune the current backend paths first:
 - Cache successful Supabase Auth user lookups briefly per serverless instance.
 - Cache successful user-row setup briefly per serverless instance.
 - Continue running deletion/account safety checks on every authenticated request.
-- Add sanitized timing fields for account safety, user setup, profile fetch, item-page query, item mapping, facet query, search item fetch, keyword scoring, semantic lookup, semantic embedding, and search-event insert.
+- Add sanitized timing fields for account safety, user setup, profile fetch, item-page fetch, item mapping, facet fetch, search item fetch, keyword scoring, semantic lookup, semantic embedding, and search-event insert.
 - Use a lean keyword-search path for no-AI search so it does not fetch asset-heavy item payloads or try semantic embedding unless semantic search is explicitly requested.
 
 ## Consequences
