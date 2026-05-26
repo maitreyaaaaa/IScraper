@@ -30,7 +30,7 @@ function publicResultSnippet(item, index) {
 }
 
 const OPENROUTER_CHAT_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4-pro';
+const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.5-flash';
 
 function appReferer() {
   return process.env.APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173';

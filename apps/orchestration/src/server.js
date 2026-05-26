@@ -325,7 +325,11 @@ function createSearchEventId() {
 }
 
 function aiTimeoutMs(config) {
-  return Math.max(1000, Math.min(Number(config.aiSearchTimeoutMs || 18_000), 25_000));
+  return Math.max(1000, Math.min(Number(config.aiSearchTimeoutMs || 12_000), 25_000));
+}
+
+function aiContextLimit(config) {
+  return Math.max(1, Math.min(Number(config.aiSearchContextLimit || 5), 8));
 }
 
 function withTimeout(promise, ms, message) {
@@ -338,8 +342,8 @@ function withTimeout(promise, ms, message) {
 
 async function runAiSearchAnswer({ config, req, userId, query, results }) {
   if (config.aiSearchEnabled === false || !config.openRouterApiKey || !query || !results.length) return null;
-  const topResults = results.slice(0, Math.max(1, Math.min(config.aiSearchResultLimit || 8, 12)));
-  const model = config.openRouterModel || 'deepseek/deepseek-v4-pro';
+  const topResults = results.slice(0, aiContextLimit(config));
+  const model = config.aiSearchModel || 'google/gemini-2.5-flash';
   const cacheKey = aiSearchCacheKey({ userId, query, results: topResults, model });
   const cached = aiSearchCache.get(cacheKey);
   const now = Date.now();
@@ -394,7 +398,7 @@ async function runLibraryChatAnswer({ store, config, req, userId, question, mess
     throw error;
   }
 
-  const topResults = (results || []).slice(0, Math.max(1, Math.min(config.aiSearchResultLimit || 8, 12)));
+  const topResults = (results || []).slice(0, aiContextLimit(config));
   const searchEventId = createSearchEventId();
   if (typeof store.recordSearchEvent === 'function') {
     await store.recordSearchEvent({
@@ -434,18 +438,34 @@ async function runLibraryChatAnswer({ store, config, req, userId, question, mess
   }
 
   assertAiSearchUsageAllowed(req, config);
-  const model = config.openRouterModel || 'deepseek/deepseek-v4-pro';
-  const ai = await withTimeout(
-    createOpenRouterLibraryChatAnswer({
-      apiKey: config.openRouterApiKey,
-      model,
-      question: cleanQuestion,
-      messages: normalizeChatMessages(messages),
+  const model = config.aiSearchModel || 'google/gemini-2.5-flash';
+  let ai;
+  try {
+    ai = await withTimeout(
+      createOpenRouterLibraryChatAnswer({
+        apiKey: config.openRouterApiKey,
+        model,
+        question: cleanQuestion,
+        messages: normalizeChatMessages(messages),
+        results: topResults,
+      }),
+      aiTimeoutMs(config),
+      'AI library chat timed out.'
+    );
+  } catch (error) {
+    if (error.statusCode === 429) throw error;
+    return {
+      searchEventId,
+      ai: {
+        error: /timed out/i.test(error.message)
+          ? 'AI is taking too long right now. Your matching saves are still shown, and you can try again.'
+          : 'AI answer is unavailable right now. Showing matching saves instead.',
+        citations: [],
+        suggestions: ['Try again', 'Ask a shorter question'],
+      },
       results: topResults,
-    }),
-    aiTimeoutMs(config),
-    'AI library chat timed out.'
-  );
+    };
+  }
 
   return {
     searchEventId,
