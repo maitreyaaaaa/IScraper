@@ -7,6 +7,7 @@ This checklist converts the local report `C:\Users\Admin\Downloads\Vibe code inv
 | Gate | Requirement | Evidence |
 | --- | --- | --- |
 | Browser secret boundary | UI and extension code must not reference server-only secret names or key prefixes | `npm.cmd run security:boundaries` |
+| Supabase migration boundary | RLS, storage ownership, and `security definer` safety must stay measurable in migrations | `npm.cmd run security:supabase` |
 | Supabase service role boundary | Service role access stays in orchestration/worker server code only | Code review plus route inventory |
 | Auth fail-closed | Admin, worker, extension, agent, and user routes reject missing/invalid credentials | Backend tests |
 | Upload safety | File type, size, count, chunk index, chunk count, and storage path ownership are validated | Backend tests and route inventory |

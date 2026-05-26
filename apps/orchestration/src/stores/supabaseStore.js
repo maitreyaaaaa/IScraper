@@ -624,22 +624,21 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .throwOnError();
     },
     async recordSearchEvent({ id, userId, query, queryLength = 0, filters = {}, resultCount = 0, includeAi = false, resultIds = [] }) {
-      const { data, error } = await client
+      const row = {
+        id,
+        user_id: userId,
+        query: cleanDbText(query).slice(0, 240),
+        query_length: Number(queryLength || 0),
+        filters,
+        result_count: Number(resultCount || 0),
+        include_ai: Boolean(includeAi),
+        result_ids: Array.isArray(resultIds) ? resultIds.slice(0, 30) : [],
+      };
+      const { error } = await client
         .from('search_events')
-        .insert({
-          id,
-          user_id: userId,
-          query: cleanDbText(query).slice(0, 240),
-          query_length: Number(queryLength || 0),
-          filters,
-          result_count: Number(resultCount || 0),
-          include_ai: Boolean(includeAi),
-          result_ids: Array.isArray(resultIds) ? resultIds.slice(0, 30) : [],
-        })
-        .select('*')
-        .single();
+        .insert(row);
       if (error) throw error;
-      return mapSearchEvent(data);
+      return mapSearchEvent({ ...row, created_at: new Date().toISOString() });
     },
     async recordSearchFeedback({ userId, searchEventId, itemId, rating, reason = '' }) {
       const item = await this.getItem(userId, itemId);

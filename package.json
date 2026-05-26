@@ -24,6 +24,8 @@
     "test:api": "npm test --workspace @iscraper/orchestration",
     "routes:inventory": "node scripts/route-inventory.js",
     "security:boundaries": "node scripts/security-boundary-check.js",
+    "security:supabase": "node scripts/supabase-security-check.js",
+    "db:audit:supabase": "node scripts/supabase-db-audit.js",
     "load:smoke": "k6 run tests/load/iscraper-mixed.js",
     "load:auth": "k6 run tests/load/iscraper-authenticated.js",
     "load:region": "k6 run tests/load/iscraper-region-probe.js",

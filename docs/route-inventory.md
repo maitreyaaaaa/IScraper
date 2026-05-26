@@ -13,6 +13,9 @@ The generated table is source-derived from `apps/orchestration/src/routes/*.js`.
 - a route-specific rate limiter or the general limiter
 - explicit upload/body limits where applicable
 - no sensitive response fields for admin/worker aggregate endpoints
+- a sensitive-output-risk classification for review
+
+The script exits non-zero if high-risk route groups lose expected auth or rate-limit coverage.
 
 ## High-Risk Route Groups
 

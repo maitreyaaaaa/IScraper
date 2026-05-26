@@ -1,0 +1,77 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+
+const { analyzeSupabaseSecurity } = require('../../../scripts/supabase-security-check');
+const { collectRoutes, validateRows } = require('../../../scripts/route-inventory');
+const { renderAudit, summarizePlanBody } = require('../../../scripts/supabase-db-audit');
+
+test('Supabase security gate catches missing RLS and policies in migrations', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iscraper-supabase-security-'));
+  fs.writeFileSync(path.join(dir, '202605270001_bad.sql'), `
+    create table if not exists public.leaky_table (
+      id uuid primary key
+    );
+  `);
+
+  const result = analyzeSupabaseSecurity({ migrationsDir: dir });
+
+  assert.equal(result.ok, false);
+  assert.match(result.findings.join('\n'), /without enabling row level security/);
+  assert.match(result.findings.join('\n'), /no policy/);
+});
+
+test('route inventory fails high-risk routes with missing auth or rate limits', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iscraper-route-inventory-'));
+  fs.writeFileSync(path.join(dir, 'adminRoutes.js'), `
+    function registerAdminRoutes(app, deps) {
+      const { generalRateLimit } = deps.http.rateLimiters;
+      app.get('/api/admin/summary', generalRateLimit, asyncRoute(async (_req, res) => res.json({ ok: true })));
+    }
+  `);
+
+  const rows = collectRoutes({ dir });
+  const findings = validateRows(rows);
+
+  assert.equal(rows.length, 1);
+  assert.match(findings.join('\n'), /no route auth helper|must use assertAdmin/);
+  assert.match(findings.join('\n'), /expected adminRateLimit/);
+});
+
+test('DB audit rendering keeps query-plan output aggregate-only', () => {
+  const plan = summarizePlanBody([
+    {
+      'QUERY PLAN': [
+        {
+          Plan: {
+            'Node Type': 'Limit',
+            'Total Cost': 12.34,
+            'Plan Rows': 24,
+            Plans: [
+              {
+                'Node Type': 'Index Scan',
+                'Relation Name': 'saved_items',
+                'Index Name': 'saved_items_user_created_id_idx',
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ]);
+  const rendered = renderAudit({
+    projectRef: 'example-ref',
+    inventories: {
+      rls_policy_inventory: [{ table_name: 'saved_items', rls_enabled: true, policy_count: 1 }],
+      index_inventory: [{ tablename: 'saved_items', indexname: 'saved_items_user_created_id_idx' }],
+      table_stats: [{ table_name: 'saved_items', estimated_live_rows: 10, estimated_dead_rows: 0, seq_scan: 1, idx_scan: 2 }],
+    },
+    plans: [{ name: 'saved_items_first_page', ...plan }],
+    recommendations: [],
+  });
+
+  assert.match(rendered, /saved_items_user_created_id_idx/);
+  assert.doesNotMatch(rendered, /caption|url|email|token|Authorization/i);
+});

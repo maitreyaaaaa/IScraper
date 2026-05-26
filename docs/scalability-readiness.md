@@ -51,6 +51,8 @@ These are readiness targets, not guaranteed public SLAs.
 
 - Route inventory: `npm.cmd run routes:inventory`
 - Browser secret boundary: `npm.cmd run security:boundaries`
+- Supabase migration security gate: `npm.cmd run security:supabase`
+- Read-only Supabase query audit: `npm.cmd run db:audit:supabase`
 - k6 mixed-load harness: `npm.cmd run load:smoke`
 - Backend tests: `npm.cmd --workspace @iscraper/orchestration test`
 - Build: `npm.cmd run build`
