@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { mkdtempSync, rmSync } = require('node:fs');
+const { mkdtempSync, readFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -8,6 +8,7 @@ const { spawnSync } = require('node:child_process');
 const { createWorkerRuntime, getWorkerStatus, runWorkerPass } = require('../src/runtime/workerRuntime');
 const { createLocalStore } = require('../src/stores/localStore');
 const { checkWorkerPreflight } = require('../src/worker/preflight');
+const { createShutdownController } = require('../src/worker/indexing-runner');
 
 function seedQueuedJob(store, dir) {
   const userId = 'ops-user';
@@ -123,4 +124,39 @@ test('indexing runner --once exits after one bounded local pass', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('shutdown controller interrupts idle sleep and logs only aggregate signal data', async () => {
+  const events = [];
+  const controller = createShutdownController({
+    observability: {
+      warn: (event, properties) => events.push({ event, properties }),
+    },
+  });
+
+  const sleepStartedAt = Date.now();
+  const sleeping = controller.sleep(10_000);
+  controller.requestShutdown('SIGTERM');
+  await sleeping;
+  const elapsedMs = Date.now() - sleepStartedAt;
+  const serialized = JSON.stringify(events);
+
+  assert.equal(controller.shouldContinue(), false);
+  assert.equal(events[0].event, 'worker shutdown requested');
+  assert.equal(events[0].properties.signal, 'SIGTERM');
+  assert.equal(elapsedMs < 1000, true);
+  assert.equal(serialized.includes('SUPABASE_SERVICE_ROLE_KEY'), false);
+  assert.equal(serialized.includes('OPENROUTER_API_KEY'), false);
+});
+
+test('Render worker blueprint uses the loop command and keeps secrets unsynced', () => {
+  const blueprint = readFileSync(path.join(__dirname, '../../../render.yaml'), 'utf8');
+
+  assert.match(blueprint, /type:\s*worker/);
+  assert.match(blueprint, /name:\s*iscraper-indexing-worker/);
+  assert.match(blueprint, /numInstances:\s*1/);
+  assert.match(blueprint, /startCommand:\s*npm run worker:loop/);
+  assert.match(blueprint, /key:\s*SUPABASE_SERVICE_ROLE_KEY\s*\r?\n\s*sync:\s*false/);
+  assert.match(blueprint, /key:\s*CREDENTIAL_ENCRYPTION_KEY\s*\r?\n\s*sync:\s*false/);
+  assert.equal(blueprint.includes('super-secret'), false);
 });

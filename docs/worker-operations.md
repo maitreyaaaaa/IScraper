@@ -1,6 +1,6 @@
 # Worker Operations
 
-IScraper still runs as one Vercel UI/API deployment. The worker is prepared as a separate process contract, but Phase 4 does not move it to another host.
+IScraper still runs as one Vercel UI/API deployment. Phase 5 pilots a separate Render Background Worker for queue draining, but Vercel remains the only web/API app.
 
 ## Commands
 
@@ -23,6 +23,19 @@ Production worker mode should run with:
 
 The worker preflight reports missing variable names only. It must not print secret values.
 
+## Render Worker Pilot
+
+The root `render.yaml` defines one `iscraper-indexing-worker` background worker service:
+
+- service type: `worker`
+- branch: `main`
+- build command: `npm install`
+- start command: `npm run worker:loop`
+- instances: `1`
+- plan: `starter`
+
+Secrets are listed with `sync: false`; set them in Render during service creation. Do not copy secrets into `render.yaml`.
+
 ## Recommended Worker Settings
 
 - `WORKER_BATCH_SIZE=5`
@@ -35,6 +48,10 @@ The worker preflight reports missing variable names only. It must not print secr
 
 Raise concurrency only after queue volume, database load, provider rate limits, and job duration are visible in logs.
 
+## Shutdown Behavior
+
+The worker listens for `SIGTERM` and `SIGINT`. When shutdown is requested, it finishes the current bounded pass, skips the next pass, exits the loop, and relies on job leases for any unfinished work. Idle sleep is interrupted so Render can stop the service promptly.
+
 ## Queue State Meanings
 
 - `active`: a worker claimed the job and its lease is still current.
@@ -44,6 +61,18 @@ Raise concurrency only after queue volume, database load, provider rate limits, 
 - `exhausted`: the job has failed enough times to reach `WORKER_MAX_ATTEMPTS`.
 
 Paused states are human-action states. They should not be automatically reclaimed until the required user or account condition changes.
+
+## Pilot Acceptance
+
+Watch the pilot for 24-48 hours:
+
+- oldest queued job age trends down
+- no repeated worker preflight or fatal errors
+- no provider rate-limit storm
+- no sensitive data appears in logs
+- Vercel API latency is not affected by worker activity
+
+Rollback is stopping or scaling the Render worker to zero. The protected Vercel worker endpoints remain available as fallback/admin tools.
 
 ## Future Split Criteria
 

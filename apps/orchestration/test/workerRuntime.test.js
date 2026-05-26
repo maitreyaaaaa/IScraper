@@ -4,7 +4,12 @@ const { mkdtempSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 
-const { createWorkerRuntime, getWorkerStatus, runWorkerPass } = require('../src/runtime/workerRuntime');
+const {
+  createWorkerRuntime,
+  getWorkerStatus,
+  runWorkerLoop,
+  runWorkerPass,
+} = require('../src/runtime/workerRuntime');
 const { createLocalStore } = require('../src/stores/localStore');
 
 function seedJobs(store, userId = 'runtime-user') {
@@ -108,6 +113,37 @@ test('getWorkerStatus returns aggregate queue counts without item content', asyn
     assert.equal(status.worker.leaseMs, 12345);
     assert.equal(serialized.includes('Runtime test'), false);
     assert.equal(serialized.includes('https://example.com'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runWorkerLoop stops cleanly after the current pass when requested', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  let keepRunning = true;
+
+  try {
+    const runtime = createWorkerRuntime({
+      store,
+      config: {
+        videoDir: path.join(dir, 'videos'),
+        workerBatchSize: 1,
+        workerScanLimit: 1,
+        workerIdleMs: 1000,
+      },
+    });
+
+    const result = await runWorkerLoop({
+      runtime,
+      shouldContinue: () => keepRunning,
+      sleep: async () => {
+        keepRunning = false;
+      },
+    });
+
+    assert.equal(result.stopped, true);
+    assert.equal(result.passCount, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

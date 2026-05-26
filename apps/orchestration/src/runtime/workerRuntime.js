@@ -116,7 +116,7 @@ async function runWorkerPass({
   return result;
 }
 
-async function runWorkerLoop({ runtime, sleep = defaultSleep } = {}) {
+async function runWorkerLoop({ runtime, sleep = defaultSleep, shouldContinue = () => true } = {}) {
   const { observability, worker, config } = runtime;
   observability.info('worker loop started', {
     storageMode: config.storageMode,
@@ -130,10 +130,16 @@ async function runWorkerLoop({ runtime, sleep = defaultSleep } = {}) {
     return runWorkerPass({ runtime, maxJobs: worker.batchSize, scopeLimit: worker.scanLimit });
   }
 
-  while (true) {
+  let passCount = 0;
+  while (shouldContinue()) {
     const result = await runWorkerPass({ runtime, maxJobs: worker.batchSize, scopeLimit: worker.scanLimit });
+    passCount += 1;
+    if (!shouldContinue()) break;
     await sleep(result.processedCount > 0 ? 250 : worker.idleMs);
   }
+
+  observability.info('worker loop stopped', { passCount });
+  return { stopped: true, passCount };
 }
 
 async function processIndexingScope({ runtime, userId, importId = null, maxJobs = null, download = false }) {

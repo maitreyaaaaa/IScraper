@@ -1,0 +1,43 @@
+services:
+  - type: worker
+    name: iscraper-indexing-worker
+    runtime: node
+    branch: main
+    plan: starter
+    numInstances: 1
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: npm run worker:loop
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: "production"
+      - key: STORAGE_MODE
+        value: "supabase"
+      - key: WORKER_GLOBAL_CONCURRENCY
+        value: "1"
+      - key: WORKER_PER_USER_CONCURRENCY
+        value: "1"
+      - key: WORKER_BATCH_SIZE
+        value: "5"
+      - key: WORKER_SCAN_LIMIT
+        value: "20"
+      - key: WORKER_MAX_ATTEMPTS
+        value: "3"
+      - key: WORKER_LEASE_MS
+        value: "900000"
+      - key: INLINE_INDEXING_ENABLED
+        value: "false"
+      - key: POSTHOG_FLUSH_IMMEDIATE
+        value: "true"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: CREDENTIAL_ENCRYPTION_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: POSTHOG_PROJECT_KEY
+        sync: false
