@@ -124,13 +124,72 @@ After deployment, inspect sanitized API logs for:
 - Warm requests over 1500 ms with high `timings.storeEnsureUserMs`.
 - Warm requests over 1500 ms with low auth/store timing, which suggests platform/network/Supabase query work inside handlers.
 
+## Post-Deploy Verification
+
+After deploying commit `b294283`, the production deployment `https://iscraper-ewu8xb7eh-dashboard-me.vercel.app` was ready and aliased to `https://iscraper.vercel.app`.
+
+An idle-window smoke was run after roughly three idle minutes:
+
+| Metric | Value |
+| --- | ---: |
+| Requests | 50 |
+| Failed HTTP requests | 0.00% |
+| Failed checks | 0.00% |
+| Dropped iterations | 1 |
+| Overall p95 | 1.96 s |
+| Overall p99 | 2.33 s |
+| Threshold status | Failed `p95<1500` |
+
+Idle-window k6 route-group timings:
+
+| Route group | p95 | p99 |
+| --- | ---: | ---: |
+| admin | 2.03 s | 2.27 s |
+| authenticated | 1.78 s | 2.07 s |
+| import | 1.64 s | 1.72 s |
+| search | 1.83 s | 2.22 s |
+
+Vercel serverless logs for the same slow window showed:
+
+| Route group | Count | Server p95 | Server max | Cold starts | Max auth timing |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| authenticated | 16 | 16 ms | 16 ms | 3 | 1 ms |
+| admin | 4 | 18 ms | 18 ms | 1 | n/a |
+| import | 14 | 29 ms | 29 ms | 3 | 0 ms |
+| search | 16 | 47 ms | 47 ms | 3 | 1 ms |
+
+An immediate warm smoke was then run:
+
+| Metric | Value |
+| --- | ---: |
+| Requests | 52 |
+| Failed HTTP requests | 0.00% |
+| Failed checks | 0.00% |
+| Overall p95 | 290.1 ms |
+| Overall p99 | 306.28 ms |
+| Threshold status | Passed |
+
+Warm k6 route-group timings:
+
+| Route group | p95 | p99 |
+| --- | ---: | ---: |
+| admin | 254.75 ms | 256.08 ms |
+| authenticated | 265.07 ms | 284.89 ms |
+| import | 292.51 ms | 297.55 ms |
+| search | 290.91 ms | 309.43 ms |
+
+Vercel logs from the warm window showed 200 parsed request-completion records, zero `coldStart: true` records, zero server durations over 1500 ms, and a max server duration of 16 ms.
+
+Post-deploy conclusion: the current conservative smoke routes are not slow inside Express, route handlers, auth, store setup, or Supabase calls. The latency spike happens before or around serverless invocation, while the function fleet is cold or scaling. The next tuning target is Vercel/runtime/platform behavior and network distance, not route workflow optimization.
+
 ## Recommended Next Action
 
 Do not migrate hosting and do not add Redis/Upstash yet.
 
-Next, deploy this instrumentation and repeat the conservative deployed smoke twice:
+Next, tune Vercel/runtime behavior before changing app architecture:
 
-1. one run after several idle minutes to capture likely cold behavior,
-2. one immediate warm run.
-
-If slow requests correlate with `coldStart: true`, tune Vercel/runtime settings first. If warm requests are slow and `authMs` or `storeEnsureUserMs` is high, optimize auth/store initialization. If warm route-group timing points to import/search specifically, tune those workflows. Add distributed rate limiting only after evidence shows cross-instance rate-limit correctness is the bottleneck.
+1. Confirm whether the production function region is intentionally `iad1`; if most early users are outside the US East path, evaluate region placement.
+2. Add a tiny production-safe warmup/health endpoint only if it stays aggregate-only and does not bypass auth for sensitive state.
+3. Decide whether Vercel Fluid Compute, function max duration, or project runtime settings reduce cold/scaling variance without changing public APIs.
+4. Keep import/search workflow optimization deferred until an authenticated, real-credential smoke shows slow server-side `durationMs`, `authMs`, or `storeEnsureUserMs`.
+5. Add distributed rate limiting only after evidence shows cross-instance rate-limit correctness is the bottleneck.
