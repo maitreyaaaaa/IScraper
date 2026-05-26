@@ -29,7 +29,7 @@ const {
   requireCompletedProfile,
 } = require('./http/auth');
 const { asyncRoute, createErrorHandler } = require('./http/errors');
-const { clientIp, createRateLimiter } = require('./http/rateLimit');
+const { clientIp, createInMemoryRateLimitStore, createRateLimiter } = require('./http/rateLimit');
 const { securityHeaders } = require('./http/security');
 const {
   IMPORT_CHUNK_SIZE_BYTES,
@@ -65,13 +65,14 @@ function createApp({ store, config = {}, observability = createObservability(con
   });
   const rateWindowMs = config.rateLimitWindowMs || 15 * 60 * 1000;
   const rateLimitNamespace = config.rateLimitNamespace || crypto.randomUUID();
-  const generalRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.rateLimitMax || 600, name: 'general', namespace: rateLimitNamespace });
-  const feedbackRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.feedbackRateLimitMax || 20, name: 'feedback', namespace: rateLimitNamespace });
-  const importRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.importRateLimitMax || 10, name: 'import', namespace: rateLimitNamespace });
-  const searchRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.searchRateLimitMax || 180, name: 'search', namespace: rateLimitNamespace });
-  const checkoutRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.checkoutRateLimitMax || 10, name: 'checkout', namespace: rateLimitNamespace });
-  const adminRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.adminRateLimitMax || 30, name: 'admin', namespace: rateLimitNamespace });
-  const workerRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.workerRateLimitMax || 30, name: 'worker', namespace: rateLimitNamespace });
+  const rateLimitStore = config.rateLimitStore || createInMemoryRateLimitStore();
+  const generalRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.rateLimitMax || 600, name: 'general', namespace: rateLimitNamespace, store: rateLimitStore });
+  const feedbackRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.feedbackRateLimitMax || 20, name: 'feedback', namespace: rateLimitNamespace, store: rateLimitStore });
+  const importRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.importRateLimitMax || 10, name: 'import', namespace: rateLimitNamespace, store: rateLimitStore });
+  const searchRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.searchRateLimitMax || 180, name: 'search', namespace: rateLimitNamespace, store: rateLimitStore });
+  const checkoutRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.checkoutRateLimitMax || 10, name: 'checkout', namespace: rateLimitNamespace, store: rateLimitStore });
+  const adminRateLimit = createRateLimiter({ windowMs: rateWindowMs, max: config.adminRateLimitMax || 30, name: 'admin', namespace: rateLimitNamespace, store: rateLimitStore });
+  const workerRateLimit = createRateLimiter({ windowMs: 60 * 1000, max: config.workerRateLimitMax || 30, name: 'worker', namespace: rateLimitNamespace, store: rateLimitStore });
   const allowedOrigins = new Set((config.corsOrigins || []).map((origin) => String(origin).replace(/\/$/, '')));
   const http = {
     asyncRoute,
@@ -93,6 +94,7 @@ function createApp({ store, config = {}, observability = createObservability(con
       checkoutRateLimit,
       feedbackRateLimit,
       importRateLimit,
+      rateLimitStore,
       searchRateLimit,
       workerRateLimit,
     },

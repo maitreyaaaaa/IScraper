@@ -22,6 +22,9 @@
     "lint:extension": "npm run lint --workspace @iscraper/save-to-iscraper",
     "test": "npm test --workspaces --if-present",
     "test:api": "npm test --workspace @iscraper/orchestration",
+    "routes:inventory": "node scripts/route-inventory.js",
+    "security:boundaries": "node scripts/security-boundary-check.js",
+    "load:smoke": "k6 run tests/load/iscraper-mixed.js",
     "check": "npm run lint && npm run test && npm run build"
   },
   "engines": {
