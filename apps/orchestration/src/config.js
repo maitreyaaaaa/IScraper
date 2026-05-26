@@ -20,6 +20,7 @@ function getConfig() {
     deepSeekModel: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
     aiSearchEnabled: process.env.AI_SEARCH_ENABLED !== 'false',
     aiSearchResultLimit: Number(process.env.AI_SEARCH_RESULT_LIMIT || 8),
+    aiSearchTimeoutMs: Number(process.env.AI_SEARCH_TIMEOUT_MS || 18_000),
     aiSearchCacheTtlMs: Number(process.env.AI_SEARCH_CACHE_TTL_MS || 6 * 60 * 60 * 1000),
     aiSearchRateLimitMax: Number(process.env.AI_SEARCH_RATE_LIMIT_MAX || 60),
     aiSearchDailyLimit: Number(process.env.AI_SEARCH_DAILY_LIMIT || 1000),

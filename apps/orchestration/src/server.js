@@ -324,6 +324,18 @@ function createSearchEventId() {
   return crypto.randomUUID();
 }
 
+function aiTimeoutMs(config) {
+  return Math.max(1000, Math.min(Number(config.aiSearchTimeoutMs || 18_000), 25_000));
+}
+
+function withTimeout(promise, ms, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
 async function runAiSearchAnswer({ config, req, userId, query, results }) {
   if (config.aiSearchEnabled === false || !config.openRouterApiKey || !query || !results.length) return null;
   const topResults = results.slice(0, Math.max(1, Math.min(config.aiSearchResultLimit || 8, 12)));
@@ -334,12 +346,16 @@ async function runAiSearchAnswer({ config, req, userId, query, results }) {
   if (cached && cached.expiresAt > now) return { ...cached.value, cached: true };
 
   assertAiSearchUsageAllowed(req, config);
-  const ai = await createOpenRouterSearchAnswer({
-    apiKey: config.openRouterApiKey,
-    model,
-    query,
-    results: topResults,
-  });
+  const ai = await withTimeout(
+    createOpenRouterSearchAnswer({
+      apiKey: config.openRouterApiKey,
+      model,
+      query,
+      results: topResults,
+    }),
+    aiTimeoutMs(config),
+    'AI search answer timed out.'
+  );
   if (!ai) return null;
 
   const value = { ...ai, model, resultIds: topResults.map((item) => item.id), cached: false };
@@ -419,13 +435,17 @@ async function runLibraryChatAnswer({ store, config, req, userId, question, mess
 
   assertAiSearchUsageAllowed(req, config);
   const model = config.openRouterModel || 'deepseek/deepseek-v4-pro';
-  const ai = await createOpenRouterLibraryChatAnswer({
-    apiKey: config.openRouterApiKey,
-    model,
-    question: cleanQuestion,
-    messages: normalizeChatMessages(messages),
-    results: topResults,
-  });
+  const ai = await withTimeout(
+    createOpenRouterLibraryChatAnswer({
+      apiKey: config.openRouterApiKey,
+      model,
+      question: cleanQuestion,
+      messages: normalizeChatMessages(messages),
+      results: topResults,
+    }),
+    aiTimeoutMs(config),
+    'AI library chat timed out.'
+  );
 
   return {
     searchEventId,

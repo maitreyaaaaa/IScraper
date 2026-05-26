@@ -3980,17 +3980,47 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         await loadItems();
       } else {
         setVisualSearch(null);
-        const body = await searchItems(searchText, {}, { includeAi: true });
+        const body = await searchItems(searchText, {}, { includeAi: false });
         const mappedResults = (body.results || []).map(mapItem);
         setSearchResults(mappedResults);
-        setSearchMeta({ eventId: body.searchEventId || '', ai: body.ai || null, feedback: {} });
+        setSearchMeta({ eventId: body.searchEventId || '', ai: null, feedback: {} });
+        const initialUserMessage = createLibraryChatMessage('user', searchText);
         setLibraryChat({
           open: true,
           query: searchText,
-          messages: seedLibraryChatMessages(searchText, body.ai, mappedResults),
-          loading: false,
+          messages: [initialUserMessage],
+          loading: true,
           error: '',
         });
+        askLibraryChat(searchText, [{ role: 'user', content: searchText }])
+          .then((chatBody) => {
+            if (activeSearchRef.current !== searchRun) return;
+            const chatResults = (chatBody.results || []).map(mapItem);
+            const assistantMessage = createLibraryChatMessage(
+              'assistant',
+              chatBody.ai?.answer || chatBody.ai?.error || 'I found matching saves. Ask a follow-up and I will answer from your Library.',
+              { ai: chatBody.ai || null, results: chatResults.length ? chatResults : mappedResults }
+            );
+            setSearchMeta((current) => ({ ...current, ai: chatBody.ai || null }));
+            setLibraryChat((current) => ({
+              ...current,
+              query: searchText,
+              messages: [initialUserMessage, assistantMessage],
+              loading: false,
+              error: '',
+            }));
+          })
+          .catch((err) => {
+            if (activeSearchRef.current !== searchRun) return;
+            setLibraryChat((current) => ({
+              ...current,
+              loading: false,
+              error: err.message,
+              messages: current.messages.length
+                ? current.messages
+                : seedLibraryChatMessages(searchText, null, mappedResults),
+            }));
+          });
         const suggestedIds = (body.suggestedEnrichmentIds || mappedResults.filter(shouldEnrichItem).slice(0, 3).map((item) => item.id)).slice(0, 3);
         if (suggestedIds.length) {
           enrichIntentBatch(suggestedIds)
