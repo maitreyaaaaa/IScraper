@@ -33,6 +33,31 @@ const { publicLinkHealth, publicReminder } = require('../services/libraryCare');
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
 const IMPORT_INSERT_BATCH_SIZE = 500;
 const JOB_INSERT_BATCH_SIZE = 500;
+const SEARCH_ITEM_COLUMNS = [
+  'id',
+  'user_id',
+  'import_id',
+  'url',
+  'content_type',
+  'caption',
+  'hashtags',
+  'owner_name',
+  'owner_username',
+  'saved_at_text',
+  'collections',
+  'platform',
+  'platform_key',
+  'source_id',
+  'source_title',
+  'source_author',
+  'source_description',
+  'thumbnail_url',
+  'status',
+  'error',
+  'created_at',
+  'updated_at',
+  'item_analysis(title,summary,transcript,ocr_text,visual_description,brands_mentioned,tools_mentioned,repos_mentioned,people_mentioned,topics,tags,why_useful)',
+].join(',');
 
 function createSupabaseStore({ url, serviceRoleKey }) {
   if (!url || !serviceRoleKey) {
@@ -58,6 +83,9 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async ensureUser(userId, email) {
       await this.assertUserNotDeleted(userId, email);
+      await this.ensureUserRecord(userId, email);
+    },
+    async ensureUserRecord(userId, email) {
       await client.from('users').upsert({ id: userId, email }, { onConflict: 'id' }).throwOnError();
       await client
         .from('user_credit_accounts')
@@ -794,9 +822,16 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async listItemsPage(userId, options = {}) {
       const normalized = normalizeListOptions(options);
+      const recordTiming = typeof options.recordTiming === 'function' ? options.recordTiming : null;
+      const pageStartedAt = process.hrtime.bigint();
       const { rows, count } = await selectUserSavedItemPage(client, userId, normalized);
+      if (recordTiming) recordTiming('listPageQueryMs', pageStartedAt);
+      const mapStartedAt = process.hrtime.bigint();
       const items = await Promise.all(rows.map((row) => mapItemWithAnalysis(row, client)));
+      if (recordTiming) recordTiming('listPageMapMs', mapStartedAt);
+      const facetStartedAt = process.hrtime.bigint();
       const facetRows = await selectUserRows(client, 'saved_items', userId, 'collections,platform', 10000);
+      if (recordTiming) recordTiming('listFacetQueryMs', facetStartedAt);
       const facets = facetsForItems(facetRows.map((row) => ({
         collections: row.collections || [],
         platform: row.platform || 'Instagram',
@@ -1803,6 +1838,18 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         filters,
       });
     },
+    async searchLean(userId, query, filters = {}, options = {}) {
+      const fetchStartedAt = process.hrtime.bigint();
+      const rows = await selectSearchableSavedItems(client, userId);
+      if (typeof options.recordTiming === 'function') options.recordTiming('searchItemFetchMs', fetchStartedAt);
+      const mapStartedAt = process.hrtime.bigint();
+      const items = await Promise.all(rows.map((row) => mapItemWithAnalysis(row, null)));
+      if (typeof options.recordTiming === 'function') options.recordTiming('searchItemMapMs', mapStartedAt);
+      const scoreStartedAt = process.hrtime.bigint();
+      const results = searchItemsWithDetails(items, query, filters);
+      if (typeof options.recordTiming === 'function') options.recordTiming('searchKeywordScoreMs', scoreStartedAt);
+      return results;
+    },
   };
 }
 
@@ -1984,6 +2031,26 @@ async function selectAllUserSavedItems(client, userId) {
     const { data, error } = await client
       .from('saved_items')
       .select('*, item_analysis(*), item_assets(*)')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+
+  return rows;
+}
+
+async function selectSearchableSavedItems(client, userId) {
+  const pageSize = 1000;
+  const rows = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await client
+      .from('saved_items')
+      .select(SEARCH_ITEM_COLUMNS)
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .range(from, from + pageSize - 1);

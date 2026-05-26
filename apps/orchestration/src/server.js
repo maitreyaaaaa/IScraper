@@ -40,6 +40,8 @@ const { captureWorkflow, cleanText, warnWorkflow } = require('./application/comm
 
 function createApp({ store, config = {}, observability = createObservability(config) }) {
   const app = express();
+  const authUserCache = new Map();
+  const ensuredUserCache = new Map();
   const upload = multer({
     storage: multer.memoryStorage(),
     fileFilter: uploadFileFilter,
@@ -143,13 +145,18 @@ function createApp({ store, config = {}, observability = createObservability(con
     const authStartedAt = process.hrtime.bigint();
     let user;
     try {
-      user = await getUser(req, store);
+      user = await getCachedUser(req, store, config, authUserCache);
     } finally {
       recordRequestTiming(req, 'authMs', authStartedAt);
     }
-    const storeStartedAt = process.hrtime.bigint();
-    await store.ensureUser(user.id, user.email);
-    recordRequestTiming(req, 'storeEnsureUserMs', storeStartedAt);
+    if (typeof store.assertUserNotDeleted === 'function') {
+      const safetyStartedAt = process.hrtime.bigint();
+      await store.assertUserNotDeleted(user.id, user.email);
+      recordRequestTiming(req, 'accountSafetyMs', safetyStartedAt);
+    }
+    const setupStartedAt = process.hrtime.bigint();
+    await ensureUserRecordCached(user, store, config, ensuredUserCache);
+    recordRequestTiming(req, 'userSetupMs', setupStartedAt);
     req.user = user;
     next();
   }));
@@ -163,6 +170,76 @@ function createApp({ store, config = {}, observability = createObservability(con
   app.use(createErrorHandler({ multer, warnWorkflow }));
 
   return app;
+}
+
+function bearerToken(req) {
+  const auth = req.header('authorization') || '';
+  return auth.startsWith('Bearer ') ? auth.slice('Bearer '.length).trim() : '';
+}
+
+function cacheKeyForToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function jwtExpiresAtMs(token) {
+  const [, payload] = String(token || '').split('.');
+  if (!payload) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const exp = Number(decoded.exp);
+    return Number.isFinite(exp) && exp > 0 ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getCachedUser(req, store, config, cache) {
+  const token = bearerToken(req);
+  const ttlMs = Math.max(0, Number(config.authUserCacheTtlMs ?? 60_000));
+  if (!token || typeof store.getUserFromToken !== 'function' || ttlMs === 0) {
+    return getUser(req, store);
+  }
+
+  const now = Date.now();
+  const key = cacheKeyForToken(token);
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > now) return cached.user;
+
+  const user = await store.getUserFromToken(token);
+  const jwtExpiresAt = jwtExpiresAtMs(token);
+  const ttlExpiresAt = now + ttlMs;
+  cache.set(key, {
+    user,
+    expiresAt: jwtExpiresAt ? Math.min(jwtExpiresAt, ttlExpiresAt) : ttlExpiresAt,
+  });
+  pruneCache(cache, now);
+  return user;
+}
+
+async function ensureUserRecordCached(user, store, config, cache) {
+  const ensureUserRecord = typeof store.ensureUserRecord === 'function'
+    ? store.ensureUserRecord.bind(store)
+    : store.ensureUser?.bind(store);
+  if (!ensureUserRecord) return;
+
+  const ttlMs = Math.max(0, Number(config.userSetupCacheTtlMs ?? 10 * 60_000));
+  const key = `${user.id}:${user.email || ''}`;
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (ttlMs > 0 && cached && cached.expiresAt > now) return;
+
+  await ensureUserRecord(user.id, user.email);
+  if (ttlMs > 0) {
+    cache.set(key, { expiresAt: now + ttlMs });
+    pruneCache(cache, now);
+  }
+}
+
+function pruneCache(cache, now = Date.now(), maxSize = 5000) {
+  if (cache.size <= maxSize) return;
+  for (const [key, value] of cache.entries()) {
+    if (!value?.expiresAt || value.expiresAt <= now || cache.size > maxSize) cache.delete(key);
+  }
 }
 
 module.exports = {

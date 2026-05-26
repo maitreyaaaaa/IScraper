@@ -1,4 +1,5 @@
 const { describeLensCrop } = require('../services/lensSearch');
+const { recordRequestTiming } = require('../services/observability');
 const {
   findSimilarVisualItems: findVisualSearchItems,
   publicVisualSearchAnalysis,
@@ -34,7 +35,7 @@ function registerPrivateSearchRoutes(app, deps) {
   app.post('/api/search', searchRateLimit, asyncRoute(async (req, res) => {
     const rawQuery = String(req.body.query || '').trim();
     const query = rawQuery.slice(0, 240);
-    const results = await runSearch({ userId: req.user.id, query, filters: req.body.filters || {} });
+    const results = await runSearch({ req, userId: req.user.id, query, filters: req.body.filters || {} });
     let ai = null;
     if (req.body.includeAi && query && results.length) {
       try {
@@ -47,6 +48,7 @@ function registerPrivateSearchRoutes(app, deps) {
     }
     const searchEventId = createSearchEventId();
     if (typeof store.recordSearchEvent === 'function') {
+      const eventStartedAt = process.hrtime.bigint();
       await store.recordSearchEvent({
         id: searchEventId,
         userId: req.user.id,
@@ -57,6 +59,7 @@ function registerPrivateSearchRoutes(app, deps) {
         includeAi: Boolean(req.body.includeAi),
         resultIds: results.map((item) => item.id),
       });
+      recordRequestTiming(req, 'searchEventInsertMs', eventStartedAt);
     }
     captureWorkflow(req, 'search completed', {
       searchEventId,
@@ -72,7 +75,7 @@ function registerPrivateSearchRoutes(app, deps) {
     await requireCompletedProfile(req, store);
     const rawQuestion = String(req.body.question || '').trim();
     const question = rawQuestion.slice(0, 240);
-    const results = await runSearch({ userId: req.user.id, query: question, filters: { limit: 12 } });
+    const results = await runSearch({ req, userId: req.user.id, query: question, filters: { limit: 12 } });
     try {
       const answer = await runLibraryChatAnswer({
         req,

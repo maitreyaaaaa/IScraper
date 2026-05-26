@@ -1,4 +1,5 @@
 const JSZip = require('jszip');
+const { recordRequestTiming } = require('../services/observability');
 const { buildKnowledgeGraph, buildObsidianFiles } = require('../services/graph');
 const { normalizeReminderInput } = require('../services/libraryCare');
 const {
@@ -62,6 +63,9 @@ function registerLibraryRoutes(app, deps) {
         state: req.query.state,
         collection: req.query.collection,
         platform: req.query.platform,
+        recordTiming(name, startedAt) {
+          recordRequestTiming(req, name, startedAt);
+        },
       });
       return res.json(page);
     }

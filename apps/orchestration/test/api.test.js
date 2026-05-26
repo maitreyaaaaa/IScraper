@@ -59,6 +59,106 @@ test('health endpoint returns aggregate runtime status only', async () => {
   }
 });
 
+test('authenticated middleware caches user setup while preserving deletion safety checks', async () => {
+  let authCalls = 0;
+  let safetyCalls = 0;
+  let setupCalls = 0;
+  const store = {
+    requiresAuth: true,
+    async getUserFromToken(token) {
+      authCalls += 1;
+      assert.equal(token, 'session-token');
+      return { id: 'auth-cache-user', email: 'cache@example.com' };
+    },
+    async assertUserNotDeleted(userId, email) {
+      safetyCalls += 1;
+      assert.equal(userId, 'auth-cache-user');
+      assert.equal(email, 'cache@example.com');
+    },
+    async ensureUserRecord(userId, email) {
+      setupCalls += 1;
+      assert.equal(userId, 'auth-cache-user');
+      assert.equal(email, 'cache@example.com');
+    },
+    async getProfile() {
+      return { username: 'cache_user' };
+    },
+  };
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const headers = { Authorization: 'Bearer session-token' };
+    const first = await fetch(`http://127.0.0.1:${port}/api/profile`, { headers });
+    const second = await fetch(`http://127.0.0.1:${port}/api/profile`, { headers });
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(authCalls, 1);
+    assert.equal(setupCalls, 1);
+    assert.equal(safetyCalls, 2);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('no-AI search uses lean keyword path without semantic provider lookup', async () => {
+  let leanCalls = 0;
+  let fullSearchCalls = 0;
+  let providerLookups = 0;
+  let searchEvents = 0;
+  const store = {
+    supportsSemanticSearch: true,
+    ensureUserRecord() {},
+    async getPreferredProviderCredential() {
+      providerLookups += 1;
+      return null;
+    },
+    async search() {
+      fullSearchCalls += 1;
+      return [];
+    },
+    async searchLean(userId, query, filters) {
+      leanCalls += 1;
+      assert.equal(userId, 'local-dev-user');
+      assert.equal(query, 'SOC 2');
+      assert.deepEqual(filters, {});
+      return [{
+        id: 'lean-1',
+        sourceTitle: 'SOC 2 checklist',
+        searchMatch: { matchedFields: [{ label: 'Title' }], matchTypes: ['keyword'] },
+      }];
+    },
+    async recordSearchEvent({ resultIds, includeAi }) {
+      searchEvents += 1;
+      assert.deepEqual(resultIds, ['lean-1']);
+      assert.equal(includeAi, false);
+    },
+  };
+  const app = createApp({ store, config: { credentialEncryptionKey: 'test-key' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'SOC 2', includeAi: false }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.results.length, 1);
+    assert.equal(leanCalls, 1);
+    assert.equal(fullSearchCalls, 0);
+    assert.equal(providerLookups, 0);
+    assert.equal(searchEvents, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('CORS does not allow arbitrary origins when allowlist is empty', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

@@ -1,4 +1,5 @@
 const { publicDeletionRequest } = require('../services/accountDeletion');
+const { recordRequestTiming } = require('../services/observability');
 const { validateProfileInput } = require('../services/profiles');
 
 function registerAccountRoutes(app, deps) {
@@ -44,7 +45,9 @@ function registerAccountRoutes(app, deps) {
   }));
 
   app.get('/api/profile', asyncRoute(async (req, res) => {
+    const profileStartedAt = process.hrtime.bigint();
     const profile = typeof store.getProfile === 'function' ? await store.getProfile(req.user.id) : null;
+    recordRequestTiming(req, 'profileFetchMs', profileStartedAt);
     res.json({ profile, required: Boolean(store.requiresAuth && !profile?.username) });
   }));
 

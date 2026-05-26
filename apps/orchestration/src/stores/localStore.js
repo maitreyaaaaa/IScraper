@@ -284,6 +284,10 @@ function createLocalStore({ dataPath }) {
 
   function ensureUser(userId, email) {
     assertUserNotDeleted(userId, email);
+    ensureUserRecord(userId, email);
+  }
+
+  function ensureUserRecord(userId, email) {
     if (!state.users.find((user) => user.id === userId)) {
       state.users.push({ id: userId, email, createdAt: now() });
       save();
@@ -350,6 +354,7 @@ function createLocalStore({ dataPath }) {
 
   return {
     ensureUser,
+    ensureUserRecord,
     assertUserNotDeleted,
 
     getActiveDeletionRequest(userId) {

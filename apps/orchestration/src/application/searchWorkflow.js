@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { createOpenRouterEmbedding } = require('../services/embeddings');
 const { createOpenRouterLibraryChatAnswer, createOpenRouterSearchAnswer } = require('../services/aiSearch');
+const { recordRequestTiming } = require('../services/observability');
 const { cleanText, withTimeout } = require('./common');
 
 const aiSearchCache = new Map();
@@ -68,6 +69,16 @@ function publicLensResult(item) {
   };
 }
 
+function recordSearchTiming(req, name, startedAt) {
+  recordRequestTiming(req, name, startedAt);
+}
+
+function semanticSearchRequested(filters = {}) {
+  return filters.semantic === true
+    || filters.semanticSearch === true
+    || filters.mode === 'semantic';
+}
+
 function createSearchWorkflow({ store, config, http }) {
   const { clientIp } = http;
 
@@ -83,12 +94,20 @@ function createSearchWorkflow({ store, config, http }) {
     return Math.max(1, Math.min(Number(config.aiSearchContextLimit || 5), 8));
   }
 
-  async function runSearch({ userId, query, filters = {} }) {
+  async function runSearch({ req = null, userId, query, filters = {} }) {
     let queryEmbedding = null;
-    if (query && config.credentialEncryptionKey && store.supportsSemanticSearch && typeof store.getPreferredProviderCredential === 'function') {
+    const shouldTrySemantic = query
+      && semanticSearchRequested(filters)
+      && config.credentialEncryptionKey
+      && store.supportsSemanticSearch
+      && typeof store.getPreferredProviderCredential === 'function';
+    if (shouldTrySemantic) {
       try {
+        const credentialStartedAt = process.hrtime.bigint();
         const embeddingCredential = await store.getPreferredProviderCredential(userId, 'embedding', config.credentialEncryptionKey);
+        recordSearchTiming(req, 'searchSemanticCredentialMs', credentialStartedAt);
         if (embeddingCredential) {
+          const embeddingStartedAt = process.hrtime.bigint();
           queryEmbedding = await createOpenRouterEmbedding({
             apiKey: embeddingCredential.apiKey,
             model: embeddingCredential.model || config.openRouterEmbeddingModel,
@@ -96,12 +115,25 @@ function createSearchWorkflow({ store, config, http }) {
             dimensions: config.embeddingDimensions,
             inputType: 'search_query',
           });
+          recordSearchTiming(req, 'searchSemanticEmbeddingMs', embeddingStartedAt);
         }
       } catch (error) {
         console.warn(`Semantic query embedding failed: ${error.message}`);
       }
     }
-    return store.search(userId, query, filters, { queryEmbedding });
+    const searchStartedAt = process.hrtime.bigint();
+    const searchOptions = {
+      queryEmbedding,
+      recordTiming(name, startedAt) {
+        recordSearchTiming(req, name, startedAt);
+      },
+    };
+    const useLeanSearch = !queryEmbedding && typeof store.searchLean === 'function';
+    const results = useLeanSearch
+      ? await store.searchLean(userId, query, filters, searchOptions)
+      : await store.search(userId, query, filters, searchOptions);
+    recordSearchTiming(req, useLeanSearch ? 'searchLeanTotalMs' : 'searchFetchMs', searchStartedAt);
+    return results;
   }
 
   async function runAiSearchAnswer({ req, userId, query, results }) {
