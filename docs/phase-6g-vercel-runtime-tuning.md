@@ -82,17 +82,32 @@ Current production status: not active. `npx vercel --prod --yes` rejected this s
 
 ## Post-Deploy Results
 
-Pending deployment verification.
+Production deployment:
+
+- Commit: `7aaf5af`
+- Deployment: `https://iscraper-50nu71oz9-dashboard-me.vercel.app`
+- Production alias: `https://iscraper.vercel.app`
+- Build region: Washington, D.C., USA, `iad1`
+- Function bundle: `api/index`, `5.23MB`, `iad1`
+- Vercel build machine: 2 cores, 8 GB
+
+Smoke checks:
+
+- `GET /api/health` returned `200`, `Cache-Control: no-store`, and an `X-Request-ID`.
+- `GET /api/credit-packages` returned `200` and preserved the existing public response.
+- Conservative deployed load testing used `LOAD_PROFILE=deployed-warmup`.
 
 | Sample | Requests | k6 p95 | k6 p99 | Server max | Cold starts | Result |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Idle-window deployed warmup smoke | TBD | TBD | TBD | TBD | TBD | TBD |
-| Immediate warm deployed warmup smoke | TBD | TBD | TBD | TBD | TBD | TBD |
+| Idle-window deployed warmup smoke | 81 | 592.51 ms | 1.76 s | 4 ms sampled | 0 sampled | Overall passed; admin route-group p95 was 1.6 s on a very small worker-status sample |
+| Immediate warm deployed warmup smoke | 82 | 286.49 ms | 457.22 ms | 8 ms sampled | 0 sampled | Passed |
+
+Vercel log sampling used sanitized `api request completed` events deduped by `requestId`. The sampled route groups were `admin`, `authenticated`, `import`, `public`, and `search`. No user content, captions, URLs, emails, tokens, provider keys, or request bodies were present in the sampled completion logs.
 
 ## Next Decision
 
-If idle-window p95 improves under `1.5s`, keep Vercel and continue gathering real-user and authenticated-flow evidence.
+Idle-window overall p95 improved from Phase 6F `1.96s` to `592.51ms`, and warm p95 improved to `286.49ms`. Keep Vercel for now.
 
-If idle-window p95 still misses but server-side `durationMs` stays low, Phase 6H should test region placement and authenticated real-user flows before any hosting migration.
+The remaining caveat is the idle admin route-group p95: it crossed `1.5s` at `1.6s`, but that group had a tiny sample and represented protected worker-status fallback checks, not user browsing/import/search paths. Treat this as evidence to keep measuring rather than as a platform migration trigger.
 
-If server-side `durationMs`, `authMs`, or `storeEnsureUserMs` becomes high, optimize the corresponding application path before platform changes.
+Phase 6H should test authenticated real-user flows and region placement before any hosting migration. Revisit five-minute cron warmup only after the Vercel account supports schedules more frequent than daily.
