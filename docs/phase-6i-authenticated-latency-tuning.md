@@ -35,6 +35,25 @@ After deploying `0402f0e`, the valid-token load profile still passed all functio
 
 Parsed server logs confirmed `200` responses and no cold starts. Auth and user setup were effectively removed from the hot path (`authMs` p95 `0`, `userSetupMs` p95 `0`), but remaining costs were account safety, item/list mapping, and search item fetching. This led to a follow-up code adjustment in the same phase: timing keys were renamed to avoid sanitizer redaction, and lean search now first tries a bounded candidate fetch before falling back to the full searchable set.
 
+## Second Deployed Result
+
+After deploying the bounded candidate fetch, the valid-token load profile again passed all functional checks but still missed latency thresholds:
+
+| Route group | k6 p95 | k6 p99 | Result |
+| --- | ---: | ---: | --- |
+| authenticated | 4.47 s | 5.28 s | Above target |
+| search | 5.18 s | 5.95 s | Above target |
+
+Parsed server logs showed `50` completed logged requests, all `200`, with `3` cold starts. Server-side p95 improved materially:
+
+| Route group | Server p95 | Main measured cost |
+| --- | ---: | --- |
+| authenticated | 1.82 s | account safety, profile fetch, page/list work |
+| import/indexing summary | 2.42 s | account safety and first-instance user setup |
+| search | 2.82 s | bounded candidate fetch, account safety, first-instance user setup, search-event insert |
+
+Search fetch p95 dropped to about `1.02s` and search total p95 to about `1.10s`, so the remaining blocker is no longer AI or asset-heavy item loading. The remaining evidence points to Supabase request count and query/index cost. A final Phase 6I code adjustment changed Supabase user setup to read existing user and credit rows before writing, so normal existing users avoid repeated upserts when a new serverless instance handles its first request.
+
 ## Validation
 
 Required checks:

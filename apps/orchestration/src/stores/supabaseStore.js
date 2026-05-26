@@ -86,11 +86,29 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       await this.ensureUserRecord(userId, email);
     },
     async ensureUserRecord(userId, email) {
-      await client.from('users').upsert({ id: userId, email }, { onConflict: 'id' }).throwOnError();
-      await client
-        .from('user_credit_accounts')
-        .upsert({ user_id: userId, free_items_limit: FREE_ITEMS_LIMIT }, { onConflict: 'user_id' })
-        .throwOnError();
+      const [
+        { data: userRow, error: userError },
+        { data: creditRow, error: creditError },
+      ] = await Promise.all([
+        client.from('users').select('id,email').eq('id', userId).maybeSingle(),
+        client.from('user_credit_accounts').select('user_id').eq('user_id', userId).maybeSingle(),
+      ]);
+      if (userError) throw userError;
+      if (creditError) throw creditError;
+
+      const writes = [];
+      if (!userRow || userRow.email !== email) {
+        writes.push(client.from('users').upsert({ id: userId, email }, { onConflict: 'id' }).throwOnError());
+      }
+      if (!creditRow) {
+        writes.push(
+          client
+            .from('user_credit_accounts')
+            .upsert({ user_id: userId, free_items_limit: FREE_ITEMS_LIMIT }, { onConflict: 'user_id' })
+            .throwOnError(),
+        );
+      }
+      if (writes.length) await Promise.all(writes);
     },
     async assertUserNotDeleted(userId, email) {
       const userIdHash = hashDeletionValue(userId);
