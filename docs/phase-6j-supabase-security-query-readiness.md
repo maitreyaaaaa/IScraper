@@ -82,6 +82,19 @@ $env:LOAD_PROFILE = 'deployed-auth-readonly'
 npm.cmd run load:auth
 ```
 
+## Deployed Validation Attempt
+
+Production deployment `https://iscraper-8h6gzbivp-dashboard-me.vercel.app` was ready and aliased to `https://iscraper.vercel.app` after commit `04dee97`.
+
+The deployed authenticated load run used the clipboard token at `2026-05-26T21:18:36Z`, but every scenario request returned `401`. Vercel logs confirmed sanitized failures such as:
+
+- `GET /api/profile`: `401`, `authMs` about 215-738 ms.
+- `GET /api/items`: `401`, `authMs` about 213-695 ms.
+- `POST /api/search`: `401`, `authMs` about 213-677 ms.
+- No 5xx responses were observed in this failed-auth run.
+
+This run does not count as authenticated read/search latency evidence because it did not reach account safety, item page fetch, search candidate fetch, or search event insert timings. A fresh browser Supabase access token is required before accepting or rejecting the Phase 6J deployed latency target.
+
 ## Acceptance
 
 Phase 6J is complete when the new local gates pass, query evidence is sanitized and aggregate-only, and the next database action is explicit: apply the reviewed migration later, revise it, or gather more plans. No production database mutation is part of this phase.
