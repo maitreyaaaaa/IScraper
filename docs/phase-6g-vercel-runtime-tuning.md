@@ -18,7 +18,7 @@ Conclusion: the slow path is Vercel/serverless invocation and warmup behavior, n
 - Enabled Vercel Fluid Compute with top-level `"fluid": true`.
 - Kept the API function explicitly in `iad1`.
 - Removed the `memory` setting from `vercel.json` because Fluid Compute does not support configuring memory there.
-- Added Vercel Cron warmup for `GET /api/health` every five minutes.
+- Added the safe `GET /api/health` warmup target. A five-minute Vercel Cron warmup was attempted, but Vercel rejected it because this project is on a Hobby account and schedules more frequent than daily require Pro. The active production config therefore omits the cron until the account supports it.
 - Added `GET /api/health` as a public, aggregate-only runtime endpoint.
 - Extended the k6 harness with health probes and `LOAD_PROFILE=deployed-warmup`.
 
@@ -66,6 +66,19 @@ npm.cmd run load:smoke
 ```
 
 Run once after an idle window and once immediately afterward. Inspect Vercel JSON logs for server-side `durationMs`, `coldStart`, and route group evidence.
+
+## Cron Constraint
+
+Desired warmup:
+
+```json
+{
+  "path": "/api/health",
+  "schedule": "*/5 * * * *"
+}
+```
+
+Current production status: not active. `npx vercel --prod --yes` rejected this schedule on May 27, 2026 because the linked Vercel account is Hobby-tier and only allows daily cron jobs. Do not re-add the five-minute cron to `vercel.json` until the project is on a plan that supports it, or production deploys will fail.
 
 ## Post-Deploy Results
 

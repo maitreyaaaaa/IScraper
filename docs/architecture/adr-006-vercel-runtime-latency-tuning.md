@@ -14,7 +14,7 @@ Keep Vercel as the active UI/API platform and tune the runtime before considerin
 - Enable Vercel Fluid Compute for the deployment.
 - Keep the API function explicitly in `iad1` for now.
 - Add a tiny public `/api/health` endpoint that returns aggregate runtime status only.
-- Add a Vercel Cron warmup that calls `/api/health` every five minutes.
+- Prepare `/api/health` as the warmup target. A Vercel Cron warmup that calls `/api/health` every five minutes is the desired production setting, but it is not active while the project is on a Hobby account because Vercel rejects schedules more frequent than daily on Hobby.
 - Extend load testing to include health probes and deployed warmup evidence.
 
 Fluid Compute is configured with top-level `"fluid": true`. The `memory` override is removed from `vercel.json` because Vercel does not allow `memory` to be set in `vercel.json` when Fluid Compute is enabled.
@@ -24,6 +24,7 @@ Fluid Compute is configured with top-level `"fluid": true`. The `memory` overrid
 - No user-facing API behavior changes.
 - The health endpoint exposes no user data, database data, provider data, URLs, captions, emails, tokens, or secrets.
 - Runtime evidence can now separate app handler time from platform/network/cold-start time.
+- Five-minute cron warmup remains blocked by Vercel plan limits; re-adding it to `vercel.json` before upgrading will break production deployment.
 - Region moves, distributed rate limiting, and API hosting migration remain deferred until evidence justifies them.
 
 ## Deferred
