@@ -1444,6 +1444,64 @@ test('worker process endpoints require a worker key and process bounded queued s
   }
 });
 
+test('admin worker status requires admin auth and returns safe aggregate queue data', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({
+    store,
+    config: {
+      adminApiKey: 'admin-secret',
+      videoDir: path.join(dir, 'videos'),
+      workerBatchSize: 5,
+      workerScanLimit: 20,
+      workerGlobalConcurrency: 1,
+      workerPerUserConcurrency: 1,
+      workerMaxAttempts: 3,
+      workerLeaseMs: 900000,
+    },
+  });
+  const server = app.listen(0);
+
+  try {
+    const importEntry = await store.createImport({
+      userId: 'local-dev-user',
+      source: 'manual-link',
+      fileNames: ['https://example.com/private-url'],
+    });
+    const items = await store.upsertImportData({
+      userId: 'local-dev-user',
+      importId: importEntry.id,
+      initialStatus: 'queued',
+      parsed: {
+        collections: [],
+        items: [
+          { id: 'admin-worker-a', url: 'https://example.com/private-url', contentType: 'unknown', caption: 'Private caption', hashtags: [], collections: [] },
+        ],
+      },
+    });
+    await store.createJobs({ userId: 'local-dev-user', importId: importEntry.id, items });
+
+    const port = server.address().port;
+    const denied = await fetch(`http://127.0.0.1:${port}/api/admin/worker/status`);
+    const allowed = await fetch(`http://127.0.0.1:${port}/api/admin/worker/status`, {
+      headers: { 'x-admin-api-key': 'admin-secret' },
+    });
+    const body = await allowed.json();
+    const serialized = JSON.stringify(body);
+
+    assert.equal(denied.status, 403);
+    assert.equal(allowed.status, 200);
+    assert.equal(body.status.queue.totalJobs, 1);
+    assert.equal(body.status.queue.queued, 1);
+    assert.equal(body.status.worker.batchSize, 5);
+    assert.equal(serialized.includes('Private caption'), false);
+    assert.equal(serialized.includes('private-url'), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('extension token can search Lens text and stops after revoke', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

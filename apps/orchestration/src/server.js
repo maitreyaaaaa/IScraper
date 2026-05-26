@@ -102,7 +102,12 @@ function createApp({ store, config = {}, observability = createObservability(con
       upload,
     },
   };
-  const workflows = createWorkflows({ store, config, http });
+  const workflows = createWorkflows({
+    store,
+    config,
+    http,
+    observability,
+  });
   const deps = { store, config, http, workflows };
 
 

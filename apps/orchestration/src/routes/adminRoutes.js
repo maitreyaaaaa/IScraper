@@ -3,7 +3,7 @@ const { processAccountDeletionRequest, publicDeletionRequest } = require('../ser
 
 function registerAdminRoutes(app, deps) {
   const {
-    config, http, store,
+    config, http, store, workflows,
   } = deps;
   const { assertAdmin } = http.auth;
   const { adminRateLimit } = http.rateLimiters;
@@ -89,6 +89,12 @@ function registerAdminRoutes(app, deps) {
     await assertAdmin(req, config, store);
     if (typeof store.listAdminActivity !== 'function') return res.status(501).json({ error: 'Admin activity is not available.' });
     res.json({ activity: await store.listAdminActivity({ limit: 100 }) });
+  }));
+
+  app.get('/api/admin/worker/status', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof workflows.worker.workerStatus !== 'function') return res.status(501).json({ error: 'Worker status is not available.' });
+    res.json({ status: await workflows.worker.workerStatus() });
   }));
 
   app.get('/api/admin/feedback', adminRateLimit, asyncRoute(async (req, res) => {

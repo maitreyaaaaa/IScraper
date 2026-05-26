@@ -7,8 +7,13 @@ const { createScreenshotWorkflow } = require('./screenshotWorkflow');
 const { createSearchWorkflow } = require('./searchWorkflow');
 const { createWorkerWorkflow } = require('./workerWorkflow');
 
-function createWorkflows({ store, config, http }) {
-  const worker = createWorkerWorkflow({ store, config, http });
+function createWorkflows({ store, config, http, observability = null }) {
+  const worker = createWorkerWorkflow({
+    store,
+    config,
+    http,
+    observability,
+  });
   const archive = createArchiveWorkflow({ store, config });
   const library = createLibraryWorkflow({ store, config, worker });
   const imports = createImportWorkflow({ store, config, archive, library, worker });

@@ -10,6 +10,7 @@ const {
   isRestartableJob,
   isRetryDue,
   PAUSED_JOB_STATUSES,
+  summarizeJobQueue,
 } = require('../services/queue');
 const { searchItemsWithDetails } = require('../services/analyzer');
 const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
@@ -1515,6 +1516,10 @@ function createLocalStore({ dataPath }) {
         pausedApiLimit: byStatus.paused_api_limit || 0,
         byStatus,
       };
+    },
+
+    getWorkerQueueStatus({ maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS } = {}) {
+      return summarizeJobQueue(state.jobs, { maxAttempts });
     },
 
     saveAnalysis(userId, itemId, analysis) {

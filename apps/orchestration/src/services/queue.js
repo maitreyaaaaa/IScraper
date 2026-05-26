@@ -1,5 +1,8 @@
 const ACTIVE_JOB_STATUSES = ['downloading', 'analyzing'];
 const PAUSED_JOB_STATUSES = ['paused_needs_billing', 'paused_api_limit', 'paused_missing_provider'];
+const OPEN_JOB_STATUSES = ['queued', ...ACTIVE_JOB_STATUSES, ...PAUSED_JOB_STATUSES];
+const TERMINAL_JOB_STATUSES = ['done', 'failed'];
+const JOB_STATUSES = [...OPEN_JOB_STATUSES, ...TERMINAL_JOB_STATUSES];
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const DEFAULT_RETRY_BACKOFF_MS = 60 * 1000;
 const DEFAULT_MAX_RETRY_BACKOFF_MS = 30 * 60 * 1000;
@@ -38,6 +41,14 @@ function isRestartableJob(job) {
 
 function isActiveJob(job) {
   return ACTIVE_JOB_STATUSES.includes(job.status);
+}
+
+function isPausedJob(job) {
+  return PAUSED_JOB_STATUSES.includes(job.status);
+}
+
+function isTerminalJob(job) {
+  return TERMINAL_JOB_STATUSES.includes(job.status);
 }
 
 function hasActiveLease(job, now = new Date()) {
@@ -80,19 +91,80 @@ function nextRetryAt({
   return new Date(now.getTime() + delay).toISOString();
 }
 
+function effectiveQueueStatus(job, now = new Date()) {
+  if (isActiveJob(job) && !hasActiveLease(job, now)) return 'queued';
+  return job.status || 'unknown';
+}
+
+function summarizeJobQueue(jobs = [], { now = new Date(), maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS } = {}) {
+  const byStatus = {};
+  let queued = 0;
+  let active = 0;
+  let retrying = 0;
+  let paused = 0;
+  let failed = 0;
+  let exhausted = 0;
+  let oldestQueuedAt = null;
+
+  for (const job of jobs || []) {
+    const status = effectiveQueueStatus(job, now);
+    byStatus[status] = (byStatus[status] || 0) + 1;
+
+    if (status === 'queued') {
+      if (isRetryDue(job, now)) {
+        queued += 1;
+        oldestQueuedAt = oldestIso(oldestQueuedAt, job.createdAt);
+      } else {
+        retrying += 1;
+      }
+    }
+    if (isActiveJob({ status })) active += 1;
+    if (isPausedJob({ status })) paused += 1;
+    if (status === 'failed') {
+      failed += 1;
+      if (isAttemptExhausted(job, maxAttempts)) exhausted += 1;
+    }
+  }
+
+  return {
+    totalJobs: jobs.length,
+    queued,
+    active,
+    retrying,
+    paused,
+    failed,
+    exhausted,
+    oldestQueuedAt,
+    byStatus,
+  };
+}
+
+function oldestIso(current, candidate) {
+  if (!candidate) return current;
+  if (!current) return candidate;
+  return Date.parse(candidate) < Date.parse(current) ? candidate : current;
+}
+
 module.exports = {
   ACTIVE_JOB_STATUSES,
   DEFAULT_MAX_JOB_ATTEMPTS,
   DEFAULT_MAX_RETRY_BACKOFF_MS,
   DEFAULT_RETRY_BACKOFF_MS,
+  JOB_STATUSES,
+  OPEN_JOB_STATUSES,
   PAUSED_JOB_STATUSES,
+  TERMINAL_JOB_STATUSES,
   createJobsForImport,
+  effectiveQueueStatus,
   hasActiveLease,
   isAttemptExhausted,
   isActiveJob,
+  isPausedJob,
   isReclaimableJob,
   isRetryDue,
   isRestartableJob,
+  isTerminalJob,
   nextRetryAt,
   pickNextProcessableJob,
+  summarizeJobQueue,
 };

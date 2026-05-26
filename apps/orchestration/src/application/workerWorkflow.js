@@ -1,42 +1,53 @@
-const { processImportJobs } = require('../services/worker');
+const {
+  createWorkerRuntime,
+  getWorkerStatus,
+  processWorkerScopes,
+  runWorkerPass,
+} = require('../runtime/workerRuntime');
 
-function createWorkerWorkflow({ store, config, http }) {
+function createWorkerWorkflow({
+  store,
+  config,
+  http,
+  observability = null,
+}) {
   const { asyncRoute } = http;
   const { assertWorker } = http.auth;
+  const runtime = createWorkerRuntime({ store, config, observability });
 
-  function runProcessImportJobs({ userId, importId, shouldDownload = false, maxJobs = null }) {
-    return processImportJobs({
-      store,
-      userId,
-      importId,
-      videoDir: config.videoDir,
-      shouldDownload,
-      geminiApiKey: config.geminiApiKey,
-      openRouterApiKey: config.openRouterApiKey,
-      openRouterModel: config.openRouterModel,
-      openRouterMediaModel: config.openRouterMediaModel,
-      openRouterEmbeddingModel: config.openRouterEmbeddingModel,
-      embeddingDimensions: config.embeddingDimensions,
-      indexingConcurrency: config.indexingConcurrency,
-      credentialEncryptionKey: config.credentialEncryptionKey,
-      maxJobs: maxJobs || config.workerBatchSize || 2,
-      leaseOwner: config.workerLeaseOwner,
-      leaseMs: config.workerLeaseMs,
-      perUserConcurrency: config.workerPerUserConcurrency || 1,
-      maxAttempts: config.workerMaxAttempts || 3,
-      retryBackoffMs: config.workerRetryBackoffMs,
-      maxRetryBackoffMs: config.workerMaxRetryBackoffMs,
-    });
+  function runProcessImportJobs({
+    userId,
+    importId,
+    shouldDownload = false,
+    maxJobs = null,
+  }) {
+    return processWorkerScopes({
+      runtime,
+      scopes: [{ userId, importId }],
+      maxJobs: maxJobs || runtime.worker.batchSize,
+      download: shouldDownload,
+      totalJobCap: maxJobs || runtime.worker.batchSize,
+    }).then((result) => result.results.flatMap((entry) => entry.processed));
   }
 
   function startProcessing({ userId, importId, shouldDownload = false, maxJobs = null }) {
-    runProcessImportJobs({ userId, importId, shouldDownload, maxJobs: maxJobs || config.workerBatchSize || 2 }).catch((error) => {
-      console.error('Background processing failed:', error);
+    runProcessImportJobs({
+      userId,
+      importId,
+      shouldDownload,
+      maxJobs: maxJobs || runtime.worker.batchSize,
+    }).catch((error) => {
+      observability?.error?.('background processing failed', {
+        userId,
+        importId,
+        errorName: error?.name || 'Error',
+        errorMessage: error?.message || 'Background processing failed.',
+      });
     });
   }
 
   async function queueIndexingWork({ reason, userId, importId = null, shouldDownload = false, forceInline = false }) {
-    if (forceInline || config.inlineIndexingEnabled === true) {
+    if (forceInline || runtime.worker.inlineIndexingEnabled === true) {
       startProcessing({ userId, importId, shouldDownload });
       return { mode: 'inline', triggered: false };
     }
@@ -47,40 +58,35 @@ function createWorkerWorkflow({ store, config, http }) {
     assertWorker(req, config);
     if (typeof store.getProcessableJobScopes !== 'function') return res.status(501).json({ error: 'Worker job discovery is not available.' });
 
-    const workerBatchCap = Math.max(1, Math.min(Number(config.workerBatchSize) || 2, 5));
+    const workerBatchCap = Math.max(1, Math.min(runtime.worker.batchSize, 5));
     const oneJobRoute = req.path === '/api/worker/process-one';
     const requestedMaxJobs = oneJobRoute ? 1 : Number(req.body?.maxJobs || req.query?.maxJobs) || workerBatchCap;
     const maxJobs = Math.max(1, Math.min(requestedMaxJobs, workerBatchCap));
     const downloadValue = req.body?.download ?? req.query?.download;
-    const scopes = await store.getProcessableJobScopes({
-      limit: maxJobs,
-      perUserConcurrency: config.workerPerUserConcurrency || 1,
-      maxAttempts: config.workerMaxAttempts || 3,
+    const result = await runWorkerPass({
+      runtime,
+      maxJobs,
+      download: downloadValue === true || downloadValue === 'true',
+      scopeLimit: maxJobs,
+      totalJobCap: maxJobs,
     });
-    const processed = [];
-
-    for (const scope of scopes) {
-      if (processed.length >= maxJobs) break;
-      const batch = await runProcessImportJobs({
-        userId: scope.userId,
-        importId: scope.importId,
-        shouldDownload: downloadValue === true || downloadValue === 'true',
-        maxJobs: Math.max(1, maxJobs - processed.length),
-      });
-      processed.push(...batch);
-    }
 
     return res.json({
-      processedCount: processed.length,
-      scopeCount: scopes.length,
+      processedCount: result.processedCount,
+      scopeCount: result.scopeCount,
     });
   });
+
+  function workerStatus() {
+    return getWorkerStatus({ runtime });
+  }
 
   return {
     queueIndexingWork,
     runProcessImportJobs,
     startProcessing,
     workerProcessHandler,
+    workerStatus,
   };
 }
 

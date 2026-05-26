@@ -16,6 +16,7 @@ const { searchItemsWithDetails } = require('../services/analyzer');
 const {
   DEFAULT_MAX_JOB_ATTEMPTS,
   PAUSED_JOB_STATUSES,
+  summarizeJobQueue,
 } = require('../services/queue');
 const { ACTIVE_DELETION_STATUSES, hashDeletionValue } = require('../services/accountDeletion');
 const { NOTE_ASSET_BUCKET, publicNoteAsset } = require('../services/notes');
@@ -1360,6 +1361,22 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         byStatus,
       };
     },
+    async getWorkerQueueStatus({ maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS } = {}) {
+      const rows = await selectAllRows(
+        client,
+        'processing_jobs',
+        'status, attempts, lease_expires_at, next_attempt_at, created_at',
+        (query) => query.in('status', ['queued', 'downloading', 'analyzing', 'done', 'failed', ...PAUSED_JOB_STATUSES]),
+      );
+      const jobs = rows.map((row) => ({
+        status: row.status,
+        attempts: row.attempts,
+        leaseExpiresAt: row.lease_expires_at,
+        nextAttemptAt: row.next_attempt_at,
+        createdAt: row.created_at,
+      }));
+      return summarizeJobQueue(jobs, { maxAttempts });
+    },
     async saveAnalysis(userId, itemId, analysis) {
       await client
         .from('item_analysis')
@@ -2080,6 +2097,27 @@ async function selectAllUserRows(client, table, userId, columns = '*', apply = n
       .from(table)
       .select(columns)
       .eq('user_id', userId)
+      .range(from, from + pageSize - 1);
+    if (apply) query = apply(query);
+    const { data, error } = await query;
+    if (error && error.code === '42P01') return rows;
+    if (error) throw error;
+
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+
+  return rows;
+}
+
+async function selectAllRows(client, table, columns = '*', apply = null) {
+  const pageSize = 1000;
+  const rows = [];
+
+  for (let from = 0; ; from += pageSize) {
+    let query = client
+      .from(table)
+      .select(columns)
       .range(from, from + pageSize - 1);
     if (apply) query = apply(query);
     const { data, error } = await query;
