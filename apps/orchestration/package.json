@@ -7,6 +7,7 @@
     "start": "node index.js",
     "dev": "node index.js",
     "worker": "node src/worker/indexing-runner.js",
+    "worker:once": "node src/worker/run-once.js",
     "test": "node --test test/*.test.js"
   },
   "keywords": [],

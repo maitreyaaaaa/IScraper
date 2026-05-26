@@ -7,7 +7,7 @@
 - The browser should upload export files directly to Supabase Storage.
 - The backend should create safe upload paths, verify ownership, parse uploaded files, and create database records.
 - Indexing should be triggered once per batch, not once per save.
-- Trigger.dev should process durable indexing jobs outside normal user requests.
+- The deterministic `processing_jobs` worker is the current path for durable indexing outside normal user requests.
 
 ## Assumptions
 
@@ -22,7 +22,7 @@
 - Direct browser-to-Supabase upload was chosen over Vercel chunk proxying because it avoids Vercel request body limits and reduces duplicated file transfer.
 - The backend still creates upload paths because it can enforce user ownership and file rules before Storage writes happen.
 - A single batch indexing endpoint was chosen over frontend loops because it avoids spawning many overlapping Vercel workers.
-- Trigger.dev is the primary production drain path. The protected Vercel worker endpoint remains only a fallback/admin diagnostic path.
+- The deterministic `processing_jobs` worker is the current production drain path. The protected Vercel worker endpoint remains a fallback/admin diagnostic path. Trigger.dev/Inngest can be revisited later if operational evidence requires it.
 
 ## Final Design
 
@@ -34,10 +34,9 @@
 6. User clicks Start indexing.
 7. Frontend calls `/api/indexing/start` once.
 8. Backend approves waiting saves and creates `processing_jobs`.
-9. Backend triggers the `indexing-scan` Trigger.dev task when durable indexing is configured.
-10. Trigger.dev runs `indexing-scan` on a schedule and calls `indexing-process-scope` for bounded batches.
-11. Worker processing leases queued or expired active jobs before running them, so overlapping workers skip jobs already leased.
-12. `INLINE_INDEXING_ENABLED=false` is the production default. Inline processing is only a local/fallback escape hatch.
+9. A worker process or protected worker endpoint runs the shared worker runtime for bounded batches.
+10. Worker processing leases queued or expired active jobs before running them, so overlapping workers skip jobs already leased.
+11. `INLINE_INDEXING_ENABLED=false` is the production default. Inline processing is only a local/fallback escape hatch.
 
 ## Current Worker Reliability Contract
 
@@ -50,4 +49,4 @@ The current production path is a long-running worker process plus a protected wo
 - Failed jobs retry with capped backoff through `next_attempt_at` until `WORKER_MAX_ATTEMPTS` is reached.
 - Billing/provider pauses stay paused until the user fixes the required account state.
 
-Trigger.dev remains a valid future drain path, but it is not required for the current reliability hardening. If adopted later, it should call the same scoped worker runtime rather than introduce a separate job state store.
+The deterministic `processing_jobs` worker is the current path; Trigger.dev/Inngest can be revisited later if operational evidence requires it. If adopted later, it should call the same scoped worker runtime rather than introduce a separate job state store.
