@@ -29,7 +29,23 @@ function publicResultSnippet(item, index) {
   };
 }
 
-function buildDeepSeekSearchAnswerRequest({ model = 'deepseek-v4-flash', query, results }) {
+const OPENROUTER_CHAT_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4-pro';
+
+function appReferer() {
+  return process.env.APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173';
+}
+
+function openRouterHeaders(apiKey) {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+    'HTTP-Referer': appReferer(),
+    'X-Title': 'IScraper',
+  };
+}
+
+function buildOpenRouterSearchAnswerRequest({ model = DEFAULT_OPENROUTER_MODEL, query, results }) {
   const snippets = results.map(publicResultSnippet);
   return {
     model,
@@ -52,6 +68,54 @@ function buildDeepSeekSearchAnswerRequest({ model = 'deepseek-v4-flash', query, 
         role: 'user',
         content: JSON.stringify({
           query: compactText(query, 240),
+          snippets,
+        }),
+      },
+    ],
+  };
+}
+
+function compactConversation(messages = []) {
+  return messages
+    .filter((message) => ['user', 'assistant'].includes(message?.role) && compactText(message?.content || message?.text, 1200))
+    .slice(-8)
+    .map((message) => ({
+      role: message.role,
+      content: compactText(message.content || message.text, 1200),
+    }));
+}
+
+function buildOpenRouterLibraryChatRequest({
+  model = DEFAULT_OPENROUTER_MODEL,
+  question,
+  results,
+  messages = [],
+}) {
+  const snippets = results.map(publicResultSnippet);
+  return {
+    model,
+    temperature: 0.2,
+    max_tokens: 1100,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'You are the user-facing IScraper library assistant.',
+          'Answer follow-up questions using only the provided saved-library snippets.',
+          'Use the conversation only to understand context, never as factual evidence.',
+          'Never invent saved items, URLs, facts, brands, or claims not present in the snippets.',
+          'If the snippets do not support an answer, say that the library does not contain enough evidence.',
+          'Keep answers practical, direct, and non-technical.',
+          'Return valid JSON only with this shape:',
+          '{"answer":"string","citations":[{"id":"string","reason":"string","snippet":"string"}],"suggestions":["string"]}',
+        ].join(' '),
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          question: compactText(question, 240),
+          conversation: compactConversation(messages),
           snippets,
         }),
       },
@@ -103,38 +167,64 @@ function normalizeAiSearchAnswer(parsed = {}, results = []) {
   };
 }
 
-async function createDeepSeekSearchAnswer({
+async function createOpenRouterSearchAnswer({
   apiKey,
-  model = 'deepseek-v4-flash',
+  model = DEFAULT_OPENROUTER_MODEL,
   query,
   results,
   fetchImpl = fetch,
 }) {
   if (!apiKey || !compactText(query) || !results?.length) return null;
 
-  const request = buildDeepSeekSearchAnswerRequest({ model, query, results });
-  const response = await fetchImpl('https://api.deepseek.com/chat/completions', {
+  const request = buildOpenRouterSearchAnswerRequest({ model, query, results });
+  const response = await fetchImpl(OPENROUTER_CHAT_ENDPOINT, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
+    headers: openRouterHeaders(apiKey),
     body: JSON.stringify(request),
   });
 
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body?.error?.message || `DeepSeek search answer failed with ${response.status}`);
+    throw new Error(body?.error?.message || `OpenRouter search answer failed with ${response.status}`);
   }
 
   const content = body?.choices?.[0]?.message?.content;
-  if (!content) throw new Error('DeepSeek returned no search answer.');
+  if (!content) throw new Error('OpenRouter returned no search answer.');
+  return normalizeAiSearchAnswer(parseJsonContent(content), results);
+}
+
+async function createOpenRouterLibraryChatAnswer({
+  apiKey,
+  model = DEFAULT_OPENROUTER_MODEL,
+  question,
+  results,
+  messages = [],
+  fetchImpl = fetch,
+}) {
+  if (!apiKey || !compactText(question) || !results?.length) return null;
+
+  const request = buildOpenRouterLibraryChatRequest({ model, question, results, messages });
+  const response = await fetchImpl(OPENROUTER_CHAT_ENDPOINT, {
+    method: 'POST',
+    headers: openRouterHeaders(apiKey),
+    body: JSON.stringify(request),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body?.error?.message || `OpenRouter library chat failed with ${response.status}`);
+  }
+
+  const content = body?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('OpenRouter returned no library chat answer.');
   return normalizeAiSearchAnswer(parseJsonContent(content), results);
 }
 
 module.exports = {
-  buildDeepSeekSearchAnswerRequest,
-  createDeepSeekSearchAnswer,
+  buildOpenRouterLibraryChatRequest,
+  buildOpenRouterSearchAnswerRequest,
+  createOpenRouterLibraryChatAnswer,
+  createOpenRouterSearchAnswer,
   normalizeAiSearchAnswer,
   publicResultSnippet,
 };

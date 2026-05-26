@@ -54,6 +54,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import {
+  askLibraryChat,
   archiveItem,
   approveReviewItem,
   cancelAccountDeletion,
@@ -3416,6 +3417,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [indexingSummary, setIndexingSummary] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
   const [searchMeta, setSearchMeta] = useState({ eventId: '', ai: null, feedback: {} });
+  const [libraryChat, setLibraryChat] = useState({ open: false, query: '', messages: [], loading: false, error: '' });
   const [visualSearch, setVisualSearch] = useState(null);
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
@@ -3593,6 +3595,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     activeSearchRef.current += 1;
     setSearchResults(null);
     setSearchMeta({ eventId: '', ai: null, feedback: {} });
+    setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
     setVisualSearch(null);
     setQuery('');
   }, []);
@@ -3752,6 +3755,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setSmartCollectionItems([]);
           setLibraryCare(null);
           setSearchResults(null);
+          setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
           setVisualSearch(null);
           setCredentials([]);
           setAgentTokens([]);
@@ -3776,6 +3780,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setSmartCollectionItems([]);
         setLibraryCare(null);
         setSearchResults(null);
+        setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
         setVisualSearch(null);
         setCredentials([]);
         setAgentTokens([]);
@@ -3970,6 +3975,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       if (!searchText) {
         setSearchResults(null);
         setSearchMeta({ eventId: '', ai: null, feedback: {} });
+        setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
         setVisualSearch(null);
         await loadItems();
       } else {
@@ -3978,6 +3984,13 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         const mappedResults = (body.results || []).map(mapItem);
         setSearchResults(mappedResults);
         setSearchMeta({ eventId: body.searchEventId || '', ai: body.ai || null, feedback: {} });
+        setLibraryChat({
+          open: true,
+          query: searchText,
+          messages: seedLibraryChatMessages(searchText, body.ai, mappedResults),
+          loading: false,
+          error: '',
+        });
         const suggestedIds = (body.suggestedEnrichmentIds || mappedResults.filter(shouldEnrichItem).slice(0, 3).map((item) => item.id)).slice(0, 3);
         if (suggestedIds.length) {
           enrichIntentBatch(suggestedIds)
@@ -3996,6 +4009,47 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setBusy(false);
     }
   }, [loadItems, mergeUpdatedItem, query, requireSignIn]);
+
+  const handleLibraryChatSubmit = useCallback(async (question) => {
+    const cleanQuestion = String(question || '').trim();
+    if (!cleanQuestion || !requireSignIn('ask your library')) return;
+
+    const userMessage = createLibraryChatMessage('user', cleanQuestion);
+    const requestMessages = [...libraryChat.messages, userMessage]
+      .filter((message) => ['user', 'assistant'].includes(message.role))
+      .map((message) => ({ role: message.role, content: message.content }));
+
+    setLibraryChat((current) => ({
+      ...current,
+      open: true,
+      messages: [...current.messages, userMessage],
+      loading: true,
+      error: '',
+    }));
+
+    try {
+      const body = await askLibraryChat(cleanQuestion, requestMessages);
+      const mappedResults = (body.results || []).map(mapItem);
+      const assistantMessage = createLibraryChatMessage(
+        'assistant',
+        body.ai?.answer || 'I could not find enough saved-library context to answer that.',
+        { ai: body.ai || null, results: mappedResults }
+      );
+      setLibraryChat((current) => ({
+        ...current,
+        query: cleanQuestion,
+        messages: [...current.messages, assistantMessage],
+        loading: false,
+        error: '',
+      }));
+    } catch (err) {
+      setLibraryChat((current) => ({
+        ...current,
+        loading: false,
+        error: err.message,
+      }));
+    }
+  }, [libraryChat.messages, requireSignIn]);
 
   const handleSearchFeedback = async (itemId, rating) => {
     if (!searchMeta.eventId) return;
@@ -4422,6 +4476,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setQuery('');
       setSearchResults(mappedResults);
       setSearchMeta({ eventId: body.searchEventId || '', ai: null, feedback: {} });
+      setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
       setVisualSearch({
         imageDataUrl,
         fileName: file.name || 'Uploaded image',
@@ -4754,6 +4809,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     activationState={activationState}
                     onOpenAdd={() => selectTab('upload')}
                     searchAi={searchMeta.ai}
+                    libraryChatOpen={libraryChat.open}
+                    onOpenLibraryChat={() => setLibraryChat((current) => ({ ...current, open: true }))}
                     searchFeedback={searchMeta.feedback}
                     onSearchFeedback={handleSearchFeedback}
                     scrollRef={dashPanelRef}
@@ -4949,6 +5006,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           </div>
         </div>
       </main>
+
+      <LibraryChatPanel
+        chat={libraryChat}
+        items={searchResults || items}
+        onAsk={handleLibraryChatSubmit}
+        onClose={() => setLibraryChat((current) => ({ ...current, open: false }))}
+        onSelect={openDetail}
+      />
 
       {quickAddOpen && (
         <QuickAddModal
@@ -6840,6 +6905,8 @@ function LibraryTab({
   searchActive,
   searchResultCount,
   searchAi,
+  libraryChatOpen,
+  onOpenLibraryChat,
   searchFeedback,
   query,
   setQuery,
@@ -6999,7 +7066,14 @@ function LibraryTab({
 
       {searchActive && (
         <div className="mx-auto mt-5 max-w-4xl">
-          <SearchAiPanel ai={searchAi} items={items} onSelect={onSelect} />
+          <button
+            type="button"
+            onClick={onOpenLibraryChat}
+            className="inline-flex min-h-11 items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary transition hover:bg-primary/15"
+          >
+            <Sparkles className="h-4 w-4" />
+            {libraryChatOpen ? 'AI answer is open' : searchAi?.answer ? 'Open AI answer' : 'Ask AI about these results'}
+          </button>
         </div>
       )}
 
@@ -7184,6 +7258,32 @@ function firstSearchReason(item) {
   return '';
 }
 
+function createLibraryChatMessage(role, content, extra = {}) {
+  return {
+    id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role,
+    content: String(content || '').trim(),
+    ...extra,
+  };
+}
+
+function seedLibraryChatMessages(query, ai, results = []) {
+  const userMessage = createLibraryChatMessage('user', query);
+  if (ai?.answer || ai?.error) {
+    return [
+      userMessage,
+      createLibraryChatMessage('assistant', ai.answer || ai.error, { ai, results }),
+    ];
+  }
+  const fallback = results.length
+    ? 'I found matching saves. Ask a follow-up and I will answer from your Library.'
+    : 'I could not find enough matching saves yet. Try asking with another topic, creator, tag, or collection.';
+  return [
+    userMessage,
+    createLibraryChatMessage('assistant', fallback, { ai: null, results }),
+  ];
+}
+
 function SearchAiPanel({ ai, items, onSelect }) {
   if (!ai) return null;
   if (ai.error) {
@@ -7218,6 +7318,124 @@ function SearchAiPanel({ ai, items, onSelect }) {
         })}
       </div>
     </div>
+  );
+}
+
+function LibraryChatPanel({ chat, items, onAsk, onClose, onSelect }) {
+  const [draft, setDraft] = useState('');
+  const open = Boolean(chat?.open);
+  const messages = chat?.messages || [];
+  const suggestions = messages
+    .slice()
+    .reverse()
+    .find((message) => message.role === 'assistant' && message.ai?.suggestions?.length)?.ai?.suggestions || [];
+
+  const submit = (event) => {
+    event?.preventDefault();
+    const text = draft.trim();
+    if (!text || chat.loading) return;
+    setDraft('');
+    onAsk(text);
+  };
+
+  if (!open) return null;
+
+  return (
+    <aside className="fixed inset-0 z-40 flex justify-end bg-black/45 backdrop-blur-sm md:bg-black/20" aria-label="Ask your Library">
+      <div className="flex h-full w-full max-w-[30rem] flex-col border-l border-white/10 bg-black shadow-2xl shadow-black">
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 p-5">
+          <div>
+            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em] text-primary">
+              <Sparkles className="h-3.5 w-3.5" /> AI Library
+            </div>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Ask your saves</h2>
+            <p className="mt-1 text-sm leading-5 text-muted-foreground">Answers use your saved items and cite the saves they came from.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
+            aria-label="Close AI Library panel"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-4 overflow-y-auto p-5">
+          {messages.map((message) => {
+            const messageItems = message.results?.length ? message.results : items;
+            if (message.role === 'user') {
+              return (
+                <div key={message.id} className="ml-auto max-w-[85%] rounded-2xl bg-primary px-4 py-3 text-sm font-medium leading-6 text-primary-foreground">
+                  {message.content}
+                </div>
+              );
+            }
+            return (
+              <div key={message.id} className="max-w-full">
+                {message.ai ? (
+                  <SearchAiPanel ai={message.ai} items={messageItems} onSelect={onSelect} />
+                ) : (
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5 text-sm leading-6 text-muted-foreground">
+                    {message.content}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {chat.loading && (
+            <div className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.025] px-4 py-3 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin text-primary" /> Searching your Library...
+            </div>
+          )}
+          {chat.error && (
+            <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              {chat.error}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-white/10 p-4">
+          {suggestions.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {suggestions.slice(0, 3).map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  onClick={() => onAsk(suggestion)}
+                  disabled={chat.loading}
+                  className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-muted-foreground transition hover:border-primary hover:text-foreground disabled:opacity-50"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          )}
+          <form onSubmit={submit} className="flex items-end gap-2 rounded-2xl border border-white/10 bg-white/[0.035] p-2 focus-within:border-primary">
+            <textarea
+              rows={1}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' || event.shiftKey) return;
+                event.preventDefault();
+                submit(event);
+              }}
+              placeholder="Ask a follow-up..."
+              className="max-h-28 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground"
+            />
+            <button
+              type="submit"
+              disabled={!draft.trim() || chat.loading}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Ask follow-up"
+            >
+              {chat.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+            </button>
+          </form>
+        </div>
+      </div>
+    </aside>
   );
 }
 

@@ -12,7 +12,7 @@ const { credentialOptions } = require('./services/providers');
 const { analyzeImageBufferWithCredential, testProviderCredential } = require('./services/providerClients');
 const { formatPrice } = require('./services/credits');
 const { buildKnowledgeGraph, buildObsidianFiles } = require('./services/graph');
-const { createDeepSeekSearchAnswer } = require('./services/aiSearch');
+const { createOpenRouterLibraryChatAnswer, createOpenRouterSearchAnswer } = require('./services/aiSearch');
 const { parseManualLinkPayload } = require('./services/linkSaver');
 const {
   PageArchiveError,
@@ -325,17 +325,17 @@ function createSearchEventId() {
 }
 
 async function runAiSearchAnswer({ config, req, userId, query, results }) {
-  if (config.aiSearchEnabled === false || !config.deepSeekApiKey || !query || !results.length) return null;
+  if (config.aiSearchEnabled === false || !config.openRouterApiKey || !query || !results.length) return null;
   const topResults = results.slice(0, Math.max(1, Math.min(config.aiSearchResultLimit || 8, 12)));
-  const model = config.deepSeekModel || 'deepseek-v4-flash';
+  const model = config.openRouterModel || 'deepseek/deepseek-v4-pro';
   const cacheKey = aiSearchCacheKey({ userId, query, results: topResults, model });
   const cached = aiSearchCache.get(cacheKey);
   const now = Date.now();
   if (cached && cached.expiresAt > now) return { ...cached.value, cached: true };
 
   assertAiSearchUsageAllowed(req, config);
-  const ai = await createDeepSeekSearchAnswer({
-    apiKey: config.deepSeekApiKey,
+  const ai = await createOpenRouterSearchAnswer({
+    apiKey: config.openRouterApiKey,
     model,
     query,
     results: topResults,
@@ -355,6 +355,83 @@ async function runAiSearchAnswer({ config, req, userId, query, results }) {
   }
 
   return value;
+}
+
+function normalizeChatMessages(messages = []) {
+  return Array.isArray(messages)
+    ? messages
+      .filter((message) => ['user', 'assistant'].includes(message?.role))
+      .slice(-8)
+      .map((message) => ({
+        role: message.role,
+        content: cleanText(message.content || message.text || '', 1200),
+      }))
+      .filter((message) => message.content)
+    : [];
+}
+
+async function runLibraryChatAnswer({ store, config, req, userId, question, messages = [], results }) {
+  const cleanQuestion = cleanText(question || '', 240);
+  if (!cleanQuestion) {
+    const error = new Error('Ask a question before chatting with your library.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const topResults = (results || []).slice(0, Math.max(1, Math.min(config.aiSearchResultLimit || 8, 12)));
+  const searchEventId = createSearchEventId();
+  if (typeof store.recordSearchEvent === 'function') {
+    await store.recordSearchEvent({
+      id: searchEventId,
+      userId,
+      query: topResults.length === 0 ? cleanQuestion : '',
+      queryLength: cleanQuestion.length,
+      filters: { source: 'library-chat', limit: topResults.length },
+      resultCount: topResults.length,
+      includeAi: true,
+      resultIds: topResults.map((item) => item.id),
+    });
+  }
+
+  if (!topResults.length) {
+    return {
+      searchEventId,
+      ai: {
+        answer: 'I could not find enough matching saves in your Library to answer that.',
+        citations: [],
+        suggestions: ['Try a different keyword', 'Ask about a creator, topic, or tag'],
+      },
+      results: [],
+    };
+  }
+
+  if (config.aiSearchEnabled === false || !config.openRouterApiKey) {
+    return {
+      searchEventId,
+      ai: {
+        error: 'AI library chat is not configured right now. Showing matching saves instead.',
+        citations: [],
+        suggestions: [],
+      },
+      results: topResults,
+    };
+  }
+
+  assertAiSearchUsageAllowed(req, config);
+  const model = config.openRouterModel || 'deepseek/deepseek-v4-pro';
+  const ai = await createOpenRouterLibraryChatAnswer({
+    apiKey: config.openRouterApiKey,
+    model,
+    question: cleanQuestion,
+    messages: normalizeChatMessages(messages),
+    results: topResults,
+  });
+
+  return {
+    searchEventId,
+    ai: ai ? { ...ai, model, resultIds: topResults.map((item) => item.id), cached: false } : null,
+    results: topResults,
+  };
 }
 
 function securityHeaders(_req, res, next) {
@@ -2655,6 +2732,36 @@ function createApp({ store, config = {}, observability = createObservability(con
       noResults: results.length === 0,
     });
     res.json({ results, ai, searchEventId });
+  }));
+
+  app.post('/api/library-chat', searchRateLimit, asyncRoute(async (req, res) => {
+    await requireCompletedProfile(req, store);
+    const rawQuestion = String(req.body.question || '').trim();
+    const question = rawQuestion.slice(0, 240);
+    const results = await runSearch({ store, config, userId: req.user.id, query: question, filters: { limit: 12 } });
+    try {
+      const answer = await runLibraryChatAnswer({
+        store,
+        config,
+        req,
+        userId: req.user.id,
+        question,
+        messages: req.body.messages || [],
+        results,
+      });
+      captureWorkflow(req, 'library chat answered', {
+        searchEventId: answer.searchEventId,
+        resultCount: answer.results.length,
+        citationCount: answer.ai?.citations?.length || 0,
+      });
+      return res.json(answer);
+    } catch (error) {
+      warnWorkflow(req, 'library chat failed', {
+        statusCode: error.statusCode || 500,
+        resultCount: results.length,
+      });
+      throw error;
+    }
   }));
 
   app.post('/api/visual-search', searchRateLimit, asyncRoute(async (req, res) => {

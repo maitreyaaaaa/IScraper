@@ -217,6 +217,32 @@ test('search logs no-result queries and validates per-result feedback scope', as
   }
 });
 
+test('library chat returns a grounded no-results answer without calling AI', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  store.ensureUser('chat-user', 'chat@example.com');
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/library-chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': 'chat-user', 'x-user-email': 'chat@example.com' },
+      body: JSON.stringify({ question: 'unmatched library chat question', messages: [] }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.results.length, 0);
+    assert.equal(body.ai.citations.length, 0);
+    assert.match(body.ai.answer, /could not find enough matching saves/i);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('items API keeps full-list compatibility and supports paginated library queries', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

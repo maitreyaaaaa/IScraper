@@ -492,6 +492,14 @@ export function searchItems(query, filters = {}, options = {}) {
   });
 }
 
+export function askLibraryChat(question, messages = [], options = {}) {
+  return request('/library-chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, messages, ...options }),
+  });
+}
+
 export function searchVisuals(imageDataUrl, options = {}) {
   return request('/visual-search', {
     method: 'POST',
