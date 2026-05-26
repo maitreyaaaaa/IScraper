@@ -113,6 +113,37 @@ Route breakdown:
 
 Conclusion: the saved environment value is not enough for signed-in route latency evidence. It is likely a Supabase management/project access token or otherwise not a current Supabase Auth user session JWT for this app. The authenticated harness is working correctly because it fails closed instead of treating anonymous responses as success.
 
+A browser-exported Supabase Auth user session token was then used for a deployed read-only run on May 27, 2026. The token was not printed. All checks passed, but the run exceeded the readiness latency threshold:
+
+| Target | Requests | Failed HTTP | Failed checks | k6 p95 | k6 p99 | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `https://iscraper.vercel.app` | 89 | 0.00% | 0.00% | 6.97 s | 7.36 s | Failed latency threshold |
+
+k6 route-group breakdown:
+
+| Route group | p95 | p99 | Notes |
+| --- | ---: | ---: | --- |
+| `authenticated` | 3.53 s | 3.79 s | Profile and library browse reads |
+| `search` | 7.37 s | 7.42 s | `POST /api/search` with `includeAi: false` |
+| `import` | 0 s | 0 s | No import mutation path in read-only mode |
+
+Sanitized Vercel logs for the valid-token run window showed:
+
+| Completed requests | Status | Cold starts | Server p95 | Server p99 | Max server duration | Auth p95 | Store/user p95 |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 48 | `200` | 0 | 6555 ms | 6947 ms | 6947 ms | 619 ms | 1568 ms |
+
+Server route breakdown:
+
+| Route | Count | Route group | Server p95 | Auth p95 | Store/user p95 |
+| --- | ---: | --- | ---: | ---: | ---: |
+| `GET /api/profile` | 11 | `authenticated` | 2136 ms | 288 ms | 1624 ms |
+| `GET /api/items` | 20 | `authenticated` | 3348 ms | 660 ms | 1367 ms |
+| `GET /api/indexing/summary` | 9 | `import` | 3417 ms | 619 ms | 1493 ms |
+| `POST /api/search` | 8 | `search` | 6947 ms | 259 ms | 1568 ms |
+
+Conclusion: Phase 6H now has real signed-in evidence. The current bottleneck is not cold start: all parsed requests were warm. Search is the slowest route group, and store/user setup is also significant across authenticated reads. The next tuning phase should inspect Supabase query shape and search workflow behavior before moving regions or hosting.
+
 ## Acceptance Criteria
 
 - Authenticated read-only profile can run only with an explicit token.
@@ -131,4 +162,4 @@ Use Phase 6H results to decide Phase 6I:
 - If import mutation p95 is high but read-only routes are healthy, tune upload/import queuing before region or hosting changes.
 - If authenticated and mutation paths are healthy, keep Vercel and continue scaling workers and data-layer evidence.
 
-Current next action: get a valid disposable Supabase Auth user session token and rerun `npm.cmd run load:auth`. Do not move hosting or add infrastructure based on the rejected-token run.
+Current next action: Phase 6I should tune authenticated Supabase/store access and the no-AI search path. Do not move hosting or add infrastructure based on Phase 6H alone.
