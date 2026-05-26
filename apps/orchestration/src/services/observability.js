@@ -203,6 +203,7 @@ function routeGroupForPath(pathname = '') {
     '/api/credits/checkout',
   ])) return 'integration';
   if (matchesPath(path, [
+    '/api/health',
     '/api/credit-packages',
     '/api/feedback',
   ])) return 'public';

@@ -1,14 +1,23 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "fluid": true,
   "installCommand": "npm install",
   "buildCommand": "npm run build:web",
   "outputDirectory": "apps/ui/dist",
   "functions": {
     "api/index.js": {
       "maxDuration": 60,
-      "memory": 1024
+      "regions": [
+        "iad1"
+      ]
     }
   },
+  "crons": [
+    {
+      "path": "/api/health",
+      "schedule": "*/5 * * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/(.*)",

@@ -83,6 +83,7 @@ test('routeGroupForPath classifies API routes for observability only', () => {
   assert.equal(routeGroupForPath('/api/search'), 'search');
   assert.equal(routeGroupForPath('/api/search/feedback'), 'search');
   assert.equal(routeGroupForPath('/api/extension/saves/link'), 'integration');
+  assert.equal(routeGroupForPath('/api/health'), 'public');
   assert.equal(routeGroupForPath('/api/credit-packages'), 'public');
   assert.equal(routeGroupForPath('/api/items'), 'authenticated');
 });

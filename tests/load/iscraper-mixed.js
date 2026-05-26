@@ -24,6 +24,7 @@ const profileDefaults = {
     searchVus: 8,
     searchMaxVus: 25,
     workerStatusRate: 1,
+    healthRate: 1,
   },
   deployed: {
     duration: '15s',
@@ -37,6 +38,21 @@ const profileDefaults = {
     searchVus: 4,
     searchMaxVus: 10,
     workerStatusRate: 1,
+    healthRate: 1,
+  },
+  'deployed-warmup': {
+    duration: '15s',
+    browseRate: 1,
+    browseVus: 4,
+    browseMaxVus: 10,
+    importRate: 1,
+    importVus: 3,
+    importMaxVus: 8,
+    searchRate: 1,
+    searchVus: 4,
+    searchMaxVus: 10,
+    workerStatusRate: 1,
+    healthRate: 2,
   },
   custom: {
     duration: '2m',
@@ -50,12 +66,23 @@ const profileDefaults = {
     searchVus: 20,
     searchMaxVus: 100,
     workerStatusRate: 1,
+    healthRate: 1,
   },
 };
 const defaults = profileDefaults[profile] || profileDefaults.custom;
 
 export const options = {
   scenarios: {
+    health_probe: {
+      executor: 'constant-arrival-rate',
+      rate: envNumber('HEALTH_RATE', defaults.healthRate),
+      timeUnit: '1s',
+      duration: __ENV.DURATION || defaults.duration,
+      preAllocatedVUs: 2,
+      maxVUs: 10,
+      exec: 'healthProbe',
+      tags: { load_profile: profile, route_group: 'public' },
+    },
     browse_reads: {
       executor: 'constant-arrival-rate',
       rate: envNumber('BROWSE_RATE', defaults.browseRate),
@@ -103,6 +130,7 @@ export const options = {
     'http_req_duration{route_group:admin}': ['p(95)<1500', 'p(99)<3000'],
     'http_req_duration{route_group:authenticated}': ['p(95)<1500', 'p(99)<3000'],
     'http_req_duration{route_group:import}': ['p(95)<1500', 'p(99)<3000'],
+    'http_req_duration{route_group:public}': ['p(95)<1500', 'p(99)<3000'],
     'http_req_duration{route_group:search}': ['p(95)<1500', 'p(99)<3000'],
     iscraper_failed_checks: ['rate<0.05'],
   },
@@ -132,6 +160,20 @@ function record(response, expectations) {
   const ok = check(response, expectations);
   failureRate.add(!ok);
   return ok;
+}
+
+export function healthProbe() {
+  group('public runtime health', () => {
+    const response = http.get(`${baseUrl}/api/health`, {
+      headers: { 'X-IScraper-Client-Action': 'load-health' },
+      tags: requestTags('public', 'health'),
+    });
+    record(response, {
+      'health returns aggregate status': (res) => res.status === 200,
+      'health does not crash API': (res) => res.status < 500,
+    });
+  });
+  sleep(1);
 }
 
 export function browseReads() {

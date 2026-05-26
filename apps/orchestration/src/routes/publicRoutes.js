@@ -5,6 +5,18 @@ function registerPublicRoutes(app, deps) {
   const { asyncRoute } = http;
   const { feedbackRateLimit } = http.rateLimiters;
 
+  app.get('/api/health', asyncRoute(async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      status: 'ok',
+      runtime: {
+        coldStart: Boolean(req.context?.coldStart),
+        processUptimeMs: Number(req.context?.processUptimeMs || 0),
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }));
+
   app.get('/api/credit-packages', asyncRoute(async (_req, res) => {
     const packages = await store.listCreditPackages();
     res.json({

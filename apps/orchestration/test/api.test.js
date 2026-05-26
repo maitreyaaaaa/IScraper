@@ -30,6 +30,35 @@ test('API responses include a restrictive content security policy', async () => 
   }
 });
 
+test('health endpoint returns aggregate runtime status only', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.match(response.headers.get('x-request-id') || '', /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{7,127}$/);
+    assert.deepEqual(Object.keys(body).sort(), ['runtime', 'status', 'timestamp']);
+    assert.equal(body.status, 'ok');
+    assert.deepEqual(Object.keys(body.runtime).sort(), ['coldStart', 'processUptimeMs']);
+    assert.equal(typeof body.runtime.coldStart, 'boolean');
+    assert.equal(typeof body.runtime.processUptimeMs, 'number');
+    assert.equal(typeof body.timestamp, 'string');
+    assert.equal(JSON.stringify(body).includes('SUPABASE'), false);
+    assert.equal(JSON.stringify(body).includes('TOKEN'), false);
+    assert.equal(JSON.stringify(body).includes('phase6'), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('CORS does not allow arbitrary origins when allowlist is empty', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

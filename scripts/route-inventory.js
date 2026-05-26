@@ -20,8 +20,8 @@ function classify(fileName, routePath) {
 }
 
 function limiterFor(source, lineIndex) {
-  const nearby = source.slice(Math.max(0, lineIndex - 3), lineIndex + 1).join(' ');
-  const match = nearby.match(/\b(adminRateLimit|checkoutRateLimit|feedbackRateLimit|importRateLimit|searchRateLimit|workerRateLimit)\b/);
+  const routeCall = source.slice(lineIndex, Math.min(source.length, lineIndex + 4)).join(' ');
+  const match = routeCall.match(/\b(adminRateLimit|checkoutRateLimit|feedbackRateLimit|importRateLimit|searchRateLimit|workerRateLimit)\b/);
   return match ? match[1] : 'generalRateLimit';
 }
 
