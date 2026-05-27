@@ -90,15 +90,21 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         { data: userRow, error: userError },
         { data: creditRow, error: creditError },
       ] = await Promise.all([
-        client.from('users').select('id,email').eq('id', userId).maybeSingle(),
+        client.from('users').select('id,email,public_ref').eq('id', userId).maybeSingle(),
         client.from('user_credit_accounts').select('user_id').eq('user_id', userId).maybeSingle(),
       ]);
       if (userError) throw userError;
       if (creditError) throw creditError;
 
       const writes = [];
-      if (!userRow || userRow.email !== email) {
-        writes.push(client.from('users').upsert({ id: userId, email }, { onConflict: 'id' }).throwOnError());
+      if (!userRow || userRow.email !== email || !userRow.public_ref) {
+        writes.push(client.from('users').upsert({
+          id: userId,
+          email,
+          public_ref: userRow?.public_ref || publicRefForUser(userId),
+          updated_at: new Date().toISOString(),
+          last_seen_at: new Date().toISOString(),
+        }, { onConflict: 'id' }).throwOnError());
       }
       if (!creditRow) {
         writes.push(
@@ -327,7 +333,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async deleteUserStorageObjects(userId) {
       if (!client.storage) return { deletedObjects: 0, buckets: [], skipped: true };
-      const buckets = ['import-uploads', 'instagram-assets', NOTE_ASSET_BUCKET];
+      const buckets = ['import-uploads', 'instagram-assets', NOTE_ASSET_BUCKET, 'user-data-exports'];
       let deletedObjects = 0;
       const bucketResults = [];
       for (const bucket of buckets) {
@@ -360,6 +366,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         'credit_transactions',
         'admin_credit_adjustments',
         'user_credit_accounts',
+        'user_data_export_requests',
       ]);
       const pendingPurchases = await deleteUserRowsFromTables(client, userId, ['credit_purchases']);
       return { ...deleted, credit_purchases: pendingPurchases.credit_purchases || 0, retainedCreditPurchases: retainedPurchases };
@@ -403,7 +410,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return mapDeletionRequest(data);
     },
     async getPrivacyExport(userId) {
-      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, credentials, extensionTokens, captureConnections, searchEvents, searchFeedback, profile, credits, deletionRequest] = await Promise.all([
+      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, credentials, extensionTokens, captureConnections, searchEvents, searchFeedback, userActivity, analysisUsage, profile, credits, deletionRequest] = await Promise.all([
         this.getItems(userId),
         selectAllUserRows(client, 'item_archives', userId, '*', (query) => query.order('updated_at', { ascending: false })),
         selectAllUserRows(client, 'link_health_checks', userId, '*', (query) => query.order('checked_at', { ascending: false })),
@@ -417,6 +424,8 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         this.listCaptureConnections(userId),
         selectAllUserRows(client, 'search_events', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'search_result_feedback', userId, '*', (query) => query.order('created_at', { ascending: false })),
+        selectAllUserRows(client, 'user_activity_events', userId, '*', (query) => query.order('created_at', { ascending: false })),
+        selectAllUserRows(client, 'analysis_usage_events', userId, '*', (query) => query.order('created_at', { ascending: false })),
         this.getProfile(userId),
         this.getCredits(userId),
         this.getActiveDeletionRequest(userId),
@@ -437,8 +446,250 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         captureConnections,
         searchEvents: searchEvents.map(mapSearchEvent),
         searchFeedback: searchFeedback.map(mapSearchFeedback),
+        userActivity: userActivity.map(mapUserActivity),
+        analysisUsage: analysisUsage.map(mapAnalysisUsage),
         profile,
         deletion: deletionRequest,
+      };
+    },
+    async getAccountSummary(userId) {
+      const { data: user, error } = await client.from('users').select('*').eq('id', userId).maybeSingle();
+      if (error) throw error;
+      if (!user) return null;
+      const [summary, imports, providerCredentials, extensionTokens, captureConnections, deletion, lastActivityRows, lastExportRows] = await Promise.all([
+        this.getAdminUserSummary(user),
+        countRows(client, 'imports', (query) => query.eq('user_id', userId)),
+        countRows(client, 'user_provider_credentials', (query) => query.eq('user_id', userId)),
+        countRows(client, 'extension_tokens', (query) => query.eq('user_id', userId).is('revoked_at', null)),
+        countRows(client, 'capture_connections', (query) => query.eq('user_id', userId)),
+        this.getActiveDeletionRequest(userId),
+        selectUserRows(client, 'user_activity_events', userId, '*', 1),
+        selectLatestDataExportRequest(client, userId),
+      ]);
+      return {
+        ...summary,
+        publicRef: user.public_ref || publicRefForUser(userId),
+        updatedAt: user.updated_at || user.created_at,
+        lastSeenAt: user.last_seen_at || null,
+        counts: {
+          imports,
+          saves: summary.itemStats.total,
+          providerCredentials,
+          extensionTokens,
+          captureConnections,
+        },
+        deletion,
+        lastActivity: lastActivityRows[0] ? mapUserActivity(lastActivityRows[0]) : null,
+        lastExport: lastExportRows[0] ? mapDataExportRequest(lastExportRows[0], []) : null,
+      };
+    },
+    async getDataExportPayload(userId) {
+      const privacy = await this.getPrivacyExport(userId);
+      const [itemAssets, transactions, purchases, adjustments, exportRequests] = await Promise.all([
+        selectAllUserRows(client, 'item_assets', userId, '*', (query) => query.order('created_at', { ascending: false })),
+        selectAllUserRows(client, 'credit_transactions', userId, '*', (query) => query.order('created_at', { ascending: false })),
+        selectAllUserRows(client, 'credit_purchases', userId, '*', (query) => query.order('created_at', { ascending: false })),
+        selectAllUserRows(client, 'admin_credit_adjustments', userId, '*', (query) => query.order('created_at', { ascending: false })),
+        selectAllUserRows(client, 'user_data_export_requests', userId, '*', (query) => query.order('requested_at', { ascending: false })).catch((err) => {
+          if (err?.code === '42P01') return [];
+          throw err;
+        }),
+      ]);
+      return {
+        savedItems: privacy.items,
+        imports: privacy.imports,
+        collections: privacy.collections,
+        smartCollections: privacy.smartCollections,
+        smartCollectionItems: privacy.smartCollectionItems,
+        itemAssets: itemAssets.map(publicNoteAsset),
+        itemArchives: privacy.itemArchives,
+        linkHealthChecks: privacy.linkHealthChecks,
+        itemReminders: privacy.itemReminders,
+        providerCredentials: privacy.providerCredentials,
+        extensionTokens: privacy.extensionTokens,
+        captureConnections: privacy.captureConnections,
+        searchEvents: privacy.searchEvents,
+        searchFeedback: privacy.searchFeedback,
+        userActivity: privacy.userActivity,
+        analysisUsage: privacy.analysisUsage,
+        billing: {
+          credits: privacy.credits,
+          creditTransactions: transactions.map(mapCreditTransaction),
+          creditPurchases: purchases.map(mapCreditPurchase),
+          adminCreditAdjustments: adjustments.map(mapAdminCreditAdjustment),
+        },
+        exportRequests: exportRequests.map((row) => mapDataExportRequest(row, [])),
+      };
+    },
+    async createDataExportRequest(userId, { includeFiles = false } = {}) {
+      const { data, error } = await client
+        .from('user_data_export_requests')
+        .insert({
+          user_id: userId,
+          status: 'requested',
+          format: 'zip',
+          metadata: { includeFiles: Boolean(includeFiles) },
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      await this.recordUserActivity({ userId, eventType: 'data_export_requested', metadata: { requestId: data.id } });
+      return mapDataExportRequest(data, []);
+    },
+    async listDataExportRequests(userId) {
+      const { data, error } = await client
+        .from('user_data_export_requests')
+        .select('*, user_data_export_steps(*)')
+        .eq('user_id', userId)
+        .order('requested_at', { ascending: false })
+        .limit(20);
+      if (error) throw error;
+      return (data || []).map((row) => mapDataExportRequest(row, row.user_data_export_steps || []));
+    },
+    async getDataExportRequest(userId, id) {
+      const { data, error } = await client
+        .from('user_data_export_requests')
+        .select('*, user_data_export_steps(*)')
+        .eq('user_id', userId)
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? mapDataExportRequest(data, data.user_data_export_steps || []) : null;
+    },
+    async claimDataExportRequests({ limit = 1 } = {}) {
+      const claimLimit = Math.max(1, Math.min(Number(limit) || 1, 25));
+      const { data: pending, error: selectError } = await client
+        .from('user_data_export_requests')
+        .select('*')
+        .eq('status', 'requested')
+        .order('requested_at', { ascending: true })
+        .limit(claimLimit);
+      if (selectError) throw selectError;
+      const claimed = [];
+      for (const request of pending || []) {
+        const { data, error } = await client
+          .from('user_data_export_requests')
+          .update({
+            status: 'building',
+            started_at: new Date().toISOString(),
+            error_message: null,
+          })
+          .eq('id', request.id)
+          .eq('status', 'requested')
+          .select('*, user_data_export_steps(*)')
+          .maybeSingle();
+        if (error) throw error;
+        if (data) claimed.push(mapDataExportRequest(data, data.user_data_export_steps || []));
+      }
+      return claimed;
+    },
+    async expireDataExportRequests() {
+      const { data, error } = await client
+        .from('user_data_export_requests')
+        .update({ status: 'expired' })
+        .eq('status', 'ready')
+        .lt('expires_at', new Date().toISOString())
+        .select('id');
+      if (error) throw error;
+      return { expired: data?.length || 0 };
+    },
+    async getDataExportQueueStatus() {
+      const { data, error } = await client
+        .from('user_data_export_requests')
+        .select('status,requested_at')
+        .limit(10000);
+      if (error && error.code === '42P01') {
+        return { requested: 0, building: 0, ready: 0, failed: 0, expired: 0, oldestRequestedAt: null };
+      }
+      if (error) throw error;
+      return (data || []).reduce((status, row) => {
+        if (Object.prototype.hasOwnProperty.call(status, row.status)) status[row.status] += 1;
+        if (row.status === 'requested' && (!status.oldestRequestedAt || row.requested_at < status.oldestRequestedAt)) {
+          status.oldestRequestedAt = row.requested_at;
+        }
+        return status;
+      }, { requested: 0, building: 0, ready: 0, failed: 0, expired: 0, oldestRequestedAt: null });
+    },
+    async markDataExportBuilding(id) {
+      const { data, error } = await client
+        .from('user_data_export_requests')
+        .update({ status: 'building', started_at: new Date().toISOString(), error_message: null })
+        .eq('id', id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      return mapDataExportRequest(data, []);
+    },
+    async markDataExportReady(id, { bucket, path: storagePath, expiresAt, metadata = {} }) {
+      const { data, error } = await client
+        .from('user_data_export_requests')
+        .update({
+          status: 'ready',
+          completed_at: new Date().toISOString(),
+          expires_at: expiresAt,
+          storage_bucket: bucket,
+          storage_path: storagePath,
+          metadata,
+          error_message: null,
+        })
+        .eq('id', id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      await this.recordUserActivity({ userId: data.user_id, eventType: 'data_export_ready', metadata: { requestId: data.id } });
+      return mapDataExportRequest(data, []);
+    },
+    async markDataExportFailed(id, errorMessage) {
+      const { data, error } = await client
+        .from('user_data_export_requests')
+        .update({ status: 'failed', completed_at: new Date().toISOString(), error_message: String(errorMessage || '').slice(0, 240) })
+        .eq('id', id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      return mapDataExportRequest(data, []);
+    },
+    async upsertDataExportStep(requestId, step) {
+      const { data, error } = await client
+        .from('user_data_export_steps')
+        .upsert({
+          request_id: requestId,
+          category: step.category,
+          status: step.status,
+          row_count: step.rowCount || 0,
+          byte_count: step.byteCount || 0,
+          error_message: step.errorMessage || null,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'request_id,category' })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return mapDataExportStep(data);
+    },
+    async saveDataExportArtifact({ bucket, path: storagePath, buffer, contentType }) {
+      await ensureStorageBucket(client, bucket, { public: false, fileSizeLimit: 300 * 1024 * 1024, allowedMimeTypes: ['application/zip'] });
+      const { error } = await client.storage.from(bucket).upload(storagePath, buffer, { contentType, upsert: true });
+      if (error) throw error;
+    },
+    async getDataExportArtifact(userId, requestId) {
+      const request = await this.getDataExportRequest(userId, requestId);
+      if (!request?.storageBucket || !request?.storagePath) return null;
+      const { data, error } = await client.storage.from(request.storageBucket).download(request.storagePath);
+      if (error) throw error;
+      return {
+        contentType: data.type || 'application/zip',
+        buffer: Buffer.from(await data.arrayBuffer()),
+      };
+    },
+    async downloadUserStorageObject({ userId, bucket, path: storagePath }) {
+      if (bucket === 'user-data-exports') return null;
+      if (!['import-uploads', NOTE_ASSET_BUCKET].includes(bucket)) return null;
+      if (!String(storagePath || '').startsWith(`${userId}/`)) return null;
+      const { data, error } = await client.storage.from(bucket).download(storagePath);
+      if (error) throw error;
+      return {
+        contentType: data.type || 'application/octet-stream',
+        buffer: Buffer.from(await data.arrayBuffer()),
       };
     },
     async getUserAdminState(userId) {
@@ -2330,6 +2581,32 @@ async function selectUserRows(client, table, userId, columns = '*', limit = 100)
   return data || [];
 }
 
+async function selectLatestDataExportRequest(client, userId) {
+  const { data, error } = await client
+    .from('user_data_export_requests')
+    .select('*')
+    .eq('user_id', userId)
+    .order('requested_at', { ascending: false })
+    .limit(1);
+  if (error && error.code === '42P01') return [];
+  if (error) throw error;
+  return data || [];
+}
+
+async function ensureStorageBucket(client, bucket, options) {
+  const { error } = await client.storage.getBucket(bucket);
+  if (!error) return bucket;
+  const created = await client.storage.createBucket(bucket, options);
+  if (created.error && !/already exists/i.test(created.error.message || '')) {
+    throw created.error;
+  }
+  return bucket;
+}
+
+function publicRefForUser(userId) {
+  return `usr_${crypto.createHash('sha1').update(String(userId || '')).digest('hex').slice(0, 12)}`;
+}
+
 function countField(rows, field) {
   return rows.reduce((stats, row) => {
     stats[row[field] || 'unknown'] = (stats[row[field] || 'unknown'] || 0) + 1;
@@ -2746,6 +3023,50 @@ function mapExtensionToken(row) {
     lastUsedAt: row.last_used_at,
     expiresAt: row.expires_at,
     revokedAt: row.revoked_at,
+  };
+}
+
+function mapAnalysisUsage(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    itemId: row.item_id,
+    source: row.source,
+    provider: row.provider,
+    model: row.model,
+    createdAt: row.created_at,
+  };
+}
+
+function mapDataExportRequest(row, steps = []) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    status: row.status,
+    format: row.format || 'zip',
+    requestedAt: row.requested_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    expiresAt: row.expires_at,
+    storageBucket: row.storage_bucket || '',
+    storagePath: row.storage_path || '',
+    errorMessage: row.error_message || '',
+    metadata: row.metadata || {},
+    steps: (steps || []).map(mapDataExportStep).sort((a, b) => String(a.category).localeCompare(String(b.category))),
+  };
+}
+
+function mapDataExportStep(row) {
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    category: row.category,
+    status: row.status,
+    rowCount: row.row_count || 0,
+    byteCount: row.byte_count || 0,
+    errorMessage: row.error_message || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 

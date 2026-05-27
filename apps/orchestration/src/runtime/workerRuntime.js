@@ -1,4 +1,5 @@
 const { processImportJobs } = require('../services/worker');
+const { processDataExportRequests } = require('../services/dataExportPipeline');
 
 function createWorkerRuntime({ store, config = {}, observability = null }) {
   return {
@@ -108,12 +109,23 @@ async function runWorkerPass({
     download,
     totalJobCap,
   });
+  const remainingJobs = Math.max(0, effectiveMaxJobs - result.processedCount);
+  const dataExportResults = remainingJobs > 0
+    ? await processDataExportQueue({ runtime, maxJobs: remainingJobs })
+    : [];
+  const processedCount = result.processedCount + dataExportResults.length;
   observability.info('worker pass completed', {
     scopeCount: result.scopeCount,
-    processedCount: result.processedCount,
+    processedCount,
     failedScopeCount: result.failedScopeCount,
+    dataExportProcessedCount: dataExportResults.length,
   });
-  return result;
+  return {
+    ...result,
+    processedCount,
+    dataExportProcessedCount: dataExportResults.length,
+    dataExportResults,
+  };
 }
 
 async function runWorkerLoop({ runtime, sleep = defaultSleep, shouldContinue = () => true } = {}) {
@@ -168,11 +180,27 @@ async function processIndexingScope({ runtime, userId, importId = null, maxJobs 
   });
 }
 
+async function processDataExportQueue({ runtime, maxJobs = 1 } = {}) {
+  const { store, observability } = runtime;
+  try {
+    return await processDataExportRequests({ store, maxJobs });
+  } catch (error) {
+    observability.warn('data export worker failed', {
+      errorName: error?.name || 'Error',
+      errorMessage: error?.message || 'Data export worker failed.',
+    });
+    return [];
+  }
+}
+
 async function getWorkerStatus({ runtime }) {
   const { store, worker } = runtime;
   const queue = typeof store.getWorkerQueueStatus === 'function'
     ? await store.getWorkerQueueStatus({ maxAttempts: worker.maxAttempts })
     : emptyQueueStatus();
+  const dataExports = typeof store.getDataExportQueueStatus === 'function'
+    ? await store.getDataExportQueueStatus()
+    : emptyDataExportQueueStatus();
   return {
     queue: {
       totalJobs: queue.totalJobs || 0,
@@ -184,6 +212,7 @@ async function getWorkerStatus({ runtime }) {
       exhausted: queue.exhausted || 0,
       oldestQueuedAt: queue.oldestQueuedAt || null,
     },
+    dataExports,
     worker: {
       batchSize: worker.batchSize,
       scanLimit: worker.scanLimit,
@@ -193,6 +222,17 @@ async function getWorkerStatus({ runtime }) {
       leaseMs: worker.leaseMs,
       inlineIndexingEnabled: worker.inlineIndexingEnabled,
     },
+  };
+}
+
+function emptyDataExportQueueStatus() {
+  return {
+    requested: 0,
+    building: 0,
+    ready: 0,
+    failed: 0,
+    expired: 0,
+    oldestRequestedAt: null,
   };
 }
 
@@ -232,6 +272,7 @@ module.exports = {
   getWorkerStatus,
   normalizeWorkerConfig,
   processWorkerScopes,
+  processDataExportQueue,
   runWorkerLoop,
   runWorkerPass,
   scanWorkerScopes,

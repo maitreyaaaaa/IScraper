@@ -7,6 +7,41 @@ const JSZip = require('jszip');
 
 const { createApp } = require('../src/server');
 const { createLocalStore } = require('../src/stores/localStore');
+const { EXCLUDED_USER_DATA_TABLES, USER_DATA_CATEGORIES } = require('../src/services/userDataRegistry');
+
+async function waitForDataExportReady({ base, headers, id, attempts = 20 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const response = await fetch(`${base}/data-exports/${id}`, { headers });
+    const body = await response.json();
+    if (body.export?.status === 'ready') return body.export;
+    if (body.export?.status === 'failed') throw new Error(body.export.errorMessage || 'Data export failed.');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('Data export did not become ready.');
+}
+
+test('user data registry covers known user-owned data tables', () => {
+  const represented = new Set(USER_DATA_CATEGORIES.flatMap((category) => category.tables));
+  const excluded = new Set(EXCLUDED_USER_DATA_TABLES.map((entry) => entry.table));
+  [
+    'users',
+    'user_profiles',
+    'saved_items',
+    'imports',
+    'item_assets',
+    'search_events',
+    'user_activity_events',
+    'analysis_usage_events',
+    'user_provider_credentials',
+    'extension_tokens',
+    'capture_connections',
+    'credit_transactions',
+    'account_deletion_requests',
+    'user_data_export_requests',
+  ].forEach((table) => {
+    assert.ok(represented.has(table) || excluded.has(table), `${table} must be represented or explicitly excluded`);
+  });
+});
 
 test('API responses include a restrictive content security policy', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
@@ -248,6 +283,153 @@ test('account deletion request is user-scoped, deduplicated, and blocks risky ac
     const cancelBody = await cancel.json();
     assert.equal(cancel.status, 200);
     assert.equal(cancelBody.deletion.request.status, 'canceled');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('queued data export creates a redacted downloadable zip and enforces ownership', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { workerApiKey: 'worker-secret' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}/api`;
+    const headers = { 'Content-Type': 'application/json', 'x-user-id': 'export-user', 'x-user-email': 'export@example.com' };
+    const otherHeaders = { 'Content-Type': 'application/json', 'x-user-id': 'other-user', 'x-user-email': 'other@example.com' };
+
+    const tokenResponse = await fetch(`${base}/extension-tokens`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Browser test token', scopes: ['saves:create'] }),
+    });
+    const tokenBody = await tokenResponse.json();
+    assert.equal(tokenResponse.status, 201);
+    assert.ok(tokenBody.secret);
+
+    const saveResponse = await fetch(`${base}/saves/link`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ url: 'https://example.com/exported', title: 'Exported save', review: true }),
+    });
+    assert.equal(saveResponse.status, 201);
+
+    const mapResponse = await fetch(`${base}/user-data-map`, { headers });
+    const mapBody = await mapResponse.json();
+    assert.equal(mapResponse.status, 200);
+    assert.ok(mapBody.dataMap.categories.find((category) => category.key === 'access'));
+
+    const accountResponse = await fetch(`${base}/account/summary`, { headers });
+    const accountBody = await accountResponse.json();
+    assert.equal(accountResponse.status, 200);
+    assert.match(accountBody.account.publicRef, /^usr_/);
+
+    const createResponse = await fetch(`${base}/data-exports`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({}),
+    });
+    const createBody = await createResponse.json();
+    assert.equal(createResponse.status, 202);
+    assert.ok(['requested', 'building', 'ready'].includes(createBody.export.status));
+
+    const otherStatus = await fetch(`${base}/data-exports/${createBody.export.id}`, { headers: otherHeaders });
+    assert.equal(otherStatus.status, 404);
+
+    await fetch(`${base}/worker/process-one`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-worker-api-key': 'worker-secret' },
+      body: JSON.stringify({}),
+    });
+    const readyExport = await waitForDataExportReady({ base, headers, id: createBody.export.id });
+    assert.equal(readyExport.status, 'ready');
+    assert.ok(readyExport.steps.length >= 5);
+
+    const downloadResponse = await fetch(`${base}/data-exports/${createBody.export.id}/download`, { headers });
+    assert.equal(downloadResponse.status, 200);
+    assert.equal(downloadResponse.headers.get('content-type'), 'application/zip');
+
+    const zip = await JSZip.loadAsync(Buffer.from(await downloadResponse.arrayBuffer()));
+    const manifest = JSON.parse(await zip.file('manifest.json').async('string'));
+    const extensionTokens = JSON.parse(await zip.file('access/extension-tokens.json').async('string'));
+    const zipText = (await Promise.all(Object.values(zip.files).filter((file) => !file.dir).map((file) => file.async('string')))).join('\n');
+
+    assert.equal(manifest.format, 'zip');
+    assert.equal(extensionTokens.length, 1);
+    assert.equal(extensionTokens[0].tokenHash, undefined);
+    assert.equal(zipText.includes(tokenBody.secret), false);
+    assert.equal(/token_hash|encrypted_key|service_role/i.test(zipText), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('data export includes uploaded files only when explicitly requested', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { workerApiKey: 'worker-secret' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}/api`;
+    const headers = { 'Content-Type': 'application/json', 'x-user-id': 'media-export-user', 'x-user-email': 'media@example.com' };
+    store.ensureUser('media-export-user', 'media@example.com');
+    const item = store.createNoteItem('media-export-user', {
+      id: 'media-item',
+      url: 'note:media-item',
+      contentType: 'note',
+      caption: 'Media item',
+      hashtags: [],
+      collections: [],
+      status: 'done',
+    });
+    store.addItemAsset('media-export-user', item.id, {
+      id: 'media-asset',
+      storagePath: 'data:text/plain;base64,aGVsbG8=',
+      mimeType: 'text/plain',
+    });
+
+    const metadataOnly = await fetch(`${base}/data-exports`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({}),
+    });
+    const metadataOnlyBody = await metadataOnly.json();
+    assert.equal(metadataOnly.status, 202);
+    await fetch(`${base}/worker/process-one`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-worker-api-key': 'worker-secret' },
+      body: JSON.stringify({}),
+    });
+    await waitForDataExportReady({ base, headers, id: metadataOnlyBody.export.id });
+    const metadataZipResponse = await fetch(`${base}/data-exports/${metadataOnlyBody.export.id}/download`, { headers });
+    const metadataZip = await JSZip.loadAsync(Buffer.from(await metadataZipResponse.arrayBuffer()));
+    assert.equal(Boolean(metadataZip.file('media-manifest.json')), false);
+
+    const withFiles = await fetch(`${base}/data-exports`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ includeFiles: true }),
+    });
+    const withFilesBody = await withFiles.json();
+    assert.equal(withFiles.status, 202);
+    await fetch(`${base}/worker/process-one`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-worker-api-key': 'worker-secret' },
+      body: JSON.stringify({}),
+    });
+    await waitForDataExportReady({ base, headers, id: withFilesBody.export.id });
+    const withFilesZipResponse = await fetch(`${base}/data-exports/${withFilesBody.export.id}/download`, { headers });
+    const withFilesZip = await JSZip.loadAsync(Buffer.from(await withFilesZipResponse.arrayBuffer()));
+    const mediaManifest = JSON.parse(await withFilesZip.file('media-manifest.json').async('string'));
+
+    assert.equal(mediaManifest.files.length, 1);
+    assert.equal(await withFilesZip.file(mediaManifest.files[0].zipPath).async('string'), 'hello');
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });

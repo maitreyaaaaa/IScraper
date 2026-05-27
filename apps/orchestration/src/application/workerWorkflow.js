@@ -1,6 +1,7 @@
 const {
   createWorkerRuntime,
   getWorkerStatus,
+  processDataExportQueue,
   processWorkerScopes,
   runWorkerPass,
 } = require('../runtime/workerRuntime');
@@ -46,6 +47,18 @@ function createWorkerWorkflow({
     });
   }
 
+  function startDataExportProcessing({ maxJobs = 1 } = {}) {
+    processDataExportQueue({
+      runtime,
+      maxJobs: Math.max(1, Math.min(Number(maxJobs) || 1, runtime.worker.batchSize)),
+    }).catch((error) => {
+      observability?.error?.('background data export processing failed', {
+        errorName: error?.name || 'Error',
+        errorMessage: error?.message || 'Background data export processing failed.',
+      });
+    });
+  }
+
   async function queueIndexingWork({ reason, userId, importId = null, shouldDownload = false, forceInline = false }) {
     if (forceInline || runtime.worker.inlineIndexingEnabled === true) {
       startProcessing({ userId, importId, shouldDownload });
@@ -74,6 +87,7 @@ function createWorkerWorkflow({
     return res.json({
       processedCount: result.processedCount,
       scopeCount: result.scopeCount,
+      dataExportProcessedCount: result.dataExportProcessedCount || 0,
     });
   });
 
@@ -85,6 +99,7 @@ function createWorkerWorkflow({
     queueIndexingWork,
     runProcessImportJobs,
     startProcessing,
+    startDataExportProcessing,
     workerProcessHandler,
     workerStatus,
   };

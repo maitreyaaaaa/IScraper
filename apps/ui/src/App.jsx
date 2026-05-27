@@ -59,12 +59,16 @@ import {
   approveReviewItem,
   cancelAccountDeletion,
   createAgentAccessToken,
+  createDataExport,
   createExtensionToken,
   createNote,
   deleteProviderCredential,
+  downloadDataExport,
   downloadObsidianGraph,
   getAgentAccessTokens,
   getAccountDeletion,
+  getAccountSummary,
+  getDataExports,
   getItem,
   getItems,
   getItemsPage,
@@ -75,6 +79,7 @@ import {
   getPrivacyExportData,
   getPublicFeedback,
   getProviderCredentials,
+  getUserDataMap,
   getSimilarVisuals,
   importInstagramExport,
   queueStorageImport,
@@ -755,6 +760,16 @@ function deletionStatusCopy(status) {
   })[status] || 'Deletion status is available here.';
 }
 
+function exportStatusLabel(status) {
+  return ({
+    requested: 'Queued',
+    building: 'Building export',
+    ready: 'Ready to download',
+    failed: 'Export failed',
+    expired: 'Expired',
+  })[status] || 'Export request';
+}
+
 function buildDataUsage(items = [], credits = null) {
   const searchableItems = items.filter((item) => item.sourceStatus !== 'needs_review');
   const visualReady = items.filter((item) => ['visual_indexed', 'deep_indexed'].includes(item.indexingStage)).length;
@@ -785,6 +800,17 @@ function buildDataUsage(items = [], credits = null) {
       available: credits?.totalAvailableCredits || 0,
     },
   };
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 function BrandLogo({ className = 'h-8 w-28', align = 'left' }) {
@@ -5104,7 +5130,12 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
   const [credentials, setCredentials] = useState([]);
   const [usageItems, setUsageItems] = useState([]);
   const [credits, setCredits] = useState(null);
+  const [accountSummary, setAccountSummary] = useState(null);
+  const [dataMap, setDataMap] = useState(null);
+  const [dataExports, setDataExports] = useState([]);
+  const [includeExportFiles, setIncludeExportFiles] = useState(false);
   const [usageLoading, setUsageLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
   const [healthByGroup, setHealthByGroup] = useState({});
   const [revealedByGroup, setRevealedByGroup] = useState({});
   const [confirmRevealGroup, setConfirmRevealGroup] = useState(null);
@@ -5150,6 +5181,26 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
   }, [open]);
 
   useEffect(() => {
+    if (!open) return undefined;
+    const hasActiveExport = dataExports.some((request) => ['requested', 'building'].includes(request.status));
+    if (!hasActiveExport) return undefined;
+    let cancelled = false;
+    const interval = window.setInterval(() => {
+      getDataExports()
+        .then((body) => {
+          if (!cancelled) setDataExports(body.exports || []);
+        })
+        .catch((err) => {
+          if (!cancelled) setError(err.message);
+        });
+    }, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [dataExports, open]);
+
+  useEffect(() => {
     if (!open) return;
     let cancelled = false;
     Promise.resolve()
@@ -5177,12 +5228,15 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
     Promise.resolve()
       .then(() => {
         if (!cancelled) setUsageLoading(true);
-        return Promise.all([getItems(), getCredits()]);
+        return Promise.all([getItems(), getCredits(), getAccountSummary(), getUserDataMap(), getDataExports()]);
       })
-      .then(([itemsBody, creditsBody]) => {
+      .then(([itemsBody, creditsBody, accountBody, dataMapBody, exportsBody]) => {
         if (cancelled) return;
         setUsageItems((itemsBody.items || []).map(mapItem));
         setCredits(creditsBody.credits || null);
+        setAccountSummary(accountBody.account || null);
+        setDataMap(dataMapBody.dataMap || null);
+        setDataExports(exportsBody.exports || []);
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);
@@ -5277,27 +5331,46 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
   };
 
   const handlePrivacyExport = async () => {
-    setBusy(true);
+    setExportLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      const body = await createDataExport({ includeFiles: includeExportFiles });
+      const request = body.export || null;
+      const exportsBody = await getDataExports();
+      setDataExports(exportsBody.exports || (request ? [request] : []));
+      if (request?.status === 'ready') {
+        await handleDataExportDownload(request.id);
+        setMessage('Your data export ZIP is ready and downloaded.');
+      } else {
+        setMessage('Your data export request was created. It will be available here when ready.');
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const handleLegacyJsonExport = async () => {
+    setExportLoading(true);
     setError('');
     setMessage('');
     try {
       const body = await getPrivacyExportData();
       const exportData = body.export || {};
-      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `iscraper-privacy-export-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-      setMessage(`Privacy export downloaded with ${exportData.items?.length || 0} saves and ${exportData.imports?.length || 0} imports.`);
+      downloadBlob(new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' }), `iscraper-privacy-export-${new Date().toISOString().slice(0, 10)}.json`);
+      setMessage(`Legacy JSON export downloaded with ${exportData.items?.length || 0} saves and ${exportData.imports?.length || 0} imports.`);
     } catch (err) {
       setError(err.message);
     } finally {
-      setBusy(false);
+      setExportLoading(false);
     }
+  };
+
+  const handleDataExportDownload = async (id) => {
+    const blob = await downloadDataExport(id);
+    downloadBlob(blob, `iscraper-data-export-${new Date().toISOString().slice(0, 10)}.zip`);
   };
 
   const refreshDeletionState = async () => {
@@ -5441,6 +5514,51 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                     A quick view of what is saved, what is searchable, and how much enrichment capacity remains.
                   </p>
                 </div>
+
+                {accountSummary && (
+                  <section className="rounded-2xl border border-primary/25 bg-primary/5 p-5">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Account data model</div>
+                        <h4 className="mt-2 font-display text-2xl font-bold tracking-tight">Support ID {accountSummary.publicRef || 'Not assigned'}</h4>
+                        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                          This is the safe account reference for support. Your internal login ID, sessions, tokens, and secrets stay hidden.
+                        </p>
+                      </div>
+                      <div className="grid min-w-52 gap-2 text-sm">
+                        <div className="flex justify-between gap-4"><span className="text-muted-foreground">Imports</span><span className="font-semibold">{formatUsageNumber(accountSummary.counts?.imports || 0)}</span></div>
+                        <div className="flex justify-between gap-4"><span className="text-muted-foreground">Saves</span><span className="font-semibold">{formatUsageNumber(accountSummary.counts?.saves || 0)}</span></div>
+                        <div className="flex justify-between gap-4"><span className="text-muted-foreground">Connections</span><span className="font-semibold">{formatUsageNumber((accountSummary.counts?.extensionTokens || 0) + (accountSummary.counts?.captureConnections || 0))}</span></div>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {dataMap?.categories?.length > 0 && (
+                  <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Data map</div>
+                        <h4 className="mt-2 font-display text-2xl font-bold tracking-tight">What IScraper keeps</h4>
+                      </div>
+                      <span className="rounded-full border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                        {dataMap.categories.length} categories
+                      </span>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {dataMap.categories.map((category) => (
+                        <div key={category.key} className="rounded-xl border border-white/10 bg-black/50 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-semibold">{category.label}</div>
+                            <span className="rounded-full bg-white/10 px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">{category.sensitivity}</span>
+                          </div>
+                          <p className="mt-2 text-xs leading-5 text-muted-foreground">{category.description}</p>
+                          <p className="mt-2 text-xs leading-5 text-primary">{category.redaction}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
 
                 {usageLoading ? (
                   <div className="grid min-h-56 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] text-sm text-muted-foreground">
@@ -5662,23 +5780,92 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                 </div>
 
                 <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
-                      <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Privacy export</div>
+                      <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Data export</div>
+                      <h4 className="mt-2 font-display text-2xl font-bold tracking-tight">Download your IScraper data</h4>
                       <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                        Download a complete JSON export before requesting deletion. It includes all saved items and all imports returned by the backend export endpoint.
+                        Create a ZIP export with your account summary, saved library, activity records, AI usage, access metadata, credits, privacy request state, and the data map.
                       </p>
+                      <label className="mt-4 flex max-w-xl items-start gap-3 text-sm text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={includeExportFiles}
+                          onChange={(event) => setIncludeExportFiles(event.target.checked)}
+                          className="mt-1 h-4 w-4 accent-primary"
+                        />
+                        <span>
+                          Include uploaded files referenced by your saves. Large or unavailable files are skipped and listed in the export manifest.
+                        </span>
+                      </label>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handlePrivacyExport}
-                      disabled={busy}
-                      className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-                    >
-                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                      Export data
-                    </button>
+                    <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={handlePrivacyExport}
+                        disabled={exportLoading}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+                      >
+                        {exportLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                        Create ZIP export
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleLegacyJsonExport}
+                        disabled={exportLoading}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5 disabled:opacity-60"
+                      >
+                        JSON
+                      </button>
+                    </div>
                   </div>
+                  {dataExports.length > 0 && (
+                    <div className="mt-5 space-y-2">
+                      {dataExports.slice(0, 5).map((request) => (
+                        <div key={request.id} className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <div className="truncate font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{request.id}</div>
+                            <div className="mt-1 font-semibold">{exportStatusLabel(request.status)}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              Requested {formatUsageDate(request.requestedAt)}
+                              {request.expiresAt ? ` - expires ${formatUsageDate(request.expiresAt)}` : ''}
+                              {request.metadata?.includeFiles ? ' - includes uploaded files' : ''}
+                            </div>
+                            {request.steps?.length > 0 && ['requested', 'building'].includes(request.status) && (
+                              <div className="mt-2 text-xs text-muted-foreground">
+                                {request.steps.filter((step) => step.status === 'ready').length}/{request.steps.length} export sections ready
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`rounded-full border px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.16em] ${
+                              request.status === 'failed' ? 'border-destructive/40 text-destructive' : 'border-white/10 text-primary'
+                            }`}>
+                              {request.status}
+                            </span>
+                            {request.status === 'ready' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExportLoading(true);
+                                  setError('');
+                                  handleDataExportDownload(request.id)
+                                    .then(() => setMessage('Data export downloaded.'))
+                                    .catch((err) => setError(err.message))
+                                    .finally(() => setExportLoading(false));
+                                }}
+                                disabled={exportLoading}
+                                className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-60"
+                              >
+                                <Download className="h-3.5 w-3.5" /> Download
+                              </button>
+                            )}
+                          </div>
+                          {request.errorMessage && <div className="text-xs text-destructive">{request.errorMessage}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </section>
 
                 {deletionLoading ? (

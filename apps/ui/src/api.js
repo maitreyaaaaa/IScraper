@@ -150,6 +150,50 @@ export function getPrivacyExportData() {
   return request('/privacy-export');
 }
 
+export function getUserDataMap() {
+  return request('/user-data-map');
+}
+
+export function getAccountSummary() {
+  return request('/account/summary');
+}
+
+export function getDataExports() {
+  return request('/data-exports');
+}
+
+export function createDataExport({ includeFiles = false } = {}) {
+  return request('/data-exports', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ includeFiles }),
+  });
+}
+
+export async function downloadDataExport(id) {
+  const headers = new Headers();
+  const requestId = createRequestId();
+  const endpoint = `/data-exports/${id}/download`;
+  const action = `get:${endpoint}`;
+  headers.set('X-Request-ID', requestId);
+  headers.set('X-IScraper-Client-Action', action);
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+  const response = await fetch(`${API_BASE}${endpoint}`, { headers });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const apiError = new ApiError(body.error || `Request failed: ${response.status}`, {
+      status: response.status,
+      requestId: body.requestId || response.headers.get('x-request-id') || requestId,
+      endpoint,
+      action,
+    });
+    captureClientError(apiError, { requestId: apiError.requestId, endpoint, action, status: response.status });
+    throw apiError;
+  }
+  captureClientEvent('api request completed', { requestId: response.headers.get('x-request-id') || requestId, endpoint, action, status: response.status });
+  return response.blob();
+}
+
 export function getAccountDeletion() {
   return request('/account/deletion');
 }

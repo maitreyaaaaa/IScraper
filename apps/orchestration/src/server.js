@@ -9,6 +9,7 @@ const {
 } = require('./services/notes');
 const { registerAdminRoutes } = require('./routes/adminRoutes');
 const { registerAccountRoutes } = require('./routes/accountRoutes');
+const { registerDataExportRoutes } = require('./routes/dataExportRoutes');
 const { registerImportRoutes } = require('./routes/importRoutes');
 const { registerLibraryRoutes } = require('./routes/libraryRoutes');
 const { registerPrivateIntegrationRoutes } = require('./routes/integrationPrivateRoutes');
@@ -162,6 +163,7 @@ function createApp({ store, config = {}, observability = createObservability(con
   }));
 
   registerAccountRoutes(app, deps);
+  registerDataExportRoutes(app, deps);
   registerLibraryRoutes(app, deps);
   registerPrivateIntegrationRoutes(app, deps);
   registerImportRoutes(app, deps);

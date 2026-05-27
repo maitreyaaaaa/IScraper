@@ -90,6 +90,9 @@ function seedFromLegacyIndex(dataPath) {
     accountDeletionSteps: [],
     accountDeletionAudit: [],
     accountDeletionTombstones: [],
+    dataExportRequests: [],
+    dataExportSteps: [],
+    dataExportArtifacts: [],
     items: legacy.map((item) => ({
       ...item,
       userId: DEFAULT_USER_ID,
@@ -155,6 +158,9 @@ function emptyState() {
     accountDeletionSteps: [],
     accountDeletionAudit: [],
     accountDeletionTombstones: [],
+    dataExportRequests: [],
+    dataExportSteps: [],
+    dataExportArtifacts: [],
   };
 }
 
@@ -188,6 +194,9 @@ function normalizeState(state) {
     accountDeletionSteps: state.accountDeletionSteps || [],
     accountDeletionAudit: state.accountDeletionAudit || [],
     accountDeletionTombstones: state.accountDeletionTombstones || [],
+    dataExportRequests: state.dataExportRequests || [],
+    dataExportSteps: state.dataExportSteps || [],
+    dataExportArtifacts: state.dataExportArtifacts || [],
   };
 }
 
@@ -223,7 +232,10 @@ function adminUserSummary(state, user, credits) {
   return {
     id: user.id,
     email: user.email,
+    publicRef: user.publicRef || publicRefForUser(user.id),
     createdAt: user.createdAt,
+    updatedAt: user.updatedAt || user.createdAt,
+    lastSeenAt: user.lastSeenAt || user.lastSignInAt || null,
     lastSignInAt: user.lastSignInAt || null,
     profile: profile ? publicProfile(profile) : null,
     adminState: adminState || { userId: user.id, status: 'active', blockedAt: null, blockedReason: '' },
@@ -259,6 +271,31 @@ function hydrateLocalItem(state, item, { includeArchiveContent = false } = {}) {
   };
 }
 
+function publicRefForUser(userId) {
+  return `usr_${crypto.createHash('sha1').update(String(userId || '')).digest('hex').slice(0, 12)}`;
+}
+
+function publicDataExportRequest(state, request) {
+  if (!request) return null;
+  return {
+    id: request.id,
+    userId: request.userId,
+    status: request.status,
+    format: request.format || 'zip',
+    requestedAt: request.requestedAt,
+    startedAt: request.startedAt || null,
+    completedAt: request.completedAt || null,
+    expiresAt: request.expiresAt || null,
+    storageBucket: request.storageBucket || '',
+    storagePath: request.storagePath || '',
+    errorMessage: request.errorMessage || '',
+    metadata: request.metadata || {},
+    steps: (state.dataExportSteps || [])
+      .filter((step) => step.requestId === request.id)
+      .sort((a, b) => String(a.category).localeCompare(String(b.category))),
+  };
+}
+
 function publicCaptureConnection(row) {
   if (!row) return null;
   return {
@@ -288,8 +325,27 @@ function createLocalStore({ dataPath }) {
   }
 
   function ensureUserRecord(userId, email) {
-    if (!state.users.find((user) => user.id === userId)) {
-      state.users.push({ id: userId, email, createdAt: now() });
+    const existing = state.users.find((user) => user.id === userId);
+    if (!existing) {
+      state.users.push({
+        id: userId,
+        email,
+        publicRef: publicRefForUser(userId),
+        createdAt: now(),
+        updatedAt: now(),
+        lastSeenAt: now(),
+      });
+      save();
+      return;
+    }
+    const nextRef = existing.publicRef || publicRefForUser(userId);
+    if (existing.email !== email || existing.publicRef !== nextRef || !existing.updatedAt || !existing.lastSeenAt) {
+      Object.assign(existing, {
+        email,
+        publicRef: nextRef,
+        updatedAt: now(),
+        lastSeenAt: now(),
+      });
       save();
     }
   }
@@ -571,6 +627,7 @@ function createLocalStore({ dataPath }) {
     },
 
     deleteUserProfileData(userId) {
+      const exportRequestIds = new Set(state.dataExportRequests.filter((entry) => entry.userId === userId).map((entry) => entry.id));
       const deleted = {
         profiles: deleteFromArrayByUser('profiles', userId),
         userAdminStates: deleteFromArrayByUser('userAdminStates', userId),
@@ -579,7 +636,12 @@ function createLocalStore({ dataPath }) {
         creditTransactions: deleteFromArrayByUser('creditTransactions', userId),
         creditPurchases: deleteFromArrayByUser('creditPurchases', userId),
         adminCreditAdjustments: deleteFromArrayByUser('adminCreditAdjustments', userId),
+        dataExportRequests: deleteFromArrayByUser('dataExportRequests', userId),
+        dataExportArtifacts: deleteFromArrayByUser('dataExportArtifacts', userId),
       };
+      const stepCount = state.dataExportSteps.length;
+      state.dataExportSteps = state.dataExportSteps.filter((step) => !exportRequestIds.has(step.requestId));
+      deleted.dataExportSteps = stepCount - state.dataExportSteps.length;
       save();
       return deleted;
     },
@@ -644,9 +706,222 @@ function createLocalStore({ dataPath }) {
         captureConnections: this.listCaptureConnections(userId),
         searchEvents: state.searchEvents.filter((entry) => entry.userId === userId),
         searchFeedback: state.searchFeedback.filter((entry) => entry.userId === userId),
+        userActivity: state.userActivityEvents.filter((entry) => entry.userId === userId),
+        analysisUsage: state.analysisUsageEvents.filter((entry) => entry.userId === userId),
         profile: this.getProfile(userId),
         deletion: mapDeletionRequest(activeDeletionRequestForUser(userId)),
       };
+    },
+
+    getAccountSummary(userId) {
+      const user = state.users.find((entry) => entry.id === userId);
+      if (!user) return null;
+      const summary = adminUserSummary(state, user, this.getCredits(userId));
+      const lastActivity = state.userActivityEvents
+        .filter((entry) => entry.userId === userId)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0] || null;
+      const lastExport = state.dataExportRequests
+        .filter((entry) => entry.userId === userId)
+        .sort((a, b) => String(b.requestedAt).localeCompare(String(a.requestedAt)))[0] || null;
+      return {
+        ...summary,
+        counts: {
+          imports: state.imports.filter((entry) => entry.userId === userId).length,
+          saves: state.items.filter((entry) => entry.userId === userId).length,
+          providerCredentials: state.providerCredentials.filter((entry) => entry.userId === userId).length,
+          extensionTokens: state.extensionTokens.filter((entry) => entry.userId === userId && !entry.revokedAt).length,
+          captureConnections: state.captureConnections.filter((entry) => entry.userId === userId).length,
+        },
+        deletion: mapDeletionRequest(activeDeletionRequestForUser(userId)),
+        lastActivity,
+        lastExport: lastExport ? publicDataExportRequest(state, lastExport) : null,
+      };
+    },
+
+    getDataExportPayload(userId) {
+      const privacy = this.getPrivacyExport(userId);
+      return {
+        savedItems: privacy.items,
+        imports: privacy.imports,
+        collections: privacy.collections,
+        smartCollections: privacy.smartCollections,
+        smartCollectionItems: privacy.smartCollectionItems,
+        itemAssets: state.itemAssets.filter((entry) => entry.userId === userId).map(publicNoteAsset),
+        itemArchives: privacy.itemArchives,
+        linkHealthChecks: privacy.linkHealthChecks,
+        itemReminders: privacy.itemReminders,
+        providerCredentials: privacy.providerCredentials,
+        extensionTokens: privacy.extensionTokens,
+        captureConnections: privacy.captureConnections,
+        searchEvents: privacy.searchEvents,
+        searchFeedback: privacy.searchFeedback,
+        userActivity: privacy.userActivity,
+        analysisUsage: privacy.analysisUsage,
+        billing: {
+          credits: privacy.credits,
+          creditTransactions: state.creditTransactions.filter((entry) => entry.userId === userId),
+          creditPurchases: state.creditPurchases.filter((entry) => entry.userId === userId),
+          adminCreditAdjustments: state.adminCreditAdjustments.filter((entry) => entry.userId === userId),
+        },
+        exportRequests: state.dataExportRequests
+          .filter((entry) => entry.userId === userId)
+          .map((entry) => publicDataExportRequest(state, entry)),
+      };
+    },
+
+    createDataExportRequest(userId, { includeFiles = false } = {}) {
+      const request = {
+        id: `data-export-${Date.now()}-${state.dataExportRequests.length + 1}`,
+        userId,
+        status: 'requested',
+        format: 'zip',
+        requestedAt: now(),
+        startedAt: null,
+        completedAt: null,
+        expiresAt: null,
+        storageBucket: '',
+        storagePath: '',
+        errorMessage: '',
+        metadata: { includeFiles: Boolean(includeFiles) },
+      };
+      state.dataExportRequests.push(request);
+      this.recordUserActivity({ userId, eventType: 'data_export_requested', metadata: { requestId: request.id } });
+      save();
+      return publicDataExportRequest(state, request);
+    },
+
+    listDataExportRequests(userId) {
+      return state.dataExportRequests
+        .filter((entry) => entry.userId === userId)
+        .sort((a, b) => String(b.requestedAt).localeCompare(String(a.requestedAt)))
+        .map((entry) => publicDataExportRequest(state, entry));
+    },
+
+    getDataExportRequest(userId, id) {
+      return publicDataExportRequest(state, state.dataExportRequests.find((entry) => entry.userId === userId && entry.id === id));
+    },
+
+    claimDataExportRequests({ limit = 1 } = {}) {
+      const claimLimit = Math.max(1, Math.min(Number(limit) || 1, 25));
+      const claimed = state.dataExportRequests
+        .filter((entry) => entry.status === 'requested')
+        .sort((a, b) => String(a.requestedAt).localeCompare(String(b.requestedAt)))
+        .slice(0, claimLimit);
+      for (const request of claimed) {
+        Object.assign(request, { status: 'building', startedAt: now(), errorMessage: '' });
+      }
+      if (claimed.length) save();
+      return claimed.map((request) => publicDataExportRequest(state, request));
+    },
+
+    expireDataExportRequests() {
+      let expired = 0;
+      const timestamp = now();
+      for (const request of state.dataExportRequests) {
+        if (request.status === 'ready' && request.expiresAt && request.expiresAt < timestamp) {
+          request.status = 'expired';
+          expired += 1;
+        }
+      }
+      if (expired) save();
+      return { expired };
+    },
+
+    getDataExportQueueStatus() {
+      const status = {
+        requested: 0,
+        building: 0,
+        ready: 0,
+        failed: 0,
+        expired: 0,
+        oldestRequestedAt: null,
+      };
+      for (const request of state.dataExportRequests) {
+        if (Object.prototype.hasOwnProperty.call(status, request.status)) {
+          status[request.status] += 1;
+        }
+        if (request.status === 'requested' && (!status.oldestRequestedAt || request.requestedAt < status.oldestRequestedAt)) {
+          status.oldestRequestedAt = request.requestedAt;
+        }
+      }
+      return status;
+    },
+
+    markDataExportBuilding(id) {
+      const request = state.dataExportRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      Object.assign(request, { status: 'building', startedAt: now(), errorMessage: '' });
+      save();
+      return publicDataExportRequest(state, request);
+    },
+
+    markDataExportReady(id, { bucket, path: storagePath, expiresAt, metadata = {} }) {
+      const request = state.dataExportRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      Object.assign(request, {
+        status: 'ready',
+        completedAt: now(),
+        expiresAt,
+        storageBucket: bucket,
+        storagePath,
+        metadata,
+        errorMessage: '',
+      });
+      this.recordUserActivity({ userId: request.userId, eventType: 'data_export_ready', metadata: { requestId: request.id } });
+      save();
+      return publicDataExportRequest(state, request);
+    },
+
+    markDataExportFailed(id, errorMessage) {
+      const request = state.dataExportRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      Object.assign(request, { status: 'failed', completedAt: now(), errorMessage: String(errorMessage || 'Data export failed.').slice(0, 240) });
+      save();
+      return publicDataExportRequest(state, request);
+    },
+
+    upsertDataExportStep(requestId, step) {
+      const existing = state.dataExportSteps.find((entry) => entry.requestId === requestId && entry.category === step.category);
+      const next = {
+        requestId,
+        category: step.category,
+        status: step.status,
+        rowCount: step.rowCount || 0,
+        byteCount: step.byteCount || 0,
+        errorMessage: step.errorMessage || '',
+        updatedAt: now(),
+      };
+      if (existing) Object.assign(existing, next);
+      else state.dataExportSteps.push({ id: `data-export-step-${Date.now()}-${state.dataExportSteps.length + 1}`, createdAt: now(), ...next });
+      save();
+      return next;
+    },
+
+    saveDataExportArtifact({ userId, requestId, bucket, path: storagePath, buffer, contentType }) {
+      state.dataExportArtifacts = state.dataExportArtifacts.filter((entry) => entry.requestId !== requestId);
+      state.dataExportArtifacts.push({
+        userId,
+        requestId,
+        bucket,
+        storagePath,
+        contentType,
+        data: Buffer.from(buffer).toString('base64'),
+        createdAt: now(),
+      });
+      save();
+    },
+
+    getDataExportArtifact(userId, requestId) {
+      const artifact = state.dataExportArtifacts.find((entry) => entry.userId === userId && entry.requestId === requestId);
+      if (!artifact) return null;
+      return {
+        contentType: artifact.contentType,
+        buffer: Buffer.from(artifact.data, 'base64'),
+      };
+    },
+
+    downloadUserStorageObject() {
+      return null;
     },
 
     getUserAdminState(userId) {
