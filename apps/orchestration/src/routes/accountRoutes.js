@@ -1,6 +1,7 @@
 const { publicDeletionRequest } = require('../services/accountDeletion');
 const { recordRequestTiming } = require('../services/observability');
 const { validateProfileInput } = require('../services/profiles');
+const { recordSecurityAuditForRequest, recordSupportEvent } = require('../services/auditLog');
 
 function registerAccountRoutes(app, deps) {
   const { http, store } = deps;
@@ -11,6 +12,12 @@ function registerAccountRoutes(app, deps) {
       ? await store.getActiveDeletionRequest(req.user.id)
       : null;
     res.json({ deletion: publicDeletionRequest(deletion) });
+  }));
+
+  app.get('/api/account/security-activity', asyncRoute(async (req, res) => {
+    if (typeof store.listUserSecurityActivity !== 'function') return res.json({ activity: [] });
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 20), 50));
+    res.json({ activity: await store.listUserSecurityActivity(req.user.id, { limit }) });
   }));
 
   app.post('/api/account/deletion', asyncRoute(async (req, res) => {
@@ -27,14 +34,33 @@ function registerAccountRoutes(app, deps) {
     if (typeof store.freezeUserForDeletion === 'function') {
       await store.freezeUserForDeletion(req.user.id, { requestId: request.id, actor: 'user-request' });
     }
+    let current = request;
+    if (typeof store.markDeletionRequestFrozen === 'function') {
+      current = await store.markDeletionRequestFrozen(request.id);
+    }
+    if (typeof store.markDeletionRequestPendingReview === 'function') {
+      current = await store.markDeletionRequestPendingReview(request.id);
+    }
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'account_deletion_requested',
+      severity: 'critical',
+      targetUserId: req.user.id,
+      metadata: { deletionRequestId: request.id },
+    });
     captureWorkflow(req, 'account deletion requested', { deletionRequestId: request.id });
-    res.status(201).json({ deletion: publicDeletionRequest(request) });
+    res.status(201).json({ deletion: publicDeletionRequest(current) });
   }));
 
   app.post('/api/account/deletion/cancel', asyncRoute(async (req, res) => {
     if (typeof store.cancelDeletionRequestForUser !== 'function') return res.status(501).json({ error: 'Account deletion requests are not available.' });
     const request = await store.cancelDeletionRequestForUser(req.user.id);
     if (!request) return res.status(409).json({ error: 'This deletion request can no longer be canceled.' });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'account_deletion_canceled',
+      severity: 'warning',
+      targetUserId: req.user.id,
+      metadata: { deletionRequestId: request.id },
+    });
     captureWorkflow(req, 'account deletion canceled', { deletionRequestId: request.id });
     res.json({ deletion: publicDeletionRequest(request) });
   }));
@@ -53,10 +79,10 @@ function registerAccountRoutes(app, deps) {
 
   app.post('/api/activity/sign-in', asyncRoute(async (req, res) => {
     if (typeof store.recordUserActivity === 'function') {
-      await store.recordUserActivity({
+      await recordSupportEvent(store, {
         userId: req.user.id,
         eventType: 'sign_in',
-        metadata: { email: req.user.email },
+        metadata: { method: 'session' },
       });
     }
     captureWorkflow(req, 'sign in activity recorded', {});

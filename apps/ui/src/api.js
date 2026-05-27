@@ -158,8 +158,54 @@ export function getAccountSummary() {
   return request('/account/summary');
 }
 
+export function getAccountSecurityActivity({ limit = 20 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return request(`/account/security-activity?${query}`);
+}
+
 export function getDataExports() {
   return request('/data-exports');
+}
+
+export function getAdminUserDetail(userId) {
+  return request(`/admin/users/${userId}`);
+}
+
+function adminHeaders(adminKey = '') {
+  return adminKey ? { 'x-admin-api-key': adminKey } : {};
+}
+
+export function getAdminSummary(adminKey = '') {
+  return request('/admin/summary', { headers: adminHeaders(adminKey) });
+}
+
+export function getAdminUsers(adminKey = '', { query = '', limit = 25 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (query) params.set('q', query);
+  return request(`/admin/users?${params}`, { headers: adminHeaders(adminKey) });
+}
+
+export function getAdminUserDetailWithKey(adminKey = '', userId) {
+  return request(`/admin/users/${userId}`, { headers: adminHeaders(adminKey) });
+}
+
+export function getAdminUserTimelineWithKey(adminKey = '', userId, { limit = 50 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return request(`/admin/users/${userId}/timeline?${query}`, { headers: adminHeaders(adminKey) });
+}
+
+export function getAdminUserTimeline(userId, { limit = 100 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return request(`/admin/users/${userId}/timeline?${query}`);
+}
+
+export function getAdminAuditEvents(filters = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value == null || value === '') continue;
+    query.set(key, String(value));
+  }
+  return request(`/admin/audit-events${query.toString() ? `?${query}` : ''}`);
 }
 
 export function createDataExport({ includeFiles = false } = {}) {

@@ -2,6 +2,7 @@ const JSZip = require('jszip');
 const { getUserDataMap, getUserDataCategories } = require('./userDataRegistry');
 const { NOTE_ASSET_BUCKET } = require('./notes');
 const { storagePathBelongsToUser } = require('./storageImports');
+const { sanitizeAuditString } = require('./auditLog');
 
 const DATA_EXPORT_BUCKET = 'user-data-exports';
 const DATA_EXPORT_FORMAT = 'zip';
@@ -45,10 +46,11 @@ async function buildUserDataExport({ store, userId, requestId, includeFiles = fa
       publicRef: account?.publicRef || null,
       email: account?.email || null,
     },
-    categories: categories.map(({ key, label, exportPath, sensitivity, redaction }) => ({
+    categories: categories.map(({ key, label, exportPath, classification, sensitivity, redaction }) => ({
       key,
       label,
       exportPath,
+      classification,
       sensitivity,
       redaction,
     })),
@@ -84,6 +86,7 @@ async function buildUserDataExport({ store, userId, requestId, includeFiles = fa
     'activity/user-activity.json': exportData.userActivity || [],
     'ai/analysis-usage.json': exportData.analysisUsage || [],
     'access/provider-credentials.json': exportData.providerCredentials || [],
+    'access/legacy-ai-keys.json': exportData.legacyAiKeys || [],
     'access/extension-tokens.json': exportData.extensionTokens || [],
     'access/capture-connections.json': exportData.captureConnections || [],
     'billing/credits.json': exportData.billing || { credits: privacy.credits || null },
@@ -195,6 +198,7 @@ function buildPayloadFromPrivacyExport(privacy = {}) {
     linkHealthChecks: privacy.linkHealthChecks || [],
     itemReminders: privacy.itemReminders || [],
     providerCredentials: privacy.providerCredentials || [],
+    legacyAiKeys: privacy.legacyAiKeys || [],
     extensionTokens: privacy.extensionTokens || [],
     captureConnections: privacy.captureConnections || [],
     searchEvents: privacy.searchEvents || [],
@@ -215,7 +219,7 @@ function rowCount(value) {
 
 function safeExportError(error) {
   const message = String(error?.message || 'Data export failed.');
-  return message.slice(0, 240);
+  return sanitizeAuditString(message) || 'Data export failed.';
 }
 
 function createMediaManifest({ includeFiles, maxBytes, maxFiles }) {

@@ -1,4 +1,17 @@
+const fs = require('node:fs');
+const path = require('node:path');
+
 const SUPABASE_API_BASE = 'https://api.supabase.com/v1';
+const ROOT = path.resolve(__dirname, '..');
+
+for (const envPath of [
+  path.join(ROOT, '.env'),
+  path.join(ROOT, '.vercel/.env.production.local'),
+  path.join(ROOT, 'apps/orchestration/.env'),
+  path.join(ROOT, 'apps/ui/.env'),
+]) {
+  if (fs.existsSync(envPath)) loadEnvFile(envPath);
+}
 
 const EXPLAIN_QUERIES = [
   {
@@ -67,6 +80,23 @@ function projectRefFromEnv(env = process.env) {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL;
   const match = String(url || '').match(/^https:\/\/([a-z0-9]+)\.supabase\.co/i);
   return match ? match[1] : '';
+}
+
+function loadEnvFile(envPath) {
+  const text = fs.readFileSync(envPath, 'utf8');
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const index = trimmed.indexOf('=');
+    if (index <= 0) continue;
+    const key = trimmed.slice(0, index).trim();
+    if (process.env[key] != null) continue;
+    let value = trimmed.slice(index + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
 }
 
 async function runReadOnlyQuery({ token, projectRef, sql, fetchImpl = fetch }) {

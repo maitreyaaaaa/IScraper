@@ -1,4 +1,5 @@
 const { getUserDataMap } = require('../services/userDataRegistry');
+const { recordSecurityAuditForRequest } = require('../services/auditLog');
 
 function registerDataExportRoutes(app, deps) {
   const { http, store, workflows } = deps;
@@ -22,6 +23,12 @@ function registerDataExportRoutes(app, deps) {
     if (typeof store.createDataExportRequest !== 'function') return res.status(501).json({ error: 'Data exports are not available.' });
     const includeFiles = req.body?.includeFiles === true;
     const request = await store.createDataExportRequest(req.user.id, { includeFiles });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'data_export_requested',
+      severity: 'warning',
+      targetUserId: req.user.id,
+      metadata: { exportRequestId: request.id, includeFiles },
+    });
     captureWorkflow(req, 'data export requested', { exportRequestId: request.id, includeFiles });
     workflows?.worker?.startDataExportProcessing?.({ maxJobs: 1 });
     res.status(202).json({ export: request });
@@ -41,6 +48,12 @@ function registerDataExportRoutes(app, deps) {
     if (request.status !== 'ready') return res.status(409).json({ error: 'Data export is not ready yet.' });
     const artifact = await store.getDataExportArtifact(req.user.id, req.params.id);
     if (!artifact) return res.status(404).json({ error: 'Data export file not found.' });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'data_export_downloaded',
+      severity: 'warning',
+      targetUserId: req.user.id,
+      metadata: { exportRequestId: request.id },
+    });
     captureWorkflow(req, 'data export downloaded', { exportRequestId: request.id });
     res.setHeader('Content-Type', artifact.contentType || 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="iscraper-data-export.zip"');

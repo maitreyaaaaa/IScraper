@@ -29,6 +29,7 @@ const {
 } = require('../services/smartCollections');
 const { publicArchive } = require('../services/pageArchive');
 const { publicLinkHealth, publicReminder } = require('../services/libraryCare');
+const { sanitizeAuditMetadata } = require('../services/auditLog');
 
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
 const IMPORT_INSERT_BATCH_SIZE = 500;
@@ -136,14 +137,14 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .from('account_deletion_requests')
         .select('id,status')
         .is('user_id', null)
-        .in('status', [...ACTIVE_DELETION_STATUSES, 'completed'])
+        .in('status', [...ACTIVE_DELETION_STATUSES, 'completed', 'logged'])
         .or(`user_id_hash.eq.${userIdHash},email_hash.eq.${emailHash}`)
         .limit(1);
       if (requestError && requestError.code === '42P01') return;
       if (requestError) throw requestError;
       if (detachedRequests?.length) {
         const deleted = new Error('This account is pending deletion or has been deleted. Contact support if this looks wrong.');
-        deleted.statusCode = detachedRequests[0].status === 'completed' ? 410 : 423;
+        deleted.statusCode = ['completed', 'logged'].includes(detachedRequests[0].status) ? 410 : 423;
         throw deleted;
       }
     },
@@ -176,10 +177,10 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         user_id: userId,
         user_id_hash: hashDeletionValue(userId),
         email_hash: hashDeletionValue(email),
-        status: 'pending_approval',
+        status: 'requested',
         reason: String(reason || '').trim().slice(0, 500),
         export_confirmed: Boolean(exportConfirmed),
-        status_message: 'Deletion request is waiting for admin review.',
+        status_message: 'Deletion request received.',
       };
       const { data, error } = await client
         .from('account_deletion_requests')
@@ -188,11 +189,12 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .single();
       if (error?.code === '23505') return this.getActiveDeletionRequest(userId);
       if (error) throw error;
+      await this.recordUserActivity({ userId, eventType: 'deletion_requested', metadata: { requestId: data.id } });
       return mapDeletionRequest(data);
     },
     async cancelDeletionRequestForUser(userId) {
       const active = await this.getActiveDeletionRequest(userId);
-      if (!active || !['requested', 'pending_approval'].includes(active.status)) return null;
+      if (!active || !['requested', 'frozen', 'pending_approval'].includes(active.status)) return null;
       const { data, error } = await client
         .from('account_deletion_requests')
         .update({
@@ -205,6 +207,36 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .select('*, account_deletion_steps(*)')
         .single();
       if (error) throw error;
+      return mapDeletionRequest(data);
+    },
+    async markDeletionRequestFrozen(id) {
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .update({
+          status: 'frozen',
+          status_message: 'Risky account access is frozen. Waiting for review.',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select('*, account_deletion_steps(*)')
+        .single();
+      if (error) throw error;
+      if (data?.user_id) await this.recordUserActivity({ userId: data.user_id, eventType: 'deletion_frozen', metadata: { requestId: data.id } });
+      return mapDeletionRequest(data);
+    },
+    async markDeletionRequestPendingReview(id) {
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .update({
+          status: 'pending_approval',
+          status_message: 'Deletion request is waiting for admin review.',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select('*, account_deletion_steps(*)')
+        .single();
+      if (error) throw error;
+      if (data?.user_id) await this.recordUserActivity({ userId: data.user_id, eventType: 'deletion_pending_review', metadata: { requestId: data.id } });
       return mapDeletionRequest(data);
     },
     async listDeletionRequests({ limit = 50 } = {}) {
@@ -227,16 +259,17 @@ function createSupabaseStore({ url, serviceRoleKey }) {
           updated_at: new Date().toISOString(),
         })
         .eq('id', id)
-        .in('status', ['requested', 'pending_approval', 'partially_failed'])
+        .in('status', ['requested', 'frozen', 'pending_approval', 'failed', 'partially_failed'])
         .select('*, account_deletion_steps(*)')
         .maybeSingle();
       if (error) throw error;
+      if (data?.user_id) await this.recordUserActivity({ userId: data.user_id, eventType: 'deletion_approved', metadata: { requestId: data.id } });
       return data ? mapDeletionRequest(data) : this.getDeletionRequestById(id);
     },
     async cancelDeletionRequestAsAdmin({ id, adminActor, reason = '' }) {
       const existing = await this.getDeletionRequestById(id);
       if (!existing) return null;
-      if (['executing', 'completed'].includes(existing.status)) return existing;
+      if (['executing', 'completed', 'logged'].includes(existing.status)) return existing;
       const { data, error } = await client
         .from('account_deletion_requests')
         .update({
@@ -265,14 +298,31 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .select('*, account_deletion_steps(*)')
         .single();
       if (error) throw error;
+      if (data?.user_id) await this.recordUserActivity({ userId: data.user_id, eventType: 'deletion_executing', metadata: { requestId: data.id } });
       return mapDeletionRequest(data);
     },
     async markDeletionRequestPartiallyFailed(id, message) {
       const { data, error } = await client
         .from('account_deletion_requests')
         .update({
-          status: 'partially_failed',
-          status_message: String(message || 'Deletion partially failed. Admin retry is required.').slice(0, 500),
+          status: 'failed',
+          status_message: String(message || 'Deletion failed. Admin retry is required.').slice(0, 500),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select('*, account_deletion_steps(*)')
+        .single();
+      if (error) throw error;
+      if (data?.user_id) await this.recordUserActivity({ userId: data.user_id, eventType: 'deletion_failed', metadata: { requestId: data.id, error: message } });
+      return mapDeletionRequest(data);
+    },
+    async markDeletionRequestLogged(id) {
+      const { data, error } = await client
+        .from('account_deletion_requests')
+        .update({
+          status: 'logged',
+          logged_at: new Date().toISOString(),
+          status_message: 'Deletion is complete and logged.',
           updated_at: new Date().toISOString(),
         })
         .eq('id', id)
@@ -283,8 +333,15 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async recordDeletionStep({ requestId, stepKey, status, error = '', metadata = {} }) {
       const nowIso = new Date().toISOString();
+      const { data: request, error: requestError } = await client
+        .from('account_deletion_requests')
+        .select('user_id')
+        .eq('id', requestId)
+        .maybeSingle();
+      if (requestError) throw requestError;
       const row = {
         request_id: requestId,
+        user_id: request?.user_id || null,
         step_key: stepKey,
         status,
         redacted_error: error || null,
@@ -410,7 +467,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return mapDeletionRequest(data);
     },
     async getPrivacyExport(userId) {
-      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, credentials, extensionTokens, captureConnections, searchEvents, searchFeedback, userActivity, analysisUsage, profile, credits, deletionRequest] = await Promise.all([
+      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, credentials, legacyAiKeys, extensionTokens, captureConnections, searchEvents, searchFeedback, userActivity, analysisUsage, profile, credits, deletionRequest] = await Promise.all([
         this.getItems(userId),
         selectAllUserRows(client, 'item_archives', userId, '*', (query) => query.order('updated_at', { ascending: false })),
         selectAllUserRows(client, 'link_health_checks', userId, '*', (query) => query.order('checked_at', { ascending: false })),
@@ -420,6 +477,10 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         selectAllUserRows(client, 'smart_collections', userId, '*', (query) => query.order('updated_at', { ascending: false })),
         selectAllUserRows(client, 'smart_collection_items', userId, '*', (query) => query.order('updated_at', { ascending: false })),
         this.listProviderCredentials(userId),
+        selectAllUserRows(client, 'user_ai_keys', userId, 'provider,key_hint,created_at,updated_at', (query) => query.order('updated_at', { ascending: false })).catch((err) => {
+          if (err?.code === '42P01') return [];
+          throw err;
+        }),
         this.listExtensionTokens(userId),
         this.listCaptureConnections(userId),
         selectAllUserRows(client, 'search_events', userId, '*', (query) => query.order('created_at', { ascending: false })),
@@ -442,6 +503,12 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         smartCollectionItems,
         credits,
         providerCredentials: credentials,
+        legacyAiKeys: legacyAiKeys.map((row) => ({
+          provider: row.provider,
+          keyHint: row.key_hint || '',
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })),
         extensionTokens,
         captureConnections,
         searchEvents: searchEvents.map(mapSearchEvent),
@@ -506,6 +573,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         linkHealthChecks: privacy.linkHealthChecks,
         itemReminders: privacy.itemReminders,
         providerCredentials: privacy.providerCredentials,
+        legacyAiKeys: privacy.legacyAiKeys || [],
         extensionTokens: privacy.extensionTokens,
         captureConnections: privacy.captureConnections,
         searchEvents: privacy.searchEvents,
@@ -647,13 +715,21 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .select('*')
         .single();
       if (error) throw error;
+      await this.recordUserActivity({ userId: data.user_id, eventType: 'data_export_failed', metadata: { requestId: data.id, error: errorMessage } });
       return mapDataExportRequest(data, []);
     },
     async upsertDataExportStep(requestId, step) {
+      const { data: request, error: requestError } = await client
+        .from('user_data_export_requests')
+        .select('user_id')
+        .eq('id', requestId)
+        .maybeSingle();
+      if (requestError) throw requestError;
       const { data, error } = await client
         .from('user_data_export_steps')
         .upsert({
           request_id: requestId,
+          user_id: request?.user_id || null,
           category: step.category,
           status: step.status,
           row_count: step.rowCount || 0,
@@ -672,9 +748,15 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
     },
     async getDataExportArtifact(userId, requestId) {
-      const request = await this.getDataExportRequest(userId, requestId);
-      if (!request?.storageBucket || !request?.storagePath) return null;
-      const { data, error } = await client.storage.from(request.storageBucket).download(request.storagePath);
+      const { data: request, error: requestError } = await client
+        .from('user_data_export_requests')
+        .select('storage_bucket,storage_path')
+        .eq('user_id', userId)
+        .eq('id', requestId)
+        .maybeSingle();
+      if (requestError) throw requestError;
+      if (!request?.storage_bucket || !request?.storage_path) return null;
+      const { data, error } = await client.storage.from(request.storage_bucket).download(request.storage_path);
       if (error) throw error;
       return {
         contentType: data.type || 'application/zip',
@@ -767,6 +849,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .select('*')
         .single();
       if (error) throw error;
+      await this.recordUserActivity({ userId, eventType: 'extension_token_created', metadata: { tokenId: data.id, scopeCount: scopes.length } });
       return publicExtensionToken(mapExtensionToken(data));
     },
     async listExtensionTokens(userId) {
@@ -786,6 +869,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .eq('id', id)
         .select('id');
       if (error) throw error;
+      if (data?.length) await this.recordUserActivity({ userId, eventType: 'extension_token_revoked', metadata: { tokenId: id } });
       return Boolean(data?.length);
     },
     async getUserForExtensionToken(tokenHash, requiredScope = 'lens:search') {
@@ -825,6 +909,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .select('*')
         .single();
       if (error) throw error;
+      await this.recordUserActivity({ userId, eventType: 'capture_connection_saved', metadata: { connectionId: data.id, provider: normalizedProvider } });
       return publicCaptureConnection(mapCaptureConnection(data));
     },
     async getCaptureConnection(provider, externalId) {
@@ -855,8 +940,11 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .eq('provider', String(provider || '').trim().toLowerCase())
         .eq('external_id', String(externalId || '').trim())
         .is('revoked_at', null)
-        .select('id');
+        .select('id,user_id,provider');
       if (error) throw error;
+      if (data?.length) {
+        await this.recordUserActivity({ userId: data[0].user_id, eventType: 'capture_connection_revoked', metadata: { connectionId: data[0].id, provider: data[0].provider } });
+      }
       return Boolean(data?.length);
     },
     async listCaptureConnections(userId) {
@@ -976,7 +1064,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       await this.recordUserActivity({
         userId,
-        eventType: 'import_created',
+        eventType: status === 'queued_storage' ? 'import_started' : 'import_completed',
         metadata: { importId: data.id, source, fileCount: fileNames.length },
       });
       return mapImport(data);
@@ -989,6 +1077,13 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .eq('id', id)
         .maybeSingle();
       if (error) throw error;
+      if (data?.user_id) {
+        await this.recordUserActivity({
+          userId: data.user_id,
+          eventType: status === 'failed' ? 'import_failed' : status === 'imported' ? 'import_completed' : 'import_status_changed',
+          metadata: { importId: data.id, status, errorCategory: errorMessage ? 'import_error' : '' },
+        });
+      }
       return data ? mapImport(data) : null;
     },
     async getPendingStorageImports({ limit = 1 } = {}) {
@@ -1828,12 +1923,49 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     async recordUserActivity({ userId, eventType, metadata = {} }) {
       const { data, error } = await client
         .from('user_activity_events')
-        .insert({ user_id: userId, event_type: eventType, metadata })
+        .insert({ user_id: userId, event_type: eventType, metadata: sanitizeAuditMetadata(metadata) })
         .select('*')
         .single();
       if (error && error.code === '42P01') return null;
       if (error) throw error;
       return mapUserActivity(data);
+    },
+    async recordSecurityAudit({
+      actorUserId = null,
+      actorType = 'system',
+      targetUserId = null,
+      eventType,
+      severity = 'info',
+      result = 'success',
+      requestId = '',
+      route = '',
+      method = '',
+      ipHash = '',
+      userAgentHash = '',
+      metadata = {},
+    }) {
+      if (!eventType) return null;
+      const { data, error } = await client
+        .from('security_audit_events')
+        .insert({
+          actor_user_id: isUuid(actorUserId) ? actorUserId : null,
+          actor_type: actorType,
+          target_user_id: isUuid(targetUserId) ? targetUserId : null,
+          event_type: eventType,
+          severity,
+          result,
+          request_id: requestId || null,
+          route: route || null,
+          method: method || null,
+          ip_hash: ipHash || null,
+          user_agent_hash: userAgentHash || null,
+          metadata: sanitizeAuditMetadata(metadata),
+        })
+        .select('*')
+        .single();
+      if (error && error.code === '42P01') return null;
+      if (error) throw error;
+      return mapSecurityAuditEvent(data);
     },
     async addCreditTransaction({ userId, amount, reason = 'manual', itemId = null, metadata = {} }) {
       const numericAmount = Number(amount || 0);
@@ -1852,6 +1984,11 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .update({ paid_credits: nextPaidCredits })
         .eq('user_id', userId)
         .throwOnError();
+      await this.recordUserActivity({
+        userId,
+        eventType: 'credit_changed',
+        metadata: { amount: numericAmount, reason, itemId: itemId || '' },
+      });
     },
     async addAdminCreditAdjustment({ userId, amount, reason, adminActor }) {
       await this.addCreditTransaction({
@@ -1960,15 +2097,32 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       const { data: user, error } = await client.from('users').select('*').eq('id', userId).maybeSingle();
       if (error) throw error;
       if (!user) return null;
-      const [summary, transactions, purchases, adjustments] = await Promise.all([
+      const [summary, transactions, purchases, adjustments, imports, providerCredentials, extensionTokens, captureConnections, jobs, deletion, lastActivityRows] = await Promise.all([
         this.getAdminUserSummary(user),
         selectUserRows(client, 'credit_transactions', userId, '*', 100),
         selectUserRows(client, 'credit_purchases', userId, '*', 50),
         selectUserRows(client, 'admin_credit_adjustments', userId, '*', 50),
+        countRows(client, 'imports', (query) => query.eq('user_id', userId)),
+        countRows(client, 'user_provider_credentials', (query) => query.eq('user_id', userId)),
+        countRows(client, 'extension_tokens', (query) => query.eq('user_id', userId).is('revoked_at', null)),
+        countRows(client, 'capture_connections', (query) => query.eq('user_id', userId)),
+        selectRows(client, 'processing_jobs', 'status', 10000, (query) => query.eq('user_id', userId)),
+        this.getActiveDeletionRequest(userId),
+        selectUserRows(client, 'user_activity_events', userId, '*', 1),
       ]);
 
       return {
         ...summary,
+        counts: {
+          imports,
+          saves: summary.itemStats.total,
+          providerCredentials,
+          extensionTokens,
+          captureConnections,
+        },
+        jobStats: countField(jobs, 'status'),
+        deletion,
+        lastActivity: lastActivityRows[0] ? mapUserActivity(lastActivityRows[0]) : null,
         creditTransactions: transactions.map(mapCreditTransaction),
         purchases: purchases.map(mapCreditPurchase),
         adminAdjustments: adjustments.map(mapAdminCreditAdjustment),
@@ -2005,6 +2159,59 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error && error.code === '42P01') return [];
       if (error) throw error;
       return data.map((row) => ({ ...mapUserActivity(row), user: row.users || null }));
+    },
+    async listUserTimeline(userId, { limit = 100 } = {}) {
+      const { data, error } = await client
+        .from('user_activity_events')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(Math.max(1, Math.min(Number(limit) || 100, 200)));
+      if (error && error.code === '42P01') return [];
+      if (error) throw error;
+      return (data || []).map(mapUserActivity);
+    },
+    async listUserSecurityActivity(userId, { limit = 20 } = {}) {
+      const safeLimit = Math.max(1, Math.min(Number(limit) || 20, 50));
+      const { data, error } = await client
+        .from('security_audit_events')
+        .select('*')
+        .or(`actor_user_id.eq.${userId},target_user_id.eq.${userId}`)
+        .order('created_at', { ascending: false })
+        .limit(safeLimit);
+      if (error && error.code === '42P01') return [];
+      if (error) throw error;
+      return (data || []).map((row) => {
+        const event = mapSecurityAuditEvent(row);
+        return {
+          id: event.id,
+          eventType: event.eventType,
+          actorType: event.actorUserId === userId ? event.actorType : 'support',
+          severity: event.severity,
+          result: event.result,
+          metadata: sanitizeAuditMetadata(event.metadata || {}),
+          createdAt: event.createdAt,
+        };
+      });
+    },
+    async listSecurityAuditEvents({
+      targetUserId = '',
+      eventType = '',
+      severity = '',
+      limit = 100,
+    } = {}) {
+      let query = client
+        .from('security_audit_events')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(Math.max(1, Math.min(Number(limit) || 100, 200)));
+      if (targetUserId) query = query.eq('target_user_id', targetUserId);
+      if (eventType) query = query.eq('event_type', eventType);
+      if (severity) query = query.eq('severity', severity);
+      const { data, error } = await query;
+      if (error && error.code === '42P01') return [];
+      if (error) throw error;
+      return (data || []).map(mapSecurityAuditEvent);
     },
     async listProviderCredentials(userId) {
       const { data, error } = await client
@@ -2050,6 +2257,11 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .select('*')
         .single();
       if (error) throw error;
+      await this.recordUserActivity({
+        userId,
+        eventType: 'provider_credential_saved',
+        metadata: { credentialId: data.id, provider, purpose, model },
+      });
       return publicCredential(mapCredential(data));
     },
     async getPreferredProviderCredential(userId, purpose, encryptionKey) {
@@ -2084,6 +2296,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .eq('id', id)
         .select('id');
       if (error) throw error;
+      if (data?.length) await this.recordUserActivity({ userId, eventType: 'provider_credential_deleted', metadata: { credentialId: id } });
       return Boolean(data?.length);
     },
     async search(userId, query, filters = {}, options = {}) {
@@ -2150,6 +2363,7 @@ function mapDeletionRequest(row) {
     approvedAt: row.approved_at,
     executingAt: row.executing_at,
     completedAt: row.completed_at,
+    loggedAt: row.logged_at,
     canceledAt: row.canceled_at,
     adminActor: row.admin_actor,
     statusMessage: row.status_message || '',
@@ -2607,6 +2821,10 @@ function publicRefForUser(userId) {
   return `usr_${crypto.createHash('sha1').update(String(userId || '')).digest('hex').slice(0, 12)}`;
 }
 
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+
 function countField(rows, field) {
   return rows.reduce((stats, row) => {
     stats[row[field] || 'unknown'] = (stats[row[field] || 'unknown'] || 0) + 1;
@@ -3003,6 +3221,25 @@ function mapUserActivity(row) {
   };
 }
 
+function mapSecurityAuditEvent(row) {
+  return {
+    id: row.id,
+    actorUserId: row.actor_user_id,
+    actorType: row.actor_type,
+    targetUserId: row.target_user_id,
+    eventType: row.event_type,
+    severity: row.severity,
+    result: row.result,
+    requestId: row.request_id || '',
+    route: row.route || '',
+    method: row.method || '',
+    ipHash: row.ip_hash || '',
+    userAgentHash: row.user_agent_hash || '',
+    metadata: row.metadata || {},
+    createdAt: row.created_at,
+  };
+}
+
 function mapProfile(row) {
   return publicProfile({
     userId: row.user_id,
@@ -3048,8 +3285,6 @@ function mapDataExportRequest(row, steps = []) {
     startedAt: row.started_at,
     completedAt: row.completed_at,
     expiresAt: row.expires_at,
-    storageBucket: row.storage_bucket || '',
-    storagePath: row.storage_path || '',
     errorMessage: row.error_message || '',
     metadata: row.metadata || {},
     steps: (steps || []).map(mapDataExportStep).sort((a, b) => String(a.category).localeCompare(String(b.category))),

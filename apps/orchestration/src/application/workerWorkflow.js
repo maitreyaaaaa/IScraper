@@ -5,6 +5,7 @@ const {
   processWorkerScopes,
   runWorkerPass,
 } = require('../runtime/workerRuntime');
+const { recordSupportEvent } = require('../services/auditLog');
 
 function createWorkerWorkflow({
   store,
@@ -38,6 +39,11 @@ function createWorkerWorkflow({
       shouldDownload,
       maxJobs: maxJobs || runtime.worker.batchSize,
     }).catch((error) => {
+      void recordSupportEvent(store, {
+        userId,
+        eventType: 'background_job_failed',
+        metadata: { importId: importId || '', component: 'import_worker', errorName: error?.name || 'Error' },
+      });
       observability?.error?.('background processing failed', {
         userId,
         importId,

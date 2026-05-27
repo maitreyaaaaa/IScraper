@@ -36,6 +36,7 @@ const {
 } = require('../services/smartCollections');
 const { publicArchive } = require('../services/pageArchive');
 const { publicLinkHealth, publicReminder } = require('../services/libraryCare');
+const { sanitizeAuditMetadata } = require('../services/auditLog');
 
 const DEFAULT_USER_ID = 'local-dev-user';
 
@@ -93,6 +94,7 @@ function seedFromLegacyIndex(dataPath) {
     dataExportRequests: [],
     dataExportSteps: [],
     dataExportArtifacts: [],
+    securityAuditEvents: [],
     items: legacy.map((item) => ({
       ...item,
       userId: DEFAULT_USER_ID,
@@ -161,6 +163,7 @@ function emptyState() {
     dataExportRequests: [],
     dataExportSteps: [],
     dataExportArtifacts: [],
+    securityAuditEvents: [],
   };
 }
 
@@ -197,6 +200,7 @@ function normalizeState(state) {
     dataExportRequests: state.dataExportRequests || [],
     dataExportSteps: state.dataExportSteps || [],
     dataExportArtifacts: state.dataExportArtifacts || [],
+    securityAuditEvents: state.securityAuditEvents || [],
   };
 }
 
@@ -286,8 +290,6 @@ function publicDataExportRequest(state, request) {
     startedAt: request.startedAt || null,
     completedAt: request.completedAt || null,
     expiresAt: request.expiresAt || null,
-    storageBucket: request.storageBucket || '',
-    storagePath: request.storagePath || '',
     errorMessage: request.errorMessage || '',
     metadata: request.metadata || {},
     steps: (state.dataExportSteps || [])
@@ -429,34 +431,62 @@ function createLocalStore({ dataPath }) {
         userId,
         userIdHash: hashDeletionValue(userId),
         emailHash: hashDeletionValue(email),
-        status: 'pending_approval',
+        status: 'requested',
         reason: String(reason || '').trim().slice(0, 500),
         exportConfirmed: Boolean(exportConfirmed),
         requestedAt: now(),
         approvedAt: null,
         executingAt: null,
         completedAt: null,
+        loggedAt: null,
         canceledAt: null,
         adminActor: null,
-        statusMessage: 'Deletion request is waiting for admin review.',
+        statusMessage: 'Deletion request received.',
         retentionSummary: {},
         createdAt: now(),
         updatedAt: now(),
       };
       state.accountDeletionRequests.push(request);
+      this.recordUserActivity({ userId, eventType: 'deletion_requested', metadata: { requestId: request.id } });
       save();
       return mapDeletionRequest(request);
     },
 
     cancelDeletionRequestForUser(userId) {
       const request = activeDeletionRequestForUser(userId);
-      if (!request || !['requested', 'pending_approval'].includes(request.status)) return null;
+      if (!request || !['requested', 'frozen', 'pending_approval'].includes(request.status)) return null;
       Object.assign(request, {
         status: 'canceled',
         canceledAt: now(),
         statusMessage: 'Deletion request canceled by user.',
         updatedAt: now(),
       });
+      save();
+      return mapDeletionRequest(request);
+    },
+
+    markDeletionRequestFrozen(id) {
+      const request = state.accountDeletionRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      Object.assign(request, {
+        status: 'frozen',
+        statusMessage: 'Risky account access is frozen. Waiting for review.',
+        updatedAt: now(),
+      });
+      this.recordUserActivity({ userId: request.userId, eventType: 'deletion_frozen', metadata: { requestId: request.id } });
+      save();
+      return mapDeletionRequest(request);
+    },
+
+    markDeletionRequestPendingReview(id) {
+      const request = state.accountDeletionRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      Object.assign(request, {
+        status: 'pending_approval',
+        statusMessage: 'Deletion request is waiting for admin review.',
+        updatedAt: now(),
+      });
+      this.recordUserActivity({ userId: request.userId, eventType: 'deletion_pending_review', metadata: { requestId: request.id } });
       save();
       return mapDeletionRequest(request);
     },
@@ -471,7 +501,7 @@ function createLocalStore({ dataPath }) {
     approveDeletionRequest({ id, adminActor }) {
       const request = state.accountDeletionRequests.find((entry) => entry.id === id);
       if (!request) return null;
-      if (!['requested', 'pending_approval', 'partially_failed'].includes(request.status)) return mapDeletionRequest(request);
+      if (!['requested', 'frozen', 'pending_approval', 'failed', 'partially_failed'].includes(request.status)) return mapDeletionRequest(request);
       Object.assign(request, {
         status: 'approved',
         approvedAt: now(),
@@ -479,6 +509,7 @@ function createLocalStore({ dataPath }) {
         statusMessage: 'Deletion request approved. Waiting for execution.',
         updatedAt: now(),
       });
+      this.recordUserActivity({ userId: request.userId, eventType: 'deletion_approved', metadata: { requestId: request.id } });
       save();
       return mapDeletionRequest(request);
     },
@@ -486,7 +517,7 @@ function createLocalStore({ dataPath }) {
     cancelDeletionRequestAsAdmin({ id, adminActor, reason = '' }) {
       const request = state.accountDeletionRequests.find((entry) => entry.id === id);
       if (!request) return null;
-      if (['executing', 'completed'].includes(request.status)) return mapDeletionRequest(request);
+      if (['executing', 'completed', 'logged'].includes(request.status)) return mapDeletionRequest(request);
       Object.assign(request, {
         status: 'canceled',
         canceledAt: now(),
@@ -507,6 +538,7 @@ function createLocalStore({ dataPath }) {
         statusMessage: 'Deletion is executing.',
         updatedAt: now(),
       });
+      this.recordUserActivity({ userId: request.userId, eventType: 'deletion_executing', metadata: { requestId: request.id } });
       save();
       return mapDeletionRequest(request);
     },
@@ -515,8 +547,22 @@ function createLocalStore({ dataPath }) {
       const request = state.accountDeletionRequests.find((entry) => entry.id === id);
       if (!request) return null;
       Object.assign(request, {
-        status: 'partially_failed',
-        statusMessage: message || 'Deletion partially failed. Admin retry is required.',
+        status: 'failed',
+        statusMessage: message || 'Deletion failed. Admin retry is required.',
+        updatedAt: now(),
+      });
+      this.recordUserActivity({ userId: request.userId, eventType: 'deletion_failed', metadata: { requestId: request.id, error: message } });
+      save();
+      return mapDeletionRequest(request);
+    },
+
+    markDeletionRequestLogged(id) {
+      const request = state.accountDeletionRequests.find((entry) => entry.id === id);
+      if (!request) return null;
+      Object.assign(request, {
+        status: 'logged',
+        loggedAt: now(),
+        statusMessage: 'Deletion is complete and logged.',
         updatedAt: now(),
       });
       save();
@@ -524,11 +570,13 @@ function createLocalStore({ dataPath }) {
     },
 
     recordDeletionStep({ requestId, stepKey, status, error = '', metadata = {} }) {
+      const request = state.accountDeletionRequests.find((entry) => entry.id === requestId);
       let step = state.accountDeletionSteps.find((entry) => entry.requestId === requestId && entry.stepKey === stepKey);
       if (!step) {
         step = {
           id: `deletion-step-${Date.now()}-${state.accountDeletionSteps.length + 1}`,
           requestId,
+          userId: request?.userId || null,
           stepKey,
           status: 'pending',
           attempts: 0,
@@ -702,6 +750,7 @@ function createLocalStore({ dataPath }) {
         smartCollectionItems: state.smartCollectionItems.filter((entry) => entry.userId === userId),
         credits: this.getCredits(userId),
         providerCredentials: this.listProviderCredentials(userId),
+        legacyAiKeys: [],
         extensionTokens: state.extensionTokens.filter((entry) => entry.userId === userId).map(publicExtensionToken),
         captureConnections: this.listCaptureConnections(userId),
         searchEvents: state.searchEvents.filter((entry) => entry.userId === userId),
@@ -751,6 +800,7 @@ function createLocalStore({ dataPath }) {
         linkHealthChecks: privacy.linkHealthChecks,
         itemReminders: privacy.itemReminders,
         providerCredentials: privacy.providerCredentials,
+        legacyAiKeys: privacy.legacyAiKeys || [],
         extensionTokens: privacy.extensionTokens,
         captureConnections: privacy.captureConnections,
         searchEvents: privacy.searchEvents,
@@ -876,6 +926,7 @@ function createLocalStore({ dataPath }) {
       const request = state.dataExportRequests.find((entry) => entry.id === id);
       if (!request) return null;
       Object.assign(request, { status: 'failed', completedAt: now(), errorMessage: String(errorMessage || 'Data export failed.').slice(0, 240) });
+      this.recordUserActivity({ userId: request.userId, eventType: 'data_export_failed', metadata: { requestId: request.id, error: errorMessage } });
       save();
       return publicDataExportRequest(state, request);
     },
@@ -884,6 +935,7 @@ function createLocalStore({ dataPath }) {
       const existing = state.dataExportSteps.find((entry) => entry.requestId === requestId && entry.category === step.category);
       const next = {
         requestId,
+        userId: state.dataExportRequests.find((entry) => entry.id === requestId)?.userId || null,
         category: step.category,
         status: step.status,
         rowCount: step.rowCount || 0,
@@ -998,6 +1050,7 @@ function createLocalStore({ dataPath }) {
         revokedAt: null,
       };
       state.extensionTokens.push(token);
+      this.recordUserActivity({ userId, eventType: 'extension_token_created', metadata: { tokenId: token.id, scopeCount: scopes.length } });
       save();
       return publicExtensionToken(token);
     },
@@ -1013,6 +1066,7 @@ function createLocalStore({ dataPath }) {
       const token = state.extensionTokens.find((entry) => entry.userId === userId && entry.id === id);
       if (!token) return false;
       token.revokedAt = now();
+      this.recordUserActivity({ userId, eventType: 'extension_token_revoked', metadata: { tokenId: id } });
       save();
       return true;
     },
@@ -1057,6 +1111,7 @@ function createLocalStore({ dataPath }) {
         };
         state.captureConnections.push(connection);
       }
+      this.recordUserActivity({ userId, eventType: 'capture_connection_saved', metadata: { connectionId: connection.id, provider: normalizedProvider } });
       save();
       return publicCaptureConnection(connection);
     },
@@ -1088,6 +1143,7 @@ function createLocalStore({ dataPath }) {
       if (!connection) return false;
       connection.revokedAt = now();
       connection.updatedAt = now();
+      this.recordUserActivity({ userId: connection.userId, eventType: 'capture_connection_revoked', metadata: { connectionId: connection.id, provider: connection.provider } });
       save();
       return true;
     },
@@ -1208,7 +1264,7 @@ function createLocalStore({ dataPath }) {
       state.imports.push(entry);
       this.recordUserActivity({
         userId,
-        eventType: 'import_created',
+        eventType: status === 'queued_storage' ? 'import_started' : 'import_completed',
         metadata: { importId: entry.id, source, fileCount: fileNames.length },
       });
       save();
@@ -1242,6 +1298,11 @@ function createLocalStore({ dataPath }) {
       entry.status = status;
       entry.error = error;
       entry.updatedAt = now();
+      this.recordUserActivity({
+        userId: entry.userId,
+        eventType: status === 'failed' ? 'import_failed' : status === 'imported' ? 'import_completed' : 'import_status_changed',
+        metadata: { importId: entry.id, status, errorCategory: error ? 'import_error' : '' },
+      });
       save();
       return entry;
     },
@@ -1953,10 +2014,46 @@ function createLocalStore({ dataPath }) {
         id: `activity-${Date.now()}-${state.userActivityEvents.length + 1}`,
         userId,
         eventType,
-        metadata,
+        metadata: sanitizeAuditMetadata(metadata),
         createdAt: now(),
       };
       state.userActivityEvents.push(event);
+      save();
+      return event;
+    },
+
+    recordSecurityAudit({
+      actorUserId = null,
+      actorType = 'system',
+      targetUserId = null,
+      eventType,
+      severity = 'info',
+      result = 'success',
+      requestId = '',
+      route = '',
+      method = '',
+      ipHash = '',
+      userAgentHash = '',
+      metadata = {},
+    }) {
+      if (!eventType) return null;
+      const event = {
+        id: `audit-${Date.now()}-${state.securityAuditEvents.length + 1}`,
+        actorUserId,
+        actorType,
+        targetUserId,
+        eventType,
+        severity,
+        result,
+        requestId,
+        route,
+        method,
+        ipHash,
+        userAgentHash,
+        metadata: sanitizeAuditMetadata(metadata),
+        createdAt: now(),
+      };
+      state.securityAuditEvents.push(event);
       save();
       return event;
     },
@@ -1979,6 +2076,11 @@ function createLocalStore({ dataPath }) {
         createdAt: now(),
       };
       state.creditTransactions.push(transaction);
+      this.recordUserActivity({
+        userId,
+        eventType: 'credit_changed',
+        metadata: { amount: numericAmount, reason, itemId: itemId || '' },
+      });
       save();
       return transaction;
     },
@@ -2066,8 +2168,25 @@ function createLocalStore({ dataPath }) {
     getAdminUserDetail(userId) {
       const user = state.users.find((entry) => entry.id === userId);
       if (!user) return null;
+      const userJobs = state.jobs.filter((entry) => entry.userId === user.id);
+      const lastActivity = state.userActivityEvents
+        .filter((entry) => entry.userId === user.id)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0] || null;
       return {
         ...adminUserSummary(state, user, this.getCredits(user.id)),
+        counts: {
+          imports: state.imports.filter((entry) => entry.userId === user.id).length,
+          saves: state.items.filter((entry) => entry.userId === user.id).length,
+          providerCredentials: state.providerCredentials.filter((entry) => entry.userId === user.id).length,
+          extensionTokens: state.extensionTokens.filter((entry) => entry.userId === user.id && !entry.revokedAt).length,
+          captureConnections: state.captureConnections.filter((entry) => entry.userId === user.id).length,
+        },
+        jobStats: userJobs.reduce((stats, job) => {
+          stats[job.status || 'unknown'] = (stats[job.status || 'unknown'] || 0) + 1;
+          return stats;
+        }, {}),
+        deletion: mapDeletionRequest(activeDeletionRequestForUser(user.id)),
+        lastActivity,
         creditTransactions: state.creditTransactions
           .filter((entry) => entry.userId === user.id)
           .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
@@ -2108,6 +2227,43 @@ function createLocalStore({ dataPath }) {
           ...entry,
           user: state.users.find((user) => user.id === entry.userId) || null,
         }));
+    },
+
+    listUserTimeline(userId, { limit = 100 } = {}) {
+      return [...state.userActivityEvents]
+        .filter((entry) => entry.userId === userId)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, Math.max(1, Math.min(Number(limit) || 100, 200)));
+    },
+
+    listUserSecurityActivity(userId, { limit = 20 } = {}) {
+      return [...state.securityAuditEvents]
+        .filter((entry) => entry.actorUserId === userId || entry.targetUserId === userId)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, Math.max(1, Math.min(Number(limit) || 20, 50)))
+        .map((entry) => ({
+          id: entry.id,
+          eventType: entry.eventType,
+          actorType: entry.actorUserId === userId ? entry.actorType : 'support',
+          severity: entry.severity,
+          result: entry.result,
+          metadata: sanitizeAuditMetadata(entry.metadata || {}),
+          createdAt: entry.createdAt,
+        }));
+    },
+
+    listSecurityAuditEvents({
+      targetUserId = '',
+      eventType = '',
+      severity = '',
+      limit = 100,
+    } = {}) {
+      return [...state.securityAuditEvents]
+        .filter((entry) => !targetUserId || entry.targetUserId === targetUserId)
+        .filter((entry) => !eventType || entry.eventType === eventType)
+        .filter((entry) => !severity || entry.severity === severity)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, Math.max(1, Math.min(Number(limit) || 100, 200)));
     },
 
     listProviderCredentials(userId) {
@@ -2154,6 +2310,11 @@ function createLocalStore({ dataPath }) {
         updatedAt: now(),
       });
       if (!existing) state.providerCredentials.push(row);
+      this.recordUserActivity({
+        userId,
+        eventType: existing ? 'provider_credential_updated' : 'provider_credential_created',
+        metadata: { credentialId: row.id, provider, purpose, model },
+      });
       save();
       return publicCredential(row);
     },
@@ -2181,6 +2342,9 @@ function createLocalStore({ dataPath }) {
     deleteProviderCredential(userId, id) {
       const before = state.providerCredentials.length;
       state.providerCredentials = state.providerCredentials.filter((credential) => !(credential.userId === userId && credential.id === id));
+      if (state.providerCredentials.length !== before) {
+        this.recordUserActivity({ userId, eventType: 'provider_credential_deleted', metadata: { credentialId: id } });
+      }
       save();
       return state.providerCredentials.length !== before;
     },

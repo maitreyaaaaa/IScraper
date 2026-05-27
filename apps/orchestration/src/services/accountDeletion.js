@@ -1,8 +1,8 @@
 const crypto = require('crypto');
 
-const ACTIVE_DELETION_STATUSES = new Set(['requested', 'pending_approval', 'approved', 'executing', 'partially_failed']);
-const CANCELABLE_DELETION_STATUSES = new Set(['requested', 'pending_approval']);
-const TERMINAL_DELETION_STATUSES = new Set(['completed', 'canceled']);
+const ACTIVE_DELETION_STATUSES = new Set(['requested', 'frozen', 'pending_approval', 'approved', 'executing', 'failed', 'partially_failed']);
+const CANCELABLE_DELETION_STATUSES = new Set(['requested', 'frozen', 'pending_approval']);
+const TERMINAL_DELETION_STATUSES = new Set(['completed', 'logged', 'canceled']);
 
 const DELETION_STEPS = Object.freeze([
   'freeze_access',
@@ -50,6 +50,7 @@ function publicDeletionRequest(request) {
       approvedAt: request.approvedAt || null,
       executingAt: request.executingAt || null,
       completedAt: request.completedAt || null,
+      loggedAt: request.loggedAt || null,
       canceledAt: request.canceledAt || null,
       statusMessage: request.statusMessage || '',
       retentionSummary: request.retentionSummary || {},
@@ -86,14 +87,14 @@ async function processAccountDeletionRequest({ store, requestId, actor = 'admin'
     error.statusCode = 404;
     throw error;
   }
-  if (request.status === 'completed') {
+  if (request.status === 'completed' || request.status === 'logged') {
     return {
       request: publicDeletionRequest(request).request,
       executed: [],
       complete: true,
     };
   }
-  if (!['approved', 'executing', 'partially_failed'].includes(request.status)) {
+  if (!['approved', 'executing', 'failed', 'partially_failed'].includes(request.status)) {
     const error = new Error('Deletion request must be approved before processing.');
     error.statusCode = 409;
     throw error;
@@ -142,12 +143,15 @@ async function processAccountDeletionRequest({ store, requestId, actor = 'admin'
         note: 'Deleted app data, storage, access tokens, and the Supabase Auth user. Audit retains only hashes and deletion status.',
       },
     });
+    if (typeof store.markDeletionRequestLogged === 'function') {
+      request = await store.markDeletionRequestLogged(requestId);
+    }
   }
 
   return {
     request: publicDeletionRequest(request).request,
     executed,
-    complete: request.status === 'completed',
+    complete: request.status === 'completed' || request.status === 'logged',
   };
 }
 

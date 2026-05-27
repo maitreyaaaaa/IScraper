@@ -1,5 +1,6 @@
 const { credentialOptions } = require('../services/providers');
 const { testProviderCredential } = require('../services/providerClients');
+const { recordSecurityAuditForRequest } = require('../services/auditLog');
 const {
   DEFAULT_AGENT_SCOPES,
   DEFAULT_EXTENSION_SCOPES,
@@ -40,6 +41,11 @@ function registerPrivateIntegrationRoutes(app, deps) {
       scopes,
       expiresAt: defaultExtensionExpiry(),
     });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'extension_token_created',
+      severity: 'warning',
+      metadata: { tokenId: token.id, scopeCount: scopes.length },
+    });
     captureWorkflow(req, 'extension token created', { extensionTokenId: token.id, scopeCount: scopes.length });
     return res.status(201).json({ token, secret: rawToken });
   }));
@@ -48,6 +54,11 @@ function registerPrivateIntegrationRoutes(app, deps) {
     if (typeof store.revokeExtensionToken !== 'function') return res.status(501).json({ error: 'Extension tokens are not available.' });
     const revoked = await store.revokeExtensionToken(req.user.id, req.params.id);
     if (!revoked) return res.status(404).json({ error: 'Extension token not found.' });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'extension_token_revoked',
+      severity: 'warning',
+      metadata: { tokenId: req.params.id },
+    });
     captureWorkflow(req, 'extension token revoked', { extensionTokenId: req.params.id });
     return res.json({ revoked: true });
   }));
@@ -69,6 +80,11 @@ function registerPrivateIntegrationRoutes(app, deps) {
       scopes: DEFAULT_AGENT_SCOPES,
       expiresAt: defaultAgentExpiry(),
     });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'token_created',
+      severity: 'critical',
+      metadata: { tokenId: token.id, tokenType: 'agent_access', scopeCount: DEFAULT_AGENT_SCOPES.length },
+    });
     captureWorkflow(req, 'agent access token created', { agentTokenId: token.id, scopeCount: DEFAULT_AGENT_SCOPES.length });
     return res.status(201).json({
       token,
@@ -86,6 +102,11 @@ function registerPrivateIntegrationRoutes(app, deps) {
       .find((token) => token.id === req.params.id && (token.scopes || []).includes('agent:access'));
     if (!existing) return res.status(404).json({ error: 'Agent access token not found.' });
     const revoked = await store.revokeExtensionToken(req.user.id, req.params.id);
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'token_revoked',
+      severity: 'critical',
+      metadata: { tokenId: req.params.id, tokenType: 'agent_access' },
+    });
     captureWorkflow(req, 'agent access token revoked', { agentTokenId: req.params.id });
     return res.json({ revoked: Boolean(revoked) });
   }));
@@ -150,6 +171,16 @@ function registerPrivateIntegrationRoutes(app, deps) {
       displayName: req.body.displayName,
       encryptionKey: config.credentialEncryptionKey,
     });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'provider_key_changed',
+      severity: 'critical',
+      metadata: {
+        credentialId: credential.id,
+        provider: credential.provider,
+        purpose: credential.purpose,
+        model: credential.model,
+      },
+    });
     captureWorkflow(req, 'provider credential saved', { provider: credential.provider, purpose: credential.purpose, model: credential.model, displayName: credential.displayName, credentialId: credential.id });
     res.json({ credential });
   }));
@@ -157,6 +188,11 @@ function registerPrivateIntegrationRoutes(app, deps) {
   app.delete('/api/provider-credentials/:id', asyncRoute(async (req, res) => {
     const deleted = await store.deleteProviderCredential(req.user.id, req.params.id);
     if (!deleted) return res.status(404).json({ error: 'Credential not found.' });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'provider_key_deleted',
+      severity: 'critical',
+      metadata: { credentialId: req.params.id },
+    });
     captureWorkflow(req, 'provider credential deleted', { credentialId: req.params.id });
     return res.json({ deleted: true });
   }));
@@ -165,6 +201,11 @@ function registerPrivateIntegrationRoutes(app, deps) {
     const credential = await store.getProviderCredential(req.user.id, req.params.id, config.credentialEncryptionKey);
     if (!credential) return res.status(404).json({ error: 'Credential not found.' });
     await testProviderCredential({ credential });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'provider_key_tested',
+      severity: 'warning',
+      metadata: { credentialId: req.params.id, provider: credential.provider, purpose: credential.purpose, model: credential.model },
+    });
     captureWorkflow(req, 'provider credential tested', { credentialId: req.params.id, provider: credential.provider, purpose: credential.purpose, model: credential.model });
     return res.json({ ok: true, provider: credential.provider, purpose: credential.purpose, model: credential.model });
   }));
@@ -172,6 +213,11 @@ function registerPrivateIntegrationRoutes(app, deps) {
   app.post('/api/provider-credentials/:id/reveal', asyncRoute(async (req, res) => {
     const credential = await store.getProviderCredential(req.user.id, req.params.id, config.credentialEncryptionKey);
     if (!credential) return res.status(404).json({ error: 'Credential not found.' });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'provider_key_revealed',
+      severity: 'critical',
+      metadata: { credentialId: req.params.id, provider: credential.provider, purpose: credential.purpose, model: credential.model },
+    });
     return res.json({ apiKey: credential.apiKey });
   }));
 }

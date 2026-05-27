@@ -4,6 +4,7 @@ const {
   findSimilarVisualItems: findVisualSearchItems,
   publicVisualSearchAnalysis,
 } = require('../services/visualSimilarity');
+const { recordSupportEvent } = require('../services/auditLog');
 
 function registerPrivateSearchRoutes(app, deps) {
   const { config, http, store, workflows } = deps;
@@ -35,7 +36,17 @@ function registerPrivateSearchRoutes(app, deps) {
   app.post('/api/search', searchRateLimit, asyncRoute(async (req, res) => {
     const rawQuery = String(req.body.query || '').trim();
     const query = rawQuery.slice(0, 240);
-    const results = await runSearch({ req, userId: req.user.id, query, filters: req.body.filters || {} });
+    let results;
+    try {
+      results = await runSearch({ req, userId: req.user.id, query, filters: req.body.filters || {} });
+    } catch (error) {
+      await recordSupportEvent(store, {
+        userId: req.user.id,
+        eventType: 'search_failed',
+        metadata: { statusCode: error.statusCode || 500, queryLength: rawQuery.length, hasFilters: Boolean(Object.keys(req.body.filters || {}).length) },
+      });
+      throw error;
+    }
     let ai = null;
     if (req.body.includeAi && query && results.length) {
       try {
@@ -43,6 +54,11 @@ function registerPrivateSearchRoutes(app, deps) {
       } catch (error) {
         if (error.statusCode === 429) throw error;
         console.warn(`AI search answer failed: ${error.message}`);
+        await recordSupportEvent(store, {
+          userId: req.user.id,
+          eventType: 'search_failed',
+          metadata: { component: 'ai_answer', statusCode: error.statusCode || 500, queryLength: rawQuery.length },
+        });
         ai = { error: 'AI answer is unavailable right now. Showing regular search results.' };
       }
     }
@@ -91,6 +107,11 @@ function registerPrivateSearchRoutes(app, deps) {
       });
       return res.json(answer);
     } catch (error) {
+      await recordSupportEvent(store, {
+        userId: req.user.id,
+        eventType: 'search_failed',
+        metadata: { component: 'library_chat', statusCode: error.statusCode || 500, questionLength: rawQuestion.length, resultCount: results.length },
+      });
       warnWorkflow(req, 'library chat failed', {
         statusCode: error.statusCode || 500,
         resultCount: results.length,
@@ -101,37 +122,46 @@ function registerPrivateSearchRoutes(app, deps) {
 
   app.post('/api/visual-search', searchRateLimit, asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
-    if (!config.credentialEncryptionKey || typeof store.getPreferredProviderCredential !== 'function') {
-      return res.status(428).json({ error: 'Connect a media AI key before using Same Vibe Search.' });
-    }
-    const mediaCredential = await store.getPreferredProviderCredential(req.user.id, 'media', config.credentialEncryptionKey);
-    const described = await describeLensCrop({ dataUrl: req.body?.imageDataUrl, credential: mediaCredential });
-    const allItems = await store.getItems(req.user.id);
-    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 24, 60));
-    const results = findVisualSearchItems(allItems, described.analysis, { limit });
-    const searchEventId = createSearchEventId();
-    if (typeof store.recordSearchEvent === 'function') {
-      await store.recordSearchEvent({
-        id: searchEventId,
-        userId: req.user.id,
-        query: '',
-        queryLength: 0,
-        filters: { type: 'visual' },
+    try {
+      if (!config.credentialEncryptionKey || typeof store.getPreferredProviderCredential !== 'function') {
+        return res.status(428).json({ error: 'Connect a media AI key before using Same Vibe Search.' });
+      }
+      const mediaCredential = await store.getPreferredProviderCredential(req.user.id, 'media', config.credentialEncryptionKey);
+      const described = await describeLensCrop({ dataUrl: req.body?.imageDataUrl, credential: mediaCredential });
+      const allItems = await store.getItems(req.user.id);
+      const limit = Math.max(1, Math.min(Number(req.body?.limit) || 24, 60));
+      const results = findVisualSearchItems(allItems, described.analysis, { limit });
+      const searchEventId = createSearchEventId();
+      if (typeof store.recordSearchEvent === 'function') {
+        await store.recordSearchEvent({
+          id: searchEventId,
+          userId: req.user.id,
+          query: '',
+          queryLength: 0,
+          filters: { type: 'visual' },
+          resultCount: results.length,
+          includeAi: false,
+          resultIds: results.map((item) => item.id),
+        });
+      }
+      captureWorkflow(req, 'visual search completed', {
+        searchEventId,
         resultCount: results.length,
-        includeAi: false,
-        resultIds: results.map((item) => item.id),
+        hasImageAnalysis: true,
       });
+      return res.json({
+        results,
+        searchEventId,
+        visualSearch: publicVisualSearchAnalysis(described.analysis, described.query),
+      });
+    } catch (error) {
+      await recordSupportEvent(store, {
+        userId: req.user.id,
+        eventType: 'search_failed',
+        metadata: { component: 'visual_search', statusCode: error.statusCode || 500 },
+      });
+      throw error;
     }
-    captureWorkflow(req, 'visual search completed', {
-      searchEventId,
-      resultCount: results.length,
-      hasImageAnalysis: true,
-    });
-    res.json({
-      results,
-      searchEventId,
-      visualSearch: publicVisualSearchAnalysis(described.analysis, described.query),
-    });
   }));
 
   app.post('/api/search/feedback', searchRateLimit, asyncRoute(async (req, res) => {

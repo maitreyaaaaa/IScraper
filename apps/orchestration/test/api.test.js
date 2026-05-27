@@ -7,7 +7,12 @@ const JSZip = require('jszip');
 
 const { createApp } = require('../src/server');
 const { createLocalStore } = require('../src/stores/localStore');
-const { EXCLUDED_USER_DATA_TABLES, USER_DATA_CATEGORIES } = require('../src/services/userDataRegistry');
+const {
+  EXCLUDED_USER_DATA_TABLES,
+  SECRET_LIFECYCLE_RULES,
+  TABLE_DATA_CLASSIFICATIONS,
+  USER_DATA_CATEGORIES,
+} = require('../src/services/userDataRegistry');
 
 async function waitForDataExportReady({ base, headers, id, attempts = 20 } = {}) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -40,6 +45,26 @@ test('user data registry covers known user-owned data tables', () => {
     'user_data_export_requests',
   ].forEach((table) => {
     assert.ok(represented.has(table) || excluded.has(table), `${table} must be represented or explicitly excluded`);
+    assert.ok(TABLE_DATA_CLASSIFICATIONS[table], `${table} must have a data classification`);
+  });
+
+  const allowed = new Set(['public', 'account', 'private_content', 'credential', 'billing', 'audit', 'operational']);
+  USER_DATA_CATEGORIES.forEach((category) => {
+    assert.ok(allowed.has(category.classification), `${category.key} has invalid classification`);
+    assert.ok(category.purpose, `${category.key} must define why the data exists`);
+    assert.ok(category.retentionPeriod || category.retention, `${category.key} must define retention`);
+    assert.ok(category.minimization, `${category.key} must define minimization`);
+    assert.ok(category.redaction, `${category.key} must define redaction`);
+  });
+
+  ['user_provider_credentials', 'extension_tokens', 'capture_connections', 'user_ai_keys'].forEach((table) => {
+    assert.equal(TABLE_DATA_CLASSIFICATIONS[table], 'credential');
+  });
+
+  SECRET_LIFECYCLE_RULES.forEach((rule) => {
+    assert.equal(rule.classification, 'credential');
+    assert.match(`${rule.storage} ${rule.exposure} ${rule.lifecycle} ${rule.exportRule}`, /hash|encrypt|shown once|revok/i);
+    assert.match(rule.exportRule, /Never export|metadata only/i);
   });
 });
 
@@ -320,7 +345,14 @@ test('queued data export creates a redacted downloadable zip and enforces owners
     const mapResponse = await fetch(`${base}/user-data-map`, { headers });
     const mapBody = await mapResponse.json();
     assert.equal(mapResponse.status, 200);
-    assert.ok(mapBody.dataMap.categories.find((category) => category.key === 'access'));
+    const accessCategory = mapBody.dataMap.categories.find((category) => category.key === 'access');
+    assert.ok(accessCategory);
+    assert.equal(accessCategory.classification, 'credential');
+    assert.match(accessCategory.purpose, /connect/i);
+    assert.match(accessCategory.retentionPeriod, /revoked|expired|deleted/i);
+    assert.match(accessCategory.minimization, /metadata/i);
+    assert.equal(mapBody.dataMap.classifications.extension_tokens, 'credential');
+    assert.ok(mapBody.dataMap.secretLifecycle.find((rule) => rule.key === 'extension_and_agent_tokens'));
 
     const accountResponse = await fetch(`${base}/account/summary`, { headers });
     const accountBody = await accountResponse.json();
@@ -335,6 +367,8 @@ test('queued data export creates a redacted downloadable zip and enforces owners
     const createBody = await createResponse.json();
     assert.equal(createResponse.status, 202);
     assert.ok(['requested', 'building', 'ready'].includes(createBody.export.status));
+    assert.equal(createBody.export.storageBucket, undefined);
+    assert.equal(createBody.export.storagePath, undefined);
 
     const otherStatus = await fetch(`${base}/data-exports/${createBody.export.id}`, { headers: otherHeaders });
     assert.equal(otherStatus.status, 404);
@@ -347,6 +381,7 @@ test('queued data export creates a redacted downloadable zip and enforces owners
     const readyExport = await waitForDataExportReady({ base, headers, id: createBody.export.id });
     assert.equal(readyExport.status, 'ready');
     assert.ok(readyExport.steps.length >= 5);
+    assert.equal(readyExport.storagePath, undefined);
 
     const downloadResponse = await fetch(`${base}/data-exports/${createBody.export.id}/download`, { headers });
     assert.equal(downloadResponse.status, 200);
@@ -358,10 +393,17 @@ test('queued data export creates a redacted downloadable zip and enforces owners
     const zipText = (await Promise.all(Object.values(zip.files).filter((file) => !file.dir).map((file) => file.async('string')))).join('\n');
 
     assert.equal(manifest.format, 'zip');
+    assert.equal(manifest.categories.find((category) => category.key === 'access').classification, 'credential');
     assert.equal(extensionTokens.length, 1);
     assert.equal(extensionTokens[0].tokenHash, undefined);
     assert.equal(zipText.includes(tokenBody.secret), false);
     assert.equal(/token_hash|encrypted_key|service_role/i.test(zipText), false);
+
+    const securityResponse = await fetch(`${base}/account/security-activity`, { headers });
+    const securityBody = await securityResponse.json();
+    assert.equal(securityResponse.status, 200);
+    assert.equal(securityBody.activity.some((entry) => entry.eventType === 'data_export_requested'), true);
+    assert.equal(JSON.stringify(securityBody.activity).includes(tokenBody.secret), false);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -769,7 +811,8 @@ test('admin approval and deletion processing are idempotent and prevent account 
     const processBody = await process.json();
     assert.equal(process.status, 200);
     assert.equal(processBody.complete, true);
-    assert.equal(processBody.request.status, 'completed');
+    assert.equal(processBody.request.status, 'logged');
+    assert.ok(processBody.request.loggedAt);
 
     const repeat = await fetch(`${base}/admin/deletion-requests/${requestId}/process`, {
       method: 'POST',
@@ -2206,7 +2249,7 @@ test('extension session can save screenshot capture and undo it', async () => {
 test('Lens image search rejects invalid crop payloads', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
-  const app = createApp({ store, config: { credentialEncryptionKey: 'dev-encryption-key' } });
+  const app = createApp({ store, config: { adminApiKey: 'admin-key', credentialEncryptionKey: 'dev-encryption-key' } });
   const server = app.listen(0);
 
   try {
@@ -2383,7 +2426,7 @@ test('authenticated imports require profile setup first', async () => {
 test('provider credential API stores keys without returning secrets', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
-  const app = createApp({ store, config: { credentialEncryptionKey: 'dev-encryption-key' } });
+  const app = createApp({ store, config: { adminApiKey: 'admin-key', credentialEncryptionKey: 'dev-encryption-key' } });
   const server = app.listen(0);
 
   try {
@@ -2405,6 +2448,10 @@ test('provider credential API stores keys without returning secrets', async () =
       method: 'POST',
     });
     const revealed = await revealResponse.json();
+    const auditResponse = await fetch(`http://127.0.0.1:${port}/api/admin/audit-events?eventType=provider_key_revealed`, {
+      headers: { 'x-admin-api-key': 'admin-key' },
+    });
+    const audit = await auditResponse.json();
 
     assert.equal(createResponse.status, 200);
     assert.equal(created.credential.keyHint, 'sk-...cret');
@@ -2413,6 +2460,10 @@ test('provider credential API stores keys without returning secrets', async () =
     assert.doesNotMatch(JSON.stringify(listed), /sk-or-test-secret/);
     assert.equal(revealResponse.status, 200);
     assert.equal(revealed.apiKey, 'sk-or-test-secret');
+    assert.equal(auditResponse.status, 200);
+    assert.equal(audit.auditEvents.some((entry) => entry.eventType === 'provider_key_revealed'), true);
+    assert.equal(audit.auditEvents.find((entry) => entry.eventType === 'provider_key_revealed')?.metadata?.credentialId, created.credential.id);
+    assert.doesNotMatch(JSON.stringify(audit), /sk-or-test-secret/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -2633,9 +2684,10 @@ test('admin user detail returns credits, item stats, and credit history', async 
     const port = server.address().port;
     await store.ensureUser('user-1', 'user@example.com');
     await store.saveProfile('user-1', { username: 'user_one' });
+    const importEntry = await store.createImport({ userId: 'user-1', source: 'instagram', fileNames: ['saved.json'] });
     await store.upsertImportData({
       userId: 'user-1',
-      importId: 'import-1',
+      importId: importEntry.id,
       parsed: {
         collections: [],
         items: [{ id: 'item-1', url: 'https://example.com/1', contentType: 'post', caption: '', hashtags: [], collections: [] }],
@@ -2657,6 +2709,11 @@ test('admin user detail returns credits, item stats, and credit history', async 
     assert.equal(detail.user.email, 'user@example.com');
     assert.equal(detail.user.credits.paidCredits, 25);
     assert.equal(detail.user.itemStats.indexed, 1);
+    assert.equal(detail.user.counts.imports, 1);
+    assert.equal(detail.user.counts.saves, 1);
+    assert.equal(typeof detail.user.jobStats, 'object');
+    assert.equal(detail.user.deletion, null);
+    assert.equal(detail.user.items, undefined);
     assert.equal(detail.user.creditTransactions[0].metadata.reason, 'launch bonus');
     assert.equal(detail.user.adminAdjustments[0].reason, 'launch bonus');
   } finally {
@@ -2739,6 +2796,12 @@ test('admin can list activity, imports, and moderate feedback', async () => {
     const activityResponse = await fetch(`http://127.0.0.1:${port}/api/admin/activity`, {
       headers: { 'x-admin-api-key': 'test-admin-key' },
     });
+    const timelineResponse = await fetch(`http://127.0.0.1:${port}/api/admin/users/local-dev-user/timeline`, {
+      headers: { 'x-admin-api-key': 'test-admin-key' },
+    });
+    const auditResponse = await fetch(`http://127.0.0.1:${port}/api/admin/audit-events?eventType=admin_user_timeline_viewed`, {
+      headers: { 'x-admin-api-key': 'test-admin-key' },
+    });
     const importsResponse = await fetch(`http://127.0.0.1:${port}/api/admin/imports`, {
       headers: { 'x-admin-api-key': 'test-admin-key' },
     });
@@ -2748,12 +2811,19 @@ test('admin can list activity, imports, and moderate feedback', async () => {
     });
     const publicFeedbackResponse = await fetch(`http://127.0.0.1:${port}/api/feedback`);
     const activity = await activityResponse.json();
+    const timeline = await timelineResponse.json();
+    const audit = await auditResponse.json();
     const imports = await importsResponse.json();
     const publicFeedback = await publicFeedbackResponse.json();
 
     assert.equal(feedbackResponse.status, 201);
     assert.equal(activityResponse.status, 200);
     assert.equal(activity.activity.some((entry) => entry.eventType === 'sign_in'), true);
+    assert.equal(JSON.stringify(activity.activity.find((entry) => entry.eventType === 'sign_in')?.metadata || {}).includes('local@example.com'), false);
+    assert.equal(timelineResponse.status, 200);
+    assert.equal(timeline.timeline.some((entry) => entry.eventType === 'sign_in'), true);
+    assert.equal(auditResponse.status, 200);
+    assert.equal(audit.auditEvents.some((entry) => entry.eventType === 'admin_user_timeline_viewed'), true);
     assert.equal(importsResponse.status, 200);
     assert.equal(imports.imports.length, 1);
     assert.equal(hideResponse.status, 200);

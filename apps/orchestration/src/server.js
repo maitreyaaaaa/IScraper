@@ -169,7 +169,7 @@ function createApp({ store, config = {}, observability = createObservability(con
   registerImportRoutes(app, deps);
   registerPrivateSearchRoutes(app, deps);
 
-  app.use(createErrorHandler({ multer, warnWorkflow }));
+  app.use(createErrorHandler({ multer, store, warnWorkflow }));
 
   return app;
 }

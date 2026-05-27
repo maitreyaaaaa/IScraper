@@ -6,6 +6,7 @@ const defaultMigrationsDir = path.join(root, 'apps', 'orchestration', 'supabase'
 
 const SERVER_ONLY_POLICYLESS_TABLES = new Set([
   'admin_credit_adjustments',
+  'security_audit_events',
   'user_admin_states',
   'user_activity_events',
 ]);
@@ -58,6 +59,43 @@ function policyStatements(sql) {
   return (sql.match(/create\s+policy\s+[\s\S]*?;/gi) || []).map((statement) => normalizeSql(statement));
 }
 
+function tableDefinitions(sql) {
+  const tables = new Map();
+  const regex = /create\s+table\s+(?:if\s+not\s+exists\s+)?public\.([a-z0-9_]+)\s*\(([\s\S]*?)\n\);/gi;
+  let match;
+  while ((match = regex.exec(sql))) {
+    tables.set(match[1], normalizeSql(match[2]));
+  }
+  return tables;
+}
+
+function tableHasColumn(body, column) {
+  return new RegExp(`(?:^|,)\\s*\\b${escapeRegExp(column)}\\b\\s+`, 'i').test(body);
+}
+
+function tableHasColumnInSql(sql, table, body, column) {
+  return tableHasColumn(body || '', column)
+    || new RegExp(`alter\\s+table\\s+public\\.${escapeRegExp(table)}[^;]*add\\s+column\\s+(?:if\\s+not\\s+exists\\s+)?${escapeRegExp(column)}\\s+`, 'i').test(sql);
+}
+
+function hasUserForeignKey(sql, table, body) {
+  return new RegExp(`\\buser_id\\b[^,]*references\\s+public\\.users\\s*\\(\\s*id\\s*\\)`, 'i').test(body)
+    || new RegExp(`alter\\s+table\\s+public\\.${escapeRegExp(table)}[^;]*foreign\\s+key\\s*\\(\\s*user_id\\s*\\)[^;]*references\\s+public\\.users\\s*\\(\\s*id\\s*\\)`, 'i').test(sql);
+}
+
+function hasUserIndex(sql, table, body) {
+  return /\buser_id\b[^,]*(?:primary\s+key|unique)/i.test(body)
+    || /(?:primary\s+key|unique)\s*\([^)]*\buser_id\b/i.test(body)
+    || new RegExp(`create\\s+(?:unique\\s+)?index[\\s\\S]*?on\\s+public\\.${escapeRegExp(table)}\\s*\\([^)]*\\buser_id\\b`, 'i').test(sql);
+}
+
+function bucketForcedPrivate(sql, bucket) {
+  const escaped = escapeRegExp(bucket);
+  const conflictPrivate = new RegExp(`insert\\s+into\\s+storage\\.buckets[\\s\\S]{0,260}'${escaped}'[\\s\\S]{0,360}on\\s+conflict\\s*\\([^)]*\\)\\s*do\\s+update[\\s\\S]{0,240}public\\s*=\\s*false`, 'i').test(sql);
+  const directUpdate = new RegExp(`update\\s+storage\\.buckets[\\s\\S]{0,180}public\\s*=\\s*false[\\s\\S]{0,180}(?:id\\s*=\\s*'${escaped}'|id\\s+in\\s*\\([^)]*'${escaped}'[^)]*\\))`, 'i').test(sql);
+  return conflictPrivate || directUpdate;
+}
+
 function securityDefinerFindings(files) {
   const findings = [];
   for (const file of files) {
@@ -79,6 +117,7 @@ function analyzeSupabaseSecurity({ migrationsDir = defaultMigrationsDir } = {}) 
   const sql = normalizeSql(files.map((file) => file.text).join('\n'));
 
   const createdTables = collectMatches(sql, /create\s+table\s+(?:if\s+not\s+exists\s+)?public\.([a-z0-9_]+)/gi);
+  const definitions = tableDefinitions(files.map((file) => file.text).join('\n'));
   const rlsTables = collectMatches(sql, /alter\s+table\s+public\.([a-z0-9_]+)\s+enable\s+row\s+level\s+security/gi);
   const policies = policyStatements(sql);
   const policyTables = new Set();
@@ -103,9 +142,42 @@ function analyzeSupabaseSecurity({ migrationsDir = defaultMigrationsDir } = {}) 
     if (!hasPolicy && !hasRevoke && !serverOnly) {
       findings.push(`public.${table} has RLS but no policy, revoke, or server-only allowlist.`);
     }
-    if (serverOnly && !hasPolicy) {
+    if (serverOnly && !hasPolicy && !hasRevoke) {
+      findings.push(`public.${table} is server-only in code but does not revoke anon/authenticated access in SQL.`);
+    } else if (serverOnly && !hasPolicy) {
       review.push(`public.${table} is intentionally server-only with RLS and no client policy.`);
     }
+
+    const body = definitions.get(table) || '';
+    if (tableHasColumnInSql(sql, table, body, 'user_id')) {
+      if (!hasUserForeignKey(sql, table, body)) {
+        findings.push(`public.${table} has user_id without a foreign key to public.users(id).`);
+      }
+      if (!hasUserIndex(sql, table, body)) {
+        findings.push(`public.${table} has user_id without a primary key, unique key, or index beginning with user_id.`);
+      }
+      if (!serverOnly && !policies.some((policy) => policy.includes(` public.${table}`) && /auth\.uid\s*\(\s*\)/i.test(policy))) {
+        findings.push(`public.${table} has user_id but no auth.uid()-scoped policy.`);
+      }
+    }
+  }
+
+  const tenantReferenceChecks = [
+    {
+      name: 'smart_collection_items collection ownership',
+      regex: /foreign\s+key\s*\(\s*user_id\s*,\s*collection_id\s*\)\s+references\s+public\.smart_collections\s*\(\s*user_id\s*,\s*id\s*\)/i,
+    },
+    {
+      name: 'search_result_feedback search-event ownership',
+      regex: /foreign\s+key\s*\(\s*user_id\s*,\s*search_event_id\s*\)\s+references\s+public\.search_events\s*\(\s*user_id\s*,\s*id\s*\)/i,
+    },
+    {
+      name: 'analysis_usage_events saved-item ownership',
+      regex: /foreign\s+key\s*\(\s*user_id\s*,\s*item_id\s*\)\s+references\s+public\.saved_items\s*\(\s*user_id\s*,\s*id\s*\)/i,
+    },
+  ];
+  for (const check of tenantReferenceChecks) {
+    if (!check.regex.test(sql)) findings.push(`Missing tenant-bound reference: ${check.name}.`);
   }
 
   for (const table of broadAnonPolicyTables) {
@@ -117,6 +189,7 @@ function analyzeSupabaseSecurity({ migrationsDir = defaultMigrationsDir } = {}) 
   const buckets = extractStorageBuckets(sql);
   for (const [bucket, info] of buckets.entries()) {
     if (!info.publicFalse) findings.push(`storage bucket ${bucket} is not explicitly private.`);
+    if (!bucketForcedPrivate(sql, bucket)) findings.push(`storage bucket ${bucket} is not forced private on conflict or by a later update.`);
     const bucketPolicyRe = new RegExp(`bucket_id\\s*=\\s*'${escapeRegExp(bucket)}'[\\s\\S]{0,220}storage\\.foldername\\(name\\)\\)\\[1\\][\\s\\S]{0,120}auth\\.uid\\(\\)`, 'i');
     if (!bucketPolicyRe.test(sql)) {
       findings.push(`storage bucket ${bucket} does not have an auth.uid()-owned folder policy.`);
@@ -136,6 +209,7 @@ function analyzeSupabaseSecurity({ migrationsDir = defaultMigrationsDir } = {}) 
       policyTables: policyTables.size,
       privateBuckets: [...buckets.values()].filter((bucket) => bucket.publicFalse).length,
       storageBuckets: buckets.size,
+      tenantCheckedTables: [...createdTables].filter((table) => tableHasColumnInSql(sql, table, definitions.get(table) || '', 'user_id')).length,
     },
   };
 }

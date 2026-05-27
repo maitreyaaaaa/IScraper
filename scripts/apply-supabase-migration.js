@@ -5,11 +5,13 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const MANAGEMENT_API = 'https://api.supabase.com/v1';
-const MIGRATION_PATH = path.join(ROOT, 'apps/orchestration/supabase/migrations/202605270002_user_data_exports.sql');
-const MIGRATION_NAME = '202605270002_user_data_exports';
+const migrationArg = process.argv[2] || process.env.MIGRATION_PATH || 'apps/orchestration/supabase/migrations/202605270002_user_data_exports.sql';
+const MIGRATION_PATH = path.isAbsolute(migrationArg) ? migrationArg : path.join(ROOT, migrationArg);
+const MIGRATION_NAME = process.env.MIGRATION_NAME || path.basename(MIGRATION_PATH, '.sql');
 
 for (const envPath of [
   path.join(ROOT, '.env'),
+  path.join(ROOT, '.vercel/.env.production.local'),
   path.join(ROOT, 'apps/orchestration/.env'),
   path.join(ROOT, 'apps/ui/.env'),
 ]) {
@@ -29,7 +31,7 @@ async function main() {
   console.log(`Applying ${MIGRATION_NAME} to Supabase project ${projectRef}...`);
   await applyMigration({ accessToken, projectRef, query });
   console.log('Migration apply request completed. Verifying schema...');
-  const verification = await verifyMigration({ accessToken, projectRef });
+  const verification = await verifyMigration({ accessToken, projectRef, migrationName: MIGRATION_NAME });
   console.log(JSON.stringify(verification, null, 2));
   if (!verification.ok) {
     throw new Error('Migration verification failed.');
@@ -84,7 +86,13 @@ async function applyMigration({ accessToken, projectRef, query }) {
   }
 }
 
-async function verifyMigration({ accessToken, projectRef }) {
+async function verifyMigration({ accessToken, projectRef, migrationName }) {
+  if (migrationName === '202605270003_security_audit_timeline') {
+    return verifySecurityAuditTimelineMigration({ accessToken, projectRef });
+  }
+  if (migrationName === '202605270004_tenant_isolation_classification') {
+    return verifyTenantIsolationMigration({ accessToken, projectRef });
+  }
   const query = `
 select
   exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'users' and column_name = 'public_ref') as users_public_ref,
@@ -121,6 +129,88 @@ select
     publicRefIndex: Boolean(row.public_ref_index),
     requestPolicies: Boolean(row.request_policies),
     stepPolicies: Boolean(row.step_policies),
+  };
+  return { ok: Object.values(checks).every(Boolean), checks };
+}
+
+async function verifyTenantIsolationMigration({ accessToken, projectRef }) {
+  const query = `
+select
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'account_deletion_steps' and column_name = 'user_id') as deletion_steps_user_id,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_data_export_steps' and column_name = 'user_id') as export_steps_user_id,
+  exists(select 1 from pg_constraint where conname = 'account_deletion_steps_user_id_fkey') as deletion_steps_user_fk,
+  exists(select 1 from pg_constraint where conname = 'user_data_export_steps_user_id_fkey') as export_steps_user_fk,
+  exists(select 1 from pg_constraint where conname = 'smart_collection_items_user_collection_fkey') as smart_collection_tenant_fk,
+  exists(select 1 from pg_constraint where conname = 'search_result_feedback_user_event_fkey') as search_feedback_tenant_fk,
+  exists(select 1 from pg_constraint where conname = 'analysis_usage_events_user_item_fkey') as analysis_usage_tenant_fk,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'account_deletion_steps_user_request_idx') as deletion_step_user_index,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'user_data_export_steps_user_request_idx') as export_step_user_index,
+  exists(select 1 from storage.buckets where id = 'instagram-assets' and public = false) as instagram_assets_private,
+  exists(select 1 from storage.buckets where id = 'import-uploads' and public = false) as import_uploads_private,
+  exists(select 1 from storage.buckets where id = 'user-data-exports' and public = false) as exports_private;
+`;
+  const response = await fetch(`${MANAGEMENT_API}/projects/${projectRef}/database/query/read-only`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Supabase verification query failed with ${response.status}: ${safeApiMessage(body)}`);
+  }
+  const body = await response.json().catch(() => ({}));
+  const row = Array.isArray(body) ? body[0] : body.result?.[0] || body.data?.[0] || body;
+  const checks = {
+    deletionStepsUserId: Boolean(row.deletion_steps_user_id),
+    exportStepsUserId: Boolean(row.export_steps_user_id),
+    deletionStepsUserFk: Boolean(row.deletion_steps_user_fk),
+    exportStepsUserFk: Boolean(row.export_steps_user_fk),
+    smartCollectionTenantFk: Boolean(row.smart_collection_tenant_fk),
+    searchFeedbackTenantFk: Boolean(row.search_feedback_tenant_fk),
+    analysisUsageTenantFk: Boolean(row.analysis_usage_tenant_fk),
+    deletionStepUserIndex: Boolean(row.deletion_step_user_index),
+    exportStepUserIndex: Boolean(row.export_step_user_index),
+    instagramAssetsPrivate: Boolean(row.instagram_assets_private),
+    importUploadsPrivate: Boolean(row.import_uploads_private),
+    exportsPrivate: Boolean(row.exports_private),
+  };
+  return { ok: Object.values(checks).every(Boolean), checks };
+}
+
+async function verifySecurityAuditTimelineMigration({ accessToken, projectRef }) {
+  const query = `
+select
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'account_deletion_requests' and column_name = 'logged_at') as deletion_logged_at,
+  to_regclass('public.security_audit_events') is not null as security_audit_table,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'security_audit_events_target_created_idx') as audit_target_index,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'security_audit_events_type_created_idx') as audit_type_index,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'account_deletion_active_user_idx') as deletion_active_index,
+  exists(select 1 from pg_tables where schemaname = 'public' and tablename = 'security_audit_events' and rowsecurity = true) as audit_rls_enabled;
+`;
+  const response = await fetch(`${MANAGEMENT_API}/projects/${projectRef}/database/query/read-only`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Supabase verification query failed with ${response.status}: ${safeApiMessage(body)}`);
+  }
+  const body = await response.json().catch(() => ({}));
+  const row = Array.isArray(body) ? body[0] : body.result?.[0] || body.data?.[0] || body;
+  const checks = {
+    deletionLoggedAt: Boolean(row.deletion_logged_at),
+    securityAuditTable: Boolean(row.security_audit_table),
+    auditTargetIndex: Boolean(row.audit_target_index),
+    auditTypeIndex: Boolean(row.audit_type_index),
+    deletionActiveIndex: Boolean(row.deletion_active_index),
+    auditRlsEnabled: Boolean(row.audit_rls_enabled),
   };
   return { ok: Object.values(checks).every(Boolean), checks };
 }

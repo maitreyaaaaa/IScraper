@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { processAccountDeletionRequest, publicDeletionRequest } = require('../services/accountDeletion');
+const { hashAuditValue, recordSecurityAuditForRequest } = require('../services/auditLog');
 
 function registerAdminRoutes(app, deps) {
   const {
@@ -19,10 +20,23 @@ function registerAdminRoutes(app, deps) {
     const validLength = Buffer.byteLength(password) === Buffer.byteLength(expected);
     const validPassword = validLength && crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expected));
     if (!email || !adminEmails.has(email) || !validPassword) {
+      await recordSecurityAuditForRequest(store, req, {
+        eventType: 'admin_login_failed',
+        actorType: 'admin',
+        severity: 'warning',
+        result: 'denied',
+        metadata: { emailProvided: Boolean(email) },
+      });
       warnWorkflow(req, 'admin login rejected', { statusCode: 403 });
       return res.status(403).json({ error: 'Invalid admin email or password.' });
     }
 
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'admin_login_succeeded',
+      actorType: 'admin',
+      severity: 'warning',
+      metadata: { actor: email },
+    });
     captureWorkflow(req, 'admin login completed', { actorType: 'password_admin' });
     return res.json({ admin: { email } });
   }));
@@ -39,14 +53,27 @@ function registerAdminRoutes(app, deps) {
     const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 100);
     const offset = Math.max(Number(req.query.offset || 0), 0);
     const query = String(req.query.q || '').trim();
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'admin_user_list_viewed',
+      actorType: 'admin',
+      severity: 'warning',
+      metadata: { hasQuery: Boolean(query), limit, offset },
+    });
     res.json(await store.listAdminUsers({ query, limit, offset }));
   }));
 
   app.get('/api/admin/users/:userId', adminRateLimit, asyncRoute(async (req, res) => {
-    await assertAdmin(req, config, store);
+    const adminUser = await assertAdmin(req, config, store);
     if (typeof store.getAdminUserDetail !== 'function') return res.status(501).json({ error: 'Admin user details are not available.' });
     const user = await store.getAdminUserDetail(req.params.userId);
     if (!user) return res.status(404).json({ error: 'User not found.' });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'admin_user_detail_viewed',
+      actorType: 'admin',
+      targetUserId: req.params.userId,
+      severity: 'warning',
+      metadata: { adminActorHash: hashAuditValue(adminUser.id || adminUser.email || 'admin') },
+    });
     res.json({ user });
   }));
 
@@ -61,6 +88,13 @@ function registerAdminRoutes(app, deps) {
       adminActor: adminUser.email || 'admin',
     });
     if (!user) return res.status(404).json({ error: 'User not found.' });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'account_blocked',
+      actorType: 'admin',
+      targetUserId: req.params.userId,
+      severity: 'critical',
+      metadata: { reason },
+    });
     captureWorkflow(req, 'admin user blocked', { targetUserId: req.params.userId, actorType: 'admin' });
     res.json({ user });
   }));
@@ -75,6 +109,12 @@ function registerAdminRoutes(app, deps) {
       adminActor: adminUser.email || 'admin',
     });
     if (!user) return res.status(404).json({ error: 'User not found.' });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'account_unblocked',
+      actorType: 'admin',
+      targetUserId: req.params.userId,
+      severity: 'warning',
+    });
     captureWorkflow(req, 'admin user unblocked', { targetUserId: req.params.userId, actorType: 'admin' });
     res.json({ user });
   }));
@@ -95,6 +135,39 @@ function registerAdminRoutes(app, deps) {
     await assertAdmin(req, config, store);
     if (typeof workflows.worker.workerStatus !== 'function') return res.status(501).json({ error: 'Worker status is not available.' });
     res.json({ status: await workflows.worker.workerStatus() });
+  }));
+
+  app.get('/api/admin/users/:userId/timeline', adminRateLimit, asyncRoute(async (req, res) => {
+    const adminUser = await assertAdmin(req, config, store);
+    if (typeof store.listUserTimeline !== 'function') return res.status(501).json({ error: 'User timeline is not available.' });
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 200));
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'admin_user_timeline_viewed',
+      actorType: 'admin',
+      targetUserId: req.params.userId,
+      severity: 'warning',
+      metadata: { adminActorHash: hashAuditValue(adminUser.id || adminUser.email || 'admin') },
+    });
+    res.json({ timeline: await store.listUserTimeline(req.params.userId, { limit }) });
+  }));
+
+  app.get('/api/admin/audit-events', adminRateLimit, asyncRoute(async (req, res) => {
+    await assertAdmin(req, config, store);
+    if (typeof store.listSecurityAuditEvents !== 'function') return res.status(501).json({ error: 'Audit events are not available.' });
+    const filters = {
+      targetUserId: String(req.query.targetUserId || ''),
+      eventType: String(req.query.eventType || ''),
+      severity: String(req.query.severity || ''),
+      limit: Math.max(1, Math.min(Number(req.query.limit || 100), 200)),
+    };
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'admin_audit_events_viewed',
+      actorType: 'admin',
+      targetUserId: filters.targetUserId || null,
+      severity: 'warning',
+      metadata: { eventType: filters.eventType, severity: filters.severity, limit: filters.limit },
+    });
+    res.json({ auditEvents: await store.listSecurityAuditEvents(filters) });
   }));
 
   app.get('/api/admin/feedback', adminRateLimit, asyncRoute(async (req, res) => {
@@ -138,6 +211,13 @@ function registerAdminRoutes(app, deps) {
     if (!reason) return res.status(400).json({ error: 'reason is required.' });
 
     const result = await store.addAdminCreditAdjustment({ userId, amount, reason, adminActor });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'admin_credit_adjusted',
+      actorType: 'admin',
+      targetUserId: userId,
+      severity: 'critical',
+      metadata: { amount, reason },
+    });
     captureWorkflow(req, 'admin credits adjusted', { targetUserId: userId, amount, actorType: 'admin' });
     return res.status(201).json(result);
   }));
@@ -157,6 +237,13 @@ function registerAdminRoutes(app, deps) {
       adminActor: String(req.header('x-admin-actor') || adminUser.email || 'admin').slice(0, 160),
     });
     if (!request) return res.status(404).json({ error: 'Deletion request not found.' });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'account_deletion_approved',
+      actorType: 'admin',
+      targetUserId: request.userId,
+      severity: 'critical',
+      metadata: { deletionRequestId: req.params.id },
+    });
     captureWorkflow(req, 'admin deletion request approved', { deletionRequestId: req.params.id, actorType: 'admin' });
     res.json({ deletion: publicDeletionRequest(request) });
   }));
@@ -170,6 +257,13 @@ function registerAdminRoutes(app, deps) {
       reason: cleanText(req.body?.reason || 'Canceled by admin', 500),
     });
     if (!request) return res.status(404).json({ error: 'Deletion request not found.' });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'account_deletion_canceled_by_admin',
+      actorType: 'admin',
+      targetUserId: request.userId,
+      severity: 'critical',
+      metadata: { deletionRequestId: req.params.id },
+    });
     captureWorkflow(req, 'admin deletion request canceled', { deletionRequestId: req.params.id, actorType: 'admin' });
     res.json({ deletion: publicDeletionRequest(request) });
   }));
@@ -181,6 +275,19 @@ function registerAdminRoutes(app, deps) {
       requestId: req.params.id,
       actor: String(req.header('x-admin-actor') || adminUser.email || 'admin').slice(0, 160),
       maxSteps: Number(req.body?.maxSteps || req.query?.maxSteps) || 7,
+    });
+    await recordSecurityAuditForRequest(store, req, {
+      eventType: 'account_deletion_processed',
+      actorType: 'admin',
+      targetUserId: result.request?.userId || null,
+      severity: 'critical',
+      result: result.failedStep ? 'failure' : 'success',
+      metadata: {
+        deletionRequestId: req.params.id,
+        executedCount: result.executed.length,
+        complete: result.complete,
+        failedStep: result.failedStep || null,
+      },
     });
     captureWorkflow(req, 'admin deletion request processed', {
       deletionRequestId: req.params.id,
