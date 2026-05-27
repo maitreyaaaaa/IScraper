@@ -93,6 +93,9 @@ async function verifyMigration({ accessToken, projectRef, migrationName }) {
   if (migrationName === '202605270004_tenant_isolation_classification') {
     return verifyTenantIsolationMigration({ accessToken, projectRef });
   }
+  if (migrationName === '202605270005_request_correlation_ai_notice') {
+    return verifyRequestCorrelationMigration({ accessToken, projectRef });
+  }
   const query = `
 select
   exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'users' and column_name = 'public_ref') as users_public_ref,
@@ -176,6 +179,59 @@ select
     instagramAssetsPrivate: Boolean(row.instagram_assets_private),
     importUploadsPrivate: Boolean(row.import_uploads_private),
     exportsPrivate: Boolean(row.exports_private),
+  };
+  return { ok: Object.values(checks).every(Boolean), checks };
+}
+
+async function verifyRequestCorrelationMigration({ accessToken, projectRef }) {
+  const query = `
+select
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'imports' and column_name = 'request_id') as imports_request_id,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'imports' and column_name = 'correlation_id') as imports_correlation_id,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'processing_jobs' and column_name = 'request_id') as jobs_request_id,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'processing_jobs' and column_name = 'correlation_id') as jobs_correlation_id,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'processing_jobs' and column_name = 'source_action') as jobs_source_action,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_data_export_requests' and column_name = 'request_id') as exports_request_id,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_data_export_requests' and column_name = 'correlation_id') as exports_correlation_id,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'account_deletion_requests' and column_name = 'request_id') as deletion_request_id,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'account_deletion_requests' and column_name = 'correlation_id') as deletion_correlation_id,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'security_audit_events' and column_name = 'correlation_id') as audit_correlation_id,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'imports_correlation_idx') as imports_correlation_idx,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'processing_jobs_correlation_idx') as jobs_correlation_idx,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'user_data_export_requests_correlation_idx') as exports_correlation_idx,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'account_deletion_requests_correlation_idx') as deletion_correlation_idx,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'security_audit_events_correlation_idx') as audit_correlation_idx;
+`;
+  const response = await fetch(`${MANAGEMENT_API}/projects/${projectRef}/database/query/read-only`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Supabase verification query failed with ${response.status}: ${safeApiMessage(body)}`);
+  }
+  const body = await response.json().catch(() => ({}));
+  const row = Array.isArray(body) ? body[0] : body.result?.[0] || body.data?.[0] || body;
+  const checks = {
+    importsRequestId: Boolean(row.imports_request_id),
+    importsCorrelationId: Boolean(row.imports_correlation_id),
+    jobsRequestId: Boolean(row.jobs_request_id),
+    jobsCorrelationId: Boolean(row.jobs_correlation_id),
+    jobsSourceAction: Boolean(row.jobs_source_action),
+    exportsRequestId: Boolean(row.exports_request_id),
+    exportsCorrelationId: Boolean(row.exports_correlation_id),
+    deletionRequestId: Boolean(row.deletion_request_id),
+    deletionCorrelationId: Boolean(row.deletion_correlation_id),
+    auditCorrelationId: Boolean(row.audit_correlation_id),
+    importsCorrelationIndex: Boolean(row.imports_correlation_idx),
+    jobsCorrelationIndex: Boolean(row.jobs_correlation_idx),
+    exportsCorrelationIndex: Boolean(row.exports_correlation_idx),
+    deletionCorrelationIndex: Boolean(row.deletion_correlation_idx),
+    auditCorrelationIndex: Boolean(row.audit_correlation_idx),
   };
   return { ok: Object.values(checks).every(Boolean), checks };
 }

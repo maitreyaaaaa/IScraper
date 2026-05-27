@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const { routeGroupForPath } = require('./observability');
 
 const SENSITIVE_KEY_RE = /(secret|token|password|authorization|cookie|api[_-]?key|encrypted|hash|session|credential|auth|raw|body|email)/i;
-const SAFE_IDENTIFIER_KEY_RE = /^(tokenId|credentialId|extensionTokenId|agentTokenId|connectionId|requestId|exportRequestId|deletionRequestId)$/i;
+const SAFE_IDENTIFIER_KEY_RE = /^(tokenId|credentialId|extensionTokenId|agentTokenId|connectionId|requestId|correlationId|referenceId|exportRequestId|deletionRequestId|importId|jobId)$/i;
 const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const BEARER_RE = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 const TOKENISH_RE = /\b(?:sk|sbp|xox|ghp|gho|ghu|ghs|glpat|AIza|eyJ)[A-Za-z0-9._~+/=-]{12,}\b/g;
@@ -44,6 +44,7 @@ function auditContextForRequest(req, metadata = {}) {
   const route = req?.route?.path ? `${req.baseUrl || ''}${req.route.path}` : req?.path || '';
   return {
     requestId: req?.context?.requestId || '',
+    correlationId: req?.context?.correlationId || req?.context?.requestId || '',
     route,
     method: req?.method || '',
     routeGroup: routeGroupForPath(route),
@@ -71,6 +72,7 @@ async function recordSecurityAuditForRequest(store, req, {
     severity,
     result,
     requestId: context.requestId,
+    correlationId: context.correlationId,
     route: context.route,
     method: context.method,
     ipHash: context.ipHash,

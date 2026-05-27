@@ -170,7 +170,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data ? mapDeletionRequest(data) : null;
     },
-    async createDeletionRequest({ userId, email, reason = '', exportConfirmed = false }) {
+    async createDeletionRequest({ userId, email, reason = '', exportConfirmed = false, requestId = '', correlationId = '' }) {
       const active = await this.getActiveDeletionRequest(userId);
       if (active) return active;
       const row = {
@@ -181,6 +181,8 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         reason: String(reason || '').trim().slice(0, 500),
         export_confirmed: Boolean(exportConfirmed),
         status_message: 'Deletion request received.',
+        request_id: requestId || null,
+        correlation_id: correlationId || requestId || null,
       };
       const { data, error } = await client
         .from('account_deletion_requests')
@@ -189,7 +191,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .single();
       if (error?.code === '23505') return this.getActiveDeletionRequest(userId);
       if (error) throw error;
-      await this.recordUserActivity({ userId, eventType: 'deletion_requested', metadata: { requestId: data.id } });
+      await this.recordUserActivity({ userId, eventType: 'deletion_requested', metadata: { deletionRequestId: data.id, requestId, correlationId: correlationId || requestId } });
       return mapDeletionRequest(data);
     },
     async cancelDeletionRequestForUser(userId) {
@@ -589,19 +591,21 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         exportRequests: exportRequests.map((row) => mapDataExportRequest(row, [])),
       };
     },
-    async createDataExportRequest(userId, { includeFiles = false } = {}) {
+    async createDataExportRequest(userId, { includeFiles = false, requestId = '', correlationId = '' } = {}) {
       const { data, error } = await client
         .from('user_data_export_requests')
         .insert({
           user_id: userId,
           status: 'requested',
           format: 'zip',
+          request_id: requestId || null,
+          correlation_id: correlationId || requestId || null,
           metadata: { includeFiles: Boolean(includeFiles) },
         })
         .select('*')
         .single();
       if (error) throw error;
-      await this.recordUserActivity({ userId, eventType: 'data_export_requested', metadata: { requestId: data.id } });
+      await this.recordUserActivity({ userId, eventType: 'data_export_requested', metadata: { exportRequestId: data.id, requestId, correlationId: correlationId || requestId } });
       return mapDataExportRequest(data, []);
     },
     async listDataExportRequests(userId) {
@@ -704,7 +708,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .select('*')
         .single();
       if (error) throw error;
-      await this.recordUserActivity({ userId: data.user_id, eventType: 'data_export_ready', metadata: { requestId: data.id } });
+      await this.recordUserActivity({ userId: data.user_id, eventType: 'data_export_ready', metadata: { exportRequestId: data.id, requestId: data.request_id || '', correlationId: data.correlation_id || data.request_id || '' } });
       return mapDataExportRequest(data, []);
     },
     async markDataExportFailed(id, errorMessage) {
@@ -715,7 +719,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .select('*')
         .single();
       if (error) throw error;
-      await this.recordUserActivity({ userId: data.user_id, eventType: 'data_export_failed', metadata: { requestId: data.id, error: errorMessage } });
+      await this.recordUserActivity({ userId: data.user_id, eventType: 'data_export_failed', metadata: { exportRequestId: data.id, requestId: data.request_id || '', correlationId: data.correlation_id || data.request_id || '', errorCategory: errorMessage ? 'data_export_error' : '' } });
       return mapDataExportRequest(data, []);
     },
     async upsertDataExportStep(requestId, step) {
@@ -1055,17 +1059,26 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data ? mapFeedback(data) : null;
     },
-    async createImport({ userId, source, mode = 'export', fileNames = [], status = 'imported', storageFiles = [] }) {
+    async createImport({ userId, source, mode = 'export', fileNames = [], status = 'imported', storageFiles = [], requestId = '', correlationId = '' }) {
       const { data, error } = await client
         .from('imports')
-        .insert({ user_id: userId, source, mode, file_names: fileNames, status, storage_files: storageFiles })
+        .insert({
+          user_id: userId,
+          source,
+          mode,
+          file_names: fileNames,
+          status,
+          storage_files: storageFiles,
+          request_id: requestId || null,
+          correlation_id: correlationId || requestId || null,
+        })
         .select('*')
         .single();
       if (error) throw error;
       await this.recordUserActivity({
         userId,
         eventType: status === 'queued_storage' ? 'import_started' : 'import_completed',
-        metadata: { importId: data.id, source, fileCount: fileNames.length },
+        metadata: { importId: data.id, source, fileCount: fileNames.length, requestId, correlationId: correlationId || requestId },
       });
       return mapImport(data);
     },
@@ -1077,13 +1090,6 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .eq('id', id)
         .maybeSingle();
       if (error) throw error;
-      if (data?.user_id) {
-        await this.recordUserActivity({
-          userId: data.user_id,
-          eventType: status === 'failed' ? 'import_failed' : status === 'imported' ? 'import_completed' : 'import_status_changed',
-          metadata: { importId: data.id, status, errorCategory: errorMessage ? 'import_error' : '' },
-        });
-      }
       return data ? mapImport(data) : null;
     },
     async getPendingStorageImports({ limit = 1 } = {}) {
@@ -1105,6 +1111,19 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .select('*')
         .maybeSingle();
       if (error) throw error;
+      if (data?.user_id) {
+        await this.recordUserActivity({
+          userId: data.user_id,
+          eventType: status === 'failed' ? 'import_failed' : status === 'imported' ? 'import_completed' : 'import_status_changed',
+          metadata: {
+            importId: data.id,
+            status,
+            errorCategory: errorMessage ? 'import_error' : '',
+            requestId: data.request_id || '',
+            correlationId: data.correlation_id || data.request_id || '',
+          },
+        });
+      }
       return data ? mapImport(data) : null;
     },
     async updateImportStatus(id, status, errorMessage = null) {
@@ -1163,12 +1182,22 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error) throw error;
       return data ? mapItem(data) : null;
     },
-    async createJobs({ userId, importId, items }) {
+    async createJobs({ userId, importId, items, requestId = '', correlationId = '', sourceAction = '' }) {
+      let effectiveRequestId = requestId;
+      let effectiveCorrelationId = correlationId || requestId;
+      if ((!effectiveRequestId || !effectiveCorrelationId) && importId) {
+        const importEntry = await this.getImport(userId, importId);
+        effectiveRequestId = effectiveRequestId || importEntry?.requestId || '';
+        effectiveCorrelationId = effectiveCorrelationId || importEntry?.correlationId || effectiveRequestId;
+      }
       const rows = items.map((item) => ({
         user_id: userId,
         import_id: importId,
         item_id: item.id,
         status: 'queued',
+        request_id: effectiveRequestId || null,
+        correlation_id: effectiveCorrelationId || null,
+        source_action: sourceAction || null,
       }));
       if (!rows.length) return [];
       const jobs = [];
@@ -1938,6 +1967,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       severity = 'info',
       result = 'success',
       requestId = '',
+      correlationId = '',
       route = '',
       method = '',
       ipHash = '',
@@ -1955,6 +1985,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
           severity,
           result,
           request_id: requestId || null,
+          correlation_id: correlationId || requestId || null,
           route: route || null,
           method: method || null,
           ip_hash: ipHash || null,
@@ -2334,10 +2365,18 @@ function createSupabaseStore({ url, serviceRoleKey }) {
   };
 }
 
+function referenceIdFor(...values) {
+  const value = values.find((entry) => String(entry || '').trim());
+  return String(value || '').replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 12);
+}
+
 function mapImport(row) {
   return {
     id: row.id,
     userId: row.user_id,
+    requestId: row.request_id || '',
+    correlationId: row.correlation_id || row.request_id || '',
+    referenceId: referenceIdFor(row.correlation_id, row.request_id, row.id),
     source: row.source,
     mode: row.mode,
     status: row.status,
@@ -2354,6 +2393,9 @@ function mapDeletionRequest(row) {
   return {
     id: row.id,
     userId: row.user_id,
+    requestId: row.request_id || '',
+    correlationId: row.correlation_id || row.request_id || '',
+    referenceId: referenceIdFor(row.correlation_id, row.request_id, row.id),
     userIdHash: row.user_id_hash,
     emailHash: row.email_hash,
     status: row.status,
@@ -3030,6 +3072,10 @@ function mapJob(row) {
     userId: row.user_id,
     importId: row.import_id,
     itemId: row.item_id,
+    requestId: row.request_id || '',
+    correlationId: row.correlation_id || row.request_id || '',
+    referenceId: referenceIdFor(row.correlation_id, row.request_id, row.id),
+    sourceAction: row.source_action || '',
     status: row.status,
     attempts: row.attempts,
     error: row.error,
@@ -3057,6 +3103,9 @@ function toJobRow(patch) {
   if (Object.prototype.hasOwnProperty.call(patch, 'claimedAt')) row.claimed_at = patch.claimedAt;
   if (Object.prototype.hasOwnProperty.call(patch, 'completedAt')) row.completed_at = patch.completedAt;
   if (Object.prototype.hasOwnProperty.call(patch, 'lastErrorAt')) row.last_error_at = patch.lastErrorAt;
+  if (Object.prototype.hasOwnProperty.call(patch, 'requestId')) row.request_id = patch.requestId || null;
+  if (Object.prototype.hasOwnProperty.call(patch, 'correlationId')) row.correlation_id = patch.correlationId || patch.requestId || null;
+  if (Object.prototype.hasOwnProperty.call(patch, 'sourceAction')) row.source_action = patch.sourceAction || null;
   return row;
 }
 
@@ -3231,6 +3280,8 @@ function mapSecurityAuditEvent(row) {
     severity: row.severity,
     result: row.result,
     requestId: row.request_id || '',
+    correlationId: row.correlation_id || row.request_id || '',
+    referenceId: referenceIdFor(row.correlation_id, row.request_id, row.id),
     route: row.route || '',
     method: row.method || '',
     ipHash: row.ip_hash || '',
@@ -3279,6 +3330,9 @@ function mapDataExportRequest(row, steps = []) {
   return {
     id: row.id,
     userId: row.user_id,
+    requestId: row.request_id || '',
+    correlationId: row.correlation_id || row.request_id || '',
+    referenceId: referenceIdFor(row.correlation_id, row.request_id, row.id),
     status: row.status,
     format: row.format || 'zip',
     requestedAt: row.requested_at,

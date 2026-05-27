@@ -119,6 +119,82 @@ test('health endpoint returns aggregate runtime status only', async () => {
   }
 });
 
+test('API request and correlation IDs propagate through manual save jobs', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Request-ID': 'req-test-1234',
+      'X-Correlation-ID': 'corr-test-1234',
+    };
+    const response = await fetch(`http://127.0.0.1:${port}/api/saves/link`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ url: 'https://example.com/article', title: 'Example article' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 201);
+    assert.equal(response.headers.get('x-request-id'), 'req-test-1234');
+    assert.equal(response.headers.get('x-correlation-id'), 'corr-test-1234');
+    assert.equal(body.requestId, 'req-test-1234');
+    assert.equal(body.correlationId, 'corr-test-1234');
+    assert.equal(body.import.requestId, 'req-test-1234');
+    assert.equal(body.import.correlationId, 'corr-test-1234');
+    assert.equal(body.indexing.requestId, 'req-test-1234');
+    assert.equal(body.indexing.correlationId, 'corr-test-1234');
+
+    const jobs = store.getJobs('local-dev-user', body.import.id);
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].requestId, 'req-test-1234');
+    assert.equal(jobs[0].correlationId, 'corr-test-1234');
+    assert.equal(jobs[0].sourceAction, 'manual-link');
+    assert.ok(jobs[0].referenceId);
+
+    const jobResponse = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobs[0].id}`, { headers });
+    const jobBody = await jobResponse.json();
+    assert.equal(jobResponse.status, 200);
+    assert.equal(jobBody.job.correlationId, 'corr-test-1234');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('invalid request IDs are replaced and safe error responses include references', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/jobs/missing-job`, {
+      method: 'GET',
+      headers: {
+        'X-Request-ID': 'bad',
+        'X-Correlation-ID': 'also bad',
+      },
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 404);
+    assert.match(response.headers.get('x-request-id') || '', /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{7,127}$/);
+    assert.equal(response.headers.get('x-correlation-id'), response.headers.get('x-request-id'));
+    assert.equal(body.requestId, response.headers.get('x-request-id'));
+    assert.equal(body.correlationId, response.headers.get('x-request-id'));
+    assert.equal(JSON.stringify(body).includes('secret'), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('authenticated middleware caches user setup while preserving deletion safety checks', async () => {
   let authCalls = 0;
   let safetyCalls = 0;

@@ -1,5 +1,5 @@
 const JSZip = require('jszip');
-const { recordRequestTiming } = require('../services/observability');
+const { recordRequestTiming, traceForRequest } = require('../services/observability');
 const { buildKnowledgeGraph, buildObsidianFiles } = require('../services/graph');
 const { normalizeReminderInput } = require('../services/libraryCare');
 const {
@@ -84,6 +84,7 @@ function registerLibraryRoutes(app, deps) {
 
   app.post('/api/smart-collections/refresh', asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
+    const trace = traceForRequest(req);
     const collections = await refreshSmartCollectionsForUser(req.user.id);
     captureWorkflow(req, 'smart collections refreshed', { collectionCount: collections.length });
     return res.json({ collections });
@@ -316,6 +317,7 @@ function registerLibraryRoutes(app, deps) {
     if (typeof store.updateSavedItem !== 'function') return res.status(501).json({ error: 'Review approval is not available.' });
     let item = await store.getItem(req.user.id, req.params.id);
     if (!item) return res.status(404).json({ error: 'Item not found.' });
+    const trace = traceForRequest(req);
 
     item = await store.updateSavedItem(req.user.id, item.id, {
       ...reviewUpdatesFromBody(req.body || {}, item),
@@ -330,13 +332,15 @@ function registerLibraryRoutes(app, deps) {
         source: 'review-approval',
         mode: 'export',
         fileNames: [item.url],
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
       });
       importId = importEntry.id;
       item = await store.updateSavedItem(req.user.id, item.id, { importId });
     }
     captureWorkflow(req, 'review item approved', { itemId: item.id, importId });
 
-    const jobs = item.status === 'done' ? [] : await store.createJobs({ userId: req.user.id, importId, items: [item] });
+    const jobs = item.status === 'done' ? [] : await store.createJobs({ userId: req.user.id, importId, items: [item], ...trace, sourceAction: 'review-approve' });
     let indexing = null;
     if (req.body?.startProcessing !== false && jobs.length) {
       indexing = await queueIndexingWork({
@@ -344,11 +348,13 @@ function registerLibraryRoutes(app, deps) {
         userId: req.user.id,
         importId,
         shouldDownload: req.body?.download !== false,
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
       });
     }
 
     await refreshSmartCollectionsForUser(req.user.id);
-    return res.json({ item, queuedJobCount: jobs.length, jobs, indexing });
+    return res.json({ item, queuedJobCount: jobs.length, jobs, indexing, requestId: trace.requestId, correlationId: trace.correlationId });
   }));
 
   app.post('/api/items/:id/enrich', asyncRoute(async (req, res) => {
@@ -367,12 +373,14 @@ function registerLibraryRoutes(app, deps) {
     }
 
     const limit = Math.max(1, Math.min(Number(req.body?.limit) || 1000, 1000));
+    const trace = traceForRequest(req);
     const allItems = await store.getItems(req.user.id);
     const pendingReviewItems = allItems.filter((item) => item.status === 'needs_review');
     const selectedItems = pendingReviewItems.slice(0, limit);
     const { items, jobs } = await approveReviewItemsForIndexing({
       userId: req.user.id,
       items: selectedItems,
+      trace: { ...trace, sourceAction: 'indexing-start' },
     });
 
     let indexing = null;
@@ -382,6 +390,8 @@ function registerLibraryRoutes(app, deps) {
         userId: req.user.id,
         importId: null,
         shouldDownload: req.body?.download !== false,
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
       });
     }
 
@@ -394,6 +404,8 @@ function registerLibraryRoutes(app, deps) {
       items,
       jobs,
       indexing,
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     });
   }));
 

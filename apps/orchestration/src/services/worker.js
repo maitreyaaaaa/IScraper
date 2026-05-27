@@ -6,6 +6,7 @@ const { analyzeMediaWithCredential, analyzeTextWithCredential, buildTextBaseAnal
 const { DEFAULT_MAX_JOB_ATTEMPTS, nextRetryAt, pickNextProcessableJob } = require('./queue');
 const { downloadInstagramMedia } = require('./downloader');
 const { DEFAULT_APP_MEDIA_MODEL } = require('./providers');
+const { recordSupportEvent } = require('./auditLog');
 
 const AI_STEP_TIMEOUT_MS = 90 * 1000;
 
@@ -140,6 +141,11 @@ async function processOneJob({
       leaseToken: null,
       leaseExpiresAt: null,
     });
+    await recordSupportEvent(store, {
+      userId,
+      eventType: 'background_job_failed',
+      metadata: jobTraceMetadata(currentJob, { errorCategory: 'missing_item' }),
+    });
     return null;
   }
 
@@ -267,6 +273,11 @@ async function processOneJob({
     if (!(await isLeaseStillOwned({ store, userId, job: currentJob }))) return null;
     if (error.pauseStatus) {
       await pauseJob({ store, userId, item, job: currentJob, status: error.pauseStatus, message: error.message });
+      await recordSupportEvent(store, {
+        userId,
+        eventType: 'background_job_blocked',
+        metadata: jobTraceMetadata(currentJob, { status: error.pauseStatus, errorCategory: error.pauseStatus }),
+      });
       return null;
     }
     if (isProviderLimitError(error)) {
@@ -277,6 +288,11 @@ async function processOneJob({
         job: currentJob,
         status: 'paused_api_limit',
         message: 'Saved post did not process because your API limit was reached.',
+      });
+      await recordSupportEvent(store, {
+        userId,
+        eventType: 'background_job_blocked',
+        metadata: jobTraceMetadata(currentJob, { status: 'paused_api_limit', errorCategory: 'provider_limit' }),
       });
       return null;
     }
@@ -297,8 +313,27 @@ async function processOneJob({
       nextAttemptAt: exhausted ? null : nextRetryAt({ attempts, baseMs: retryBackoffMs, maxMs: maxRetryBackoffMs }),
       lastErrorAt: new Date().toISOString(),
     } });
+    await recordSupportEvent(store, {
+      userId,
+      eventType: exhausted ? 'background_job_failed' : 'background_job_retrying',
+      metadata: jobTraceMetadata(currentJob, {
+        status: exhausted ? 'failed' : 'queued',
+        errorCategory: userSafeIndexingErrorCategory(error),
+      }),
+    });
     return null;
   }
+}
+
+function jobTraceMetadata(job, extra = {}) {
+  return {
+    jobId: job?.id || '',
+    importId: job?.importId || '',
+    requestId: job?.requestId || '',
+    correlationId: job?.correlationId || job?.requestId || '',
+    sourceAction: job?.sourceAction || '',
+    ...extra,
+  };
 }
 
 function pickNextProcessableJobs(jobs, limit) {
@@ -441,6 +476,15 @@ function userSafeIndexingError(error) {
   if (/billing|credits/i.test(message)) return 'Enrichment credits are not available for this save.';
   if (/provider key|api provider|no text ai provider/i.test(message)) return 'Connect an AI provider before indexing this save.';
   return 'Indexing failed for this save. IScraper will retry if attempts remain.';
+}
+
+function userSafeIndexingErrorCategory(error) {
+  const message = String(error?.message || error || '');
+  if (/timeout/i.test(message)) return 'timeout';
+  if (/api limit|rate limit|quota/i.test(message)) return 'provider_limit';
+  if (/billing|credits/i.test(message)) return 'billing';
+  if (/provider key|api provider|no text ai provider/i.test(message)) return 'missing_provider';
+  return 'indexing_error';
 }
 
 module.exports = {

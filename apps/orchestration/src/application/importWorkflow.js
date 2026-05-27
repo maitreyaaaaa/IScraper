@@ -1,8 +1,9 @@
 const { parseImportExport } = require('../services/exportParser');
 const { parseManualLinkPayload } = require('../services/linkSaver');
+const { traceForRequest } = require('../services/observability');
 
 function createImportWorkflow({ store, archive, library, worker }) {
-  async function createImportFromFiles({ userId, files }) {
+  async function createImportFromFiles({ userId, files, trace = {} }) {
     const parsed = await parseImportExport(files);
     if (!parsed.items.length) {
       const error = new Error('No saves were found in those files. Upload Instagram saved-post files, Pinterest export files, or X bookmark export files.');
@@ -14,6 +15,8 @@ function createImportWorkflow({ store, archive, library, worker }) {
       source: parsed.source || 'user-export',
       mode: 'export',
       fileNames: files.map((file) => file.originalname),
+      requestId: trace.requestId || '',
+      correlationId: trace.correlationId || '',
     });
     const items = await store.upsertImportData({
       userId,
@@ -23,7 +26,14 @@ function createImportWorkflow({ store, archive, library, worker }) {
       duplicateMode: 'skipExisting',
     });
     const jobs = typeof store.createJobs === 'function'
-      ? await store.createJobs({ userId, importId: importEntry.id, items })
+      ? await store.createJobs({
+        userId,
+        importId: importEntry.id,
+        items,
+        requestId: trace.requestId || '',
+        correlationId: trace.correlationId || '',
+        sourceAction: trace.sourceAction || 'import-upload',
+      })
       : [];
 
     return {
@@ -35,6 +45,8 @@ function createImportWorkflow({ store, archive, library, worker }) {
       collectionCount: parsed.collections.length,
       queuedJobCount: jobs.length,
       jobCount: jobs.length,
+      requestId: trace.requestId || '',
+      correlationId: trace.correlationId || '',
     };
   }
 
@@ -47,15 +59,20 @@ function createImportWorkflow({ store, archive, library, worker }) {
     initialStatus = 'queued',
     shouldArchive = true,
   }) {
+    const trace = traceForRequest(req);
     const parsed = parseManualLinkPayload(payload || {});
     const importEntry = await store.createImport({
       userId,
       source,
       mode: 'export',
       fileNames: [parsed.items[0].url],
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     });
     const items = await store.upsertImportData({ userId, importId: importEntry.id, parsed, initialStatus });
-    const jobs = initialStatus === 'queued' ? await store.createJobs({ userId, importId: importEntry.id, items }) : [];
+    const jobs = initialStatus === 'queued'
+      ? await store.createJobs({ userId, importId: importEntry.id, items, ...trace, sourceAction: reason })
+      : [];
     let responseItem = null;
     try {
       responseItem = await Promise.resolve(store.getItem(userId, items[0]?.id || parsed.items[0].id));
@@ -73,6 +90,8 @@ function createImportWorkflow({ store, archive, library, worker }) {
         userId,
         importId: importEntry.id,
         shouldDownload: false,
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
       });
     }
     await library.refreshSmartCollectionsForUser(userId);
@@ -83,6 +102,8 @@ function createImportWorkflow({ store, archive, library, worker }) {
       skippedDuplicateCount: items.length ? 0 : 1,
       queuedJobCount: jobs.length,
       indexing,
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     };
   }
 

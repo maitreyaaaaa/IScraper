@@ -34,6 +34,7 @@ function createErrorHandler({ multer, store, warnWorkflow }) {
     res.status(statusCode).json({
       error: error.message,
       requestId: req.context?.requestId,
+      correlationId: req.context?.correlationId || req.context?.requestId,
       ...(error.deletion ? { deletion: error.deletion } : {}),
     });
   };

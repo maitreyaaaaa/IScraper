@@ -1,5 +1,5 @@
 const { publicDeletionRequest } = require('../services/accountDeletion');
-const { recordRequestTiming } = require('../services/observability');
+const { recordRequestTiming, traceForRequest } = require('../services/observability');
 const { validateProfileInput } = require('../services/profiles');
 const { recordSecurityAuditForRequest, recordSupportEvent } = require('../services/auditLog');
 
@@ -25,11 +25,14 @@ function registerAccountRoutes(app, deps) {
     if (req.body?.exportConfirmed !== true) {
       return res.status(400).json({ error: 'Confirm that you exported or intentionally skipped exporting your data first.' });
     }
+    const trace = traceForRequest(req);
     const request = await store.createDeletionRequest({
       userId: req.user.id,
       email: req.user.email,
       reason: cleanText(req.body?.reason || '', 500),
       exportConfirmed: true,
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     });
     if (typeof store.freezeUserForDeletion === 'function') {
       await store.freezeUserForDeletion(req.user.id, { requestId: request.id, actor: 'user-request' });
@@ -48,7 +51,7 @@ function registerAccountRoutes(app, deps) {
       metadata: { deletionRequestId: request.id },
     });
     captureWorkflow(req, 'account deletion requested', { deletionRequestId: request.id });
-    res.status(201).json({ deletion: publicDeletionRequest(current) });
+    res.status(201).json({ deletion: publicDeletionRequest(current), requestId: trace.requestId, correlationId: trace.correlationId });
   }));
 
   app.post('/api/account/deletion/cancel', asyncRoute(async (req, res) => {

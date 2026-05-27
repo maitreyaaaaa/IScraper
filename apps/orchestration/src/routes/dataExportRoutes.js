@@ -1,5 +1,6 @@
 const { getUserDataMap } = require('../services/userDataRegistry');
 const { recordSecurityAuditForRequest } = require('../services/auditLog');
+const { traceForRequest } = require('../services/observability');
 
 function registerDataExportRoutes(app, deps) {
   const { http, store, workflows } = deps;
@@ -22,7 +23,8 @@ function registerDataExportRoutes(app, deps) {
   app.post('/api/data-exports', asyncRoute(async (req, res) => {
     if (typeof store.createDataExportRequest !== 'function') return res.status(501).json({ error: 'Data exports are not available.' });
     const includeFiles = req.body?.includeFiles === true;
-    const request = await store.createDataExportRequest(req.user.id, { includeFiles });
+    const trace = traceForRequest(req);
+    const request = await store.createDataExportRequest(req.user.id, { includeFiles, requestId: trace.requestId, correlationId: trace.correlationId });
     await recordSecurityAuditForRequest(store, req, {
       eventType: 'data_export_requested',
       severity: 'warning',
@@ -31,7 +33,7 @@ function registerDataExportRoutes(app, deps) {
     });
     captureWorkflow(req, 'data export requested', { exportRequestId: request.id, includeFiles });
     workflows?.worker?.startDataExportProcessing?.({ maxJobs: 1 });
-    res.status(202).json({ export: request });
+    res.status(202).json({ export: request, requestId: trace.requestId, correlationId: trace.correlationId });
   }));
 
   app.get('/api/data-exports/:id', asyncRoute(async (req, res) => {

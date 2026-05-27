@@ -120,10 +120,24 @@ function createApp({ store, config = {}, observability = createObservability(con
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use(observability.requestMiddleware);
+  app.use((req, res, next) => {
+    const originalJson = res.json.bind(res);
+    res.json = (body) => {
+      if (res.statusCode >= 400 && body && typeof body === 'object' && !Array.isArray(body)) {
+        return originalJson({
+          ...body,
+          requestId: body.requestId || req.context?.requestId,
+          correlationId: body.correlationId || req.context?.correlationId || req.context?.requestId,
+        });
+      }
+      return originalJson(body);
+    };
+    next();
+  });
   app.use(securityHeaders);
   app.use(generalRateLimit);
   app.use(cors({
-    exposedHeaders: ['X-Request-ID'],
+    exposedHeaders: ['X-Request-ID', 'X-Correlation-ID'],
     origin(origin, callback) {
       if (!origin || allowedOrigins.has(String(origin).replace(/\/$/, ''))) {
         return callback(null, true);

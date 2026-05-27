@@ -428,6 +428,8 @@ const PROVIDER_DISPLAY_LABELS = {
 };
 
 const OPENAI_COMPATIBLE_NOTE = 'Advanced option. This can work if your service supports OpenAI-style chat APIs. It is usually for text summaries only unless you know your model supports images, video, or embeddings.';
+const AI_PROCESSING_NOTICE = 'When you index saves, content may be processed by your selected AI providers or IScraper\'s configured provider to summarize, transcribe, OCR, embed, tag, visually analyze, and power search.';
+const PROVIDER_KEY_PRIVACY_NOTICE = 'Provider keys are encrypted after saving, shown later only as metadata, and used only for the selected processing purpose.';
 
 const PROVIDER_WARNING_COPY = {
   anthropic: {
@@ -3300,18 +3302,24 @@ const LEGAL_CONTENT = {
   privacy: {
     eyebrow: 'Privacy Policy',
     title: 'Privacy Policy',
-    intro: 'This policy explains what IScraper collects, why it is collected, and how it is used. It is written for the current product flow: Supabase login with Google or email, Instagram and Pinterest export uploads, saved links, AI indexing, private saved libraries, and the browser extension that is coming soon.',
+    intro: 'This policy explains what IScraper collects, why it exists, how it is used, and how you can export, correct, or delete account data. It matches the current product: Supabase login, saved/imported content, AI indexing, provider keys, extension/MCP/Telegram access, billing credits, support-safe logs, and account deletion.',
     sections: [
-      ['Information we collect', 'We collect login details from Supabase and the login method you choose, such as user ID and email, your chosen username, optional profile picture, feedback you submit, uploaded export files, saved link metadata, generated summaries, transcripts, OCR, tags, graph data, provider key settings, credit records, and basic technical logs. Extension token records may be added when the extension launches.'],
-      ['Login data', 'Google or email login is used to authenticate you and create your IScraper account. From Supabase and Google, when used, we may receive basic account details such as your user ID, email address, name, and profile image if Google provides them. IScraper does not ask for Gmail, Drive, Calendar, contacts, or other Google account content.'],
-      ['Export and saved-link data', 'IScraper uses official export files and saved links that you upload or submit. We do not ask for your social-platform passwords and we removed Instagram login scraping. Your exports and links are used to build your searchable library.'],
-      ['AI providers', 'If indexing is enabled, parts of your uploaded content may be sent to configured AI providers such as OpenRouter, Gemini, or your own connected provider key. This is done to generate summaries, transcripts, OCR, tags, and embeddings.'],
-      ['Browser extension data - coming soon', 'The browser extension is not available for users yet. When released, it is planned to run only after you click it and use limited data such as the current page URL, selected text, or a user-selected screenshot crop.'],
-      ['How we use data', 'We use your data to authenticate your account, keep your library separate from other users, process imports, search your saves, build your graph, show anonymous public feedback, prevent abuse, enforce limits, improve reliability, send service messages, respond to support requests, and send product updates or marketing emails only where you have opted in or where legally permitted.'],
-      ['Login data limits', 'We do not sell login data, use it to build advertising profiles, or transfer it to unrelated third parties for marketing. We use login data only for account access, account communication, security, support, and the email uses described in this policy.'],
-      ['What is public', 'Public feedback is visible to everyone, but it is shown without your name or profile photo. Your saved library, username setup data, provider keys, credits, and imports are not meant to be public.'],
-      ['Security', 'We use Supabase Auth, row-level ownership rules, encrypted provider-key storage, rate limits, upload limits, CORS restrictions, and security headers. No system is perfectly secure, so do not upload highly sensitive data unless you accept that risk.'],
-      ['Retention and deletion', 'Your saved library stays until you delete it or request deletion. Public feedback may remain visible unless removed by an operator. Before public launch, we should add a clear account/data deletion contact or self-serve deletion flow.'],
+      ['Data categories', 'We collect account/auth data, profile settings, saved links and notes, import records, uploaded export metadata, generated summaries, transcripts, OCR, tags, embeddings, search and feedback records, provider-key metadata, extension/MCP/Telegram connection metadata, billing and credit records, support-safe timeline events, request IDs, correlation IDs, security/audit logs, and deletion/export request records.'],
+      ['Sources', 'Data comes from you, Supabase Auth, files or links you upload, browser extension or connected access flows you choose to use, AI/indexing results generated for your library, billing/credit actions, product logs, support/admin actions, and security events.'],
+      ['Purposes', 'We use data to authenticate your account, keep tenants separate, import and save content, index and search your library, process AI features, operate connected access, handle credits, provide exports/deletion, troubleshoot failed imports/jobs, investigate abuse, secure the service, and meet legal or audit requirements.'],
+      ['Account and auth data', 'Supabase Auth is the sign-in source of truth. We store app account records such as user ID, email, public support reference, profile state, username, timestamps, and account/deletion state. IScraper does not ask for Gmail, Drive, Calendar, contacts, or unrelated Google account content.'],
+      ['Saved and imported content', 'Your saved library can include URLs, captions, notes, collections, source metadata, uploaded file metadata, screenshots/images you intentionally save, readable page copies, and generated analysis. This content is private to your account unless you explicitly share or export it.'],
+      ['AI processing', `${AI_PROCESSING_NOTICE} External AI providers may receive content only for the selected processing purpose. User-provided provider keys are encrypted and later shown only as metadata such as provider, purpose, model, hint, and status.`],
+      ['Provider keys and tokens', 'Provider API keys, extension tokens, MCP/agent tokens, and Telegram connection codes are stored as encrypted values or hashes where appropriate. Raw secrets are not included in exports, logs, frontend state, support views, or admin screens, and revocation is supported.'],
+      ['Billing and credits', 'We store credit balances, credit transactions, purchases, checkout status where available, and admin credit adjustments. These records are used for billing, support, fraud prevention, and accounting.'],
+      ['Support and admin access', 'Support/admin views are designed to show status, counts, failed jobs, request references, credit state, tokens count, deletion/export state, and support-safe events. Admins should not casually browse private saved content unless there is a specific, logged support or security reason.'],
+      ['Logs and reference IDs', 'API requests and background jobs use request IDs and correlation IDs so support can trace issues like failed imports without reading private content. Logs and audit events must not contain raw URLs, captions, OCR, transcripts, prompts, provider responses, file paths, auth headers, tokens, API keys, or encrypted secret values.'],
+      ['Cookies and local storage', 'IScraper uses browser storage and Supabase session storage to keep you signed in, preserve app state, remember preferences, and support uploads. Clearing browser storage may sign you out or reset preferences.'],
+      ['Analytics and third parties', 'IScraper may use Supabase, AI providers selected or configured for processing, storage providers, payment providers when billing is enabled, email/support tools, and privacy-conscious analytics. IScraper does not sell personal information or share it for cross-context behavioral advertising.'],
+      ['Your rights', `Where legally applicable, including under California privacy law, you may request access, correction, deletion, and information about data practices. Use self-serve export and deletion in Settings where available, or contact ${SUPPORT_EMAIL} for correction, access questions, or rights requests.`],
+      ['Retention', 'Saved user content stays until you delete it or your account is deleted. Export artifacts expire after the configured retention window, currently 7 days. Request logs are kept short-term for security and reliability, support-safe events are kept long enough to troubleshoot account issues, billing/audit/deletion hashes may be retained longer where required for security, legal, tax, fraud prevention, or accountability.'],
+      ['Deletion', 'Account deletion removes user content, revokes tokens, deletes credentials, disables access, and retains only minimal legal/audit records where required. Deletion-pending accounts can still view privacy information, check/export data, and cancel deletion where allowed.'],
+      ['Security', 'We use Supabase Auth, row-level security, user ownership checks, server-side service-role use only, encryption or hashing for secrets, scoped/revokable tokens, upload limits, rate limits, CORS restrictions, security headers, audit logs, and redaction. No system is perfectly secure, so avoid uploading data you cannot risk processing.'],
       ['Children', 'IScraper is not directed to children under 13. Do not use the service if you are not old enough to consent under your local law.'],
       ['Contact', `For privacy requests, contact us at ${SUPPORT_EMAIL}.`],
     ],
@@ -3365,7 +3373,7 @@ function LegalPage({ type, onBack }) {
             <ArrowLeft className="h-5 w-5 text-muted-foreground" />
             <BrandLogo className="h-12 w-40" />
           </button>
-          <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Last updated May 8, 2026</span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Last updated May 27, 2026</span>
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-5 py-14 md:py-20">
@@ -5796,6 +5804,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
                     A simple view of what IScraper stores, what is connected, and the controls for export or deletion.
                   </p>
+                  <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
                 </div>
 
                 {accountSummary && (
@@ -6045,6 +6054,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                   <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">API Health</div>
                   <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Your saved keys</h3>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">Keys stay hidden until you choose to reveal one.</p>
+                  <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE} {PROVIDER_KEY_PRIVACY_NOTICE}</p>
                 </div>
                 {groupedCredentials.length === 0 ? (
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-sm text-muted-foreground">
@@ -6480,6 +6490,7 @@ function QuickAddModal({
           {mode === 'choose' && (
             <div className="space-y-3">
               <p className="text-sm leading-6 text-muted-foreground">Pick what you want to add. Open the full Add Saves page when you need folder upload or more options.</p>
+              <p className="rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
               {choices.map(({ mode: choiceMode, title, copy, icon: Icon }) => (
                 <button
                   key={choiceMode}
@@ -6512,6 +6523,7 @@ function QuickAddModal({
                 <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Paste a link</div>
                 <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Save one thing fast</h3>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">Paste a post, product, article, video, or any page you want to find later.</p>
+                <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
               </div>
               <input
                 type="url"
@@ -6560,6 +6572,7 @@ function QuickAddModal({
                 <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Write a note</div>
                 <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Save a quick thought</h3>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">Add the context you want to remember. Images and links are optional.</p>
+                <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
               </div>
               <textarea
                 value={noteForm.body}
@@ -6631,6 +6644,7 @@ function QuickAddModal({
                 <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Upload files</div>
                 <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose export files</h3>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">Use this for Instagram, Pinterest, or X bookmark downloads. For folders, open the full Add Saves page.</p>
+                <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
               </div>
               <button
                 type="button"
@@ -8361,6 +8375,7 @@ function UploadTab({
         <div>
           <h1 className="font-display text-4xl font-bold tracking-tight">Add to your library</h1>
           <p className="mt-2 text-sm text-muted-foreground">Save a note, paste a link, or upload files from Instagram, Pinterest, or X.</p>
+          <p className="mt-3 max-w-3xl rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
         </div>
         <button
           type="button"
@@ -8406,6 +8421,7 @@ function UploadTab({
       >
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
         <h3 className="mb-2 font-display text-xl font-bold">Drop your files here</h3>
+        <p className="mx-auto mb-5 max-w-2xl text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
         <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV · X bookmark ZIP/JS/JSON/CSV/TXT</p>
         <button
           type="button"
@@ -8487,6 +8503,7 @@ function UploadTab({
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               Notes appear in your Library right away. You can add links and small images.
             </p>
+            <p className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
           </div>
           <span className="rounded-full border border-white/10 px-3 py-2 text-xs text-muted-foreground">Images: PNG, JPEG, WebP, GIF · 5 MB</span>
         </div>
@@ -8579,6 +8596,7 @@ function UploadTab({
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             We will show you what we found before it is added to your Library.
           </p>
+          <p className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
         </div>
         <input
           ref={linkInputRef}
@@ -8617,6 +8635,7 @@ function UploadTab({
               <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Confirm links</div>
               <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saved links need a quick check</h2>
               <p className="mt-1 text-sm leading-6 text-muted-foreground">Check the title and note, then add them to your Library.</p>
+              <p className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
             </div>
             <button
               type="button"
@@ -8831,6 +8850,7 @@ function SettingsTab({
           <p className="mt-2 text-sm text-muted-foreground">
             Paste a valid key once. IScraper picks the right models for you.
           </p>
+          <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE} {PROVIDER_KEY_PRIVACY_NOTICE}</p>
         </div>
         <button
           type="button"
@@ -8851,6 +8871,7 @@ function SettingsTab({
         <p className="mt-2 text-sm text-muted-foreground">
           AI enrichment can use your saved provider keys. Paid IScraper credits are coming soon for users who do not want to bring their own key.
         </p>
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">{PROVIDER_KEY_PRIVACY_NOTICE}</p>
       </div>
 
       <section className="space-y-4 rounded-2xl border border-white/10 p-5">
@@ -9028,6 +9049,7 @@ function SettingsTab({
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             For built-in providers, IScraper chooses the model. Advanced OpenAI-compatible services need their base URL and model ID.
           </p>
+          <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE} {PROVIDER_KEY_PRIVACY_NOTICE}</p>
         </div>
         <div className="grid gap-2 rounded-xl border border-white/10 p-1">
           {Object.entries(KEY_SETUP_OPTIONS).map(([setup, option]) => (

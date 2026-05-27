@@ -3,6 +3,7 @@ const {
   buildLibraryCareSummary,
   linkCheckCandidates,
 } = require('../services/libraryCare');
+const { traceForRequest } = require('../services/observability');
 const { captureWorkflow, cleanText } = require('./common');
 
 function reviewUpdatesFromBody(body = {}, item = {}) {
@@ -32,7 +33,7 @@ function reviewUpdatesFromBody(body = {}, item = {}) {
   };
 }
 
-async function approveReviewItemsForIndexing({ store, userId, items }) {
+async function approveReviewItemsForIndexing({ store, userId, items, trace = {} }) {
   const queuedItems = [];
   const jobs = [];
   let fallbackImportId = null;
@@ -46,6 +47,8 @@ async function approveReviewItemsForIndexing({ store, userId, items }) {
           source: 'bulk-review-approval',
           mode: 'export',
           fileNames: items.map((entry) => entry.url).slice(0, 20),
+          requestId: trace.requestId || '',
+          correlationId: trace.correlationId || '',
         });
         fallbackImportId = importEntry.id;
       }
@@ -68,7 +71,14 @@ async function approveReviewItemsForIndexing({ store, userId, items }) {
   }, new Map());
 
   for (const [importId, importItems] of itemsByImportId.entries()) {
-    jobs.push(...await store.createJobs({ userId, importId, items: importItems }));
+    jobs.push(...await store.createJobs({
+      userId,
+      importId,
+      items: importItems,
+      requestId: trace.requestId || '',
+      correlationId: trace.correlationId || '',
+      sourceAction: trace.sourceAction || 'bulk-review-approval',
+    }));
   }
 
   return { items: queuedItems, jobs };
@@ -143,29 +153,34 @@ function createLibraryWorkflow({ store, worker }) {
       return { item: { ...item, indexingStage: 'visual_indexing', lastEnrichmentRequestedAt: new Date().toISOString() }, skipped: true, reason: 'already_queued' };
     }
 
+    const trace = traceForRequest(req);
     const importEntry = await store.createImport({
       userId: req.user.id,
       source: reason,
       mode: 'export',
       fileNames: [item.url || item.id],
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     });
     item = await store.updateSavedItem(req.user.id, item.id, {
       importId: importEntry.id,
       status: 'queued',
       error: null,
     });
-    const jobs = await store.createJobs({ userId: req.user.id, importId: importEntry.id, items: [item] });
+    const jobs = await store.createJobs({ userId: req.user.id, importId: importEntry.id, items: [item], ...trace, sourceAction: reason });
     const indexing = jobs.length
       ? await worker.queueIndexingWork({
         reason,
         userId: req.user.id,
         importId: importEntry.id,
         shouldDownload: req.body?.allowMedia !== false,
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
       })
       : null;
     const responseItem = { ...item, indexingStage: 'visual_indexing', lastEnrichmentRequestedAt: new Date().toISOString() };
     captureWorkflow(req, 'enrichment queued', { itemId: item.id, importId: importEntry.id, queuedJobCount: jobs.length, reason });
-    return { item: responseItem, enriched: false, queued: Boolean(jobs.length), queuedJobCount: jobs.length, jobs, indexing, reason };
+    return { item: responseItem, enriched: false, queued: Boolean(jobs.length), queuedJobCount: jobs.length, jobs, indexing, reason, requestId: trace.requestId, correlationId: trace.correlationId };
   }
 
   return {

@@ -65,12 +65,12 @@ function createWorkerWorkflow({
     });
   }
 
-  async function queueIndexingWork({ reason, userId, importId = null, shouldDownload = false, forceInline = false }) {
+  async function queueIndexingWork({ reason, userId, importId = null, shouldDownload = false, forceInline = false, requestId = '', correlationId = '' }) {
     if (forceInline || runtime.worker.inlineIndexingEnabled === true) {
       startProcessing({ userId, importId, shouldDownload });
-      return { mode: 'inline', triggered: false };
+      return { mode: 'inline', triggered: false, requestId, correlationId: correlationId || requestId };
     }
-    return { mode: 'vm-worker', queued: true, reason, userId, importId };
+    return { mode: 'vm-worker', queued: true, reason, userId, importId, requestId, correlationId: correlationId || requestId };
   }
 
   const workerProcessHandler = asyncRoute(async (req, res) => {
@@ -94,6 +94,8 @@ function createWorkerWorkflow({
       processedCount: result.processedCount,
       scopeCount: result.scopeCount,
       dataExportProcessedCount: result.dataExportProcessedCount || 0,
+      requestId: req.context?.requestId || '',
+      correlationId: req.context?.correlationId || req.context?.requestId || '',
     });
   });
 

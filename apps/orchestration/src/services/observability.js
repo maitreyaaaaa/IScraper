@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { PostHog } = require('posthog-node');
 
 const REQUEST_ID_HEADER = 'X-Request-ID';
+const CORRELATION_ID_HEADER = 'X-Correlation-ID';
 const CLIENT_ACTION_HEADER = 'X-IScraper-Client-Action';
 const REQUEST_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{7,127}$/;
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
@@ -112,12 +113,14 @@ function createPostHog(config = {}) {
 
 function requestContextMiddleware(req, res, next) {
   const requestId = validRequestId(req.header(REQUEST_ID_HEADER)) || crypto.randomUUID();
+  const correlationId = validRequestId(req.header(CORRELATION_ID_HEADER)) || requestId;
   const clientAction = safeClientAction(req.header(CLIENT_ACTION_HEADER));
   const startedAt = process.hrtime.bigint();
   const coldStart = nextRequestIsColdStart;
   nextRequestIsColdStart = false;
   req.context = {
     requestId,
+    correlationId,
     clientAction,
     coldStart,
     processUptimeMs: Math.round(process.uptime() * 1000),
@@ -126,6 +129,7 @@ function requestContextMiddleware(req, res, next) {
     route: null,
   };
   res.setHeader(REQUEST_ID_HEADER, requestId);
+  res.setHeader(CORRELATION_ID_HEADER, correlationId);
   res.on('finish', () => {
     const observability = req.app?.locals?.observability;
     if (!observability) return;
@@ -133,6 +137,7 @@ function requestContextMiddleware(req, res, next) {
     const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
     const properties = {
       requestId,
+      correlationId,
       clientAction,
       route,
       routeGroup: routeGroupForRequest(req),
@@ -155,6 +160,7 @@ function requestContextMiddleware(req, res, next) {
 function contextForRequest(req, extra = {}) {
   return {
     requestId: req.context?.requestId,
+    correlationId: req.context?.correlationId || req.context?.requestId,
     clientAction: req.context?.clientAction,
     route: routePattern(req),
     method: req.method,
@@ -167,6 +173,14 @@ function routePattern(req) {
   const routePath = req.route?.path;
   if (routePath) return `${req.baseUrl || ''}${routePath}`;
   return req.path || 'unknown';
+}
+
+function traceForRequest(req) {
+  return {
+    requestId: req?.context?.requestId || '',
+    correlationId: req?.context?.correlationId || req?.context?.requestId || '',
+    sourceAction: req?.context?.clientAction || '',
+  };
 }
 
 function routeGroupForRequest(req) {
@@ -305,11 +319,13 @@ function safeWrite(stdout, record) {
 
 module.exports = {
   CLIENT_ACTION_HEADER,
+  CORRELATION_ID_HEADER,
   REQUEST_ID_HEADER,
   contextForRequest,
   createObservability,
   recordRequestTiming,
   routeGroupForPath,
   sanitize,
+  traceForRequest,
   validRequestId,
 };

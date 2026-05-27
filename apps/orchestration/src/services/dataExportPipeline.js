@@ -15,7 +15,7 @@ function exportExpiresAt(now = new Date()) {
   return new Date(now.getTime() + DATA_EXPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
 }
 
-async function buildUserDataExport({ store, userId, requestId, includeFiles = false, mediaLimits = {} }) {
+async function buildUserDataExport({ store, userId, requestId, correlationId = '', includeFiles = false, mediaLimits = {} }) {
   const exportedAt = new Date().toISOString();
   const [account, privacy, payload] = await Promise.all([
     store.getAccountSummary(userId),
@@ -33,6 +33,7 @@ async function buildUserDataExport({ store, userId, requestId, includeFiles = fa
   const manifest = {
     version: 1,
     requestId,
+    correlationId: correlationId || requestId,
     exportedAt,
     format: DATA_EXPORT_FORMAT,
     options: {
@@ -141,6 +142,7 @@ async function runDataExport({ store, userId = null, request }) {
       store,
       userId: ownerId,
       requestId: request.id,
+      correlationId: request.correlationId || request.requestId || '',
       includeFiles: request.metadata?.includeFiles === true,
     });
     for (const step of result.steps) {
@@ -179,9 +181,9 @@ async function processDataExportRequests({ store, maxJobs = 1 } = {}) {
   for (const request of requests) {
     try {
       const completed = await runDataExport({ store, request });
-      results.push({ requestId: request.id, status: completed?.status || 'ready' });
+      results.push({ requestId: request.requestId || request.id, correlationId: request.correlationId || request.requestId || '', exportRequestId: request.id, status: completed?.status || 'ready' });
     } catch (error) {
-      results.push({ requestId: request.id, status: 'failed', error: safeExportError(error) });
+      results.push({ requestId: request.requestId || request.id, correlationId: request.correlationId || request.requestId || '', exportRequestId: request.id, status: 'failed', error: safeExportError(error) });
     }
   }
   return results;

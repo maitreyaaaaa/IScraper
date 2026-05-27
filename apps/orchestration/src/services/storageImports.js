@@ -101,7 +101,7 @@ async function loadImportFilesFromStorage({ store, userId, storageFiles, config 
   return { files, bucket, pathsToRemove };
 }
 
-async function createImportRecordsFromFiles({ store, userId, importId, files }) {
+async function createImportRecordsFromFiles({ store, userId, importId, files, trace = {} }) {
   const parsed = await parseImportExport(files);
   if (!parsed.items.length) {
     const error = new Error('No saves were found in those files. Upload Instagram saved-post ZIP/HTML/JSON files or Pinterest export ZIP/JSON/CSV files.');
@@ -117,7 +117,14 @@ async function createImportRecordsFromFiles({ store, userId, importId, files }) 
     duplicateMode: 'skipExisting',
   });
   const jobs = typeof store.createJobs === 'function'
-    ? await store.createJobs({ userId, importId, items })
+    ? await store.createJobs({
+      userId,
+      importId,
+      items,
+      requestId: trace.requestId || '',
+      correlationId: trace.correlationId || '',
+      sourceAction: trace.sourceAction || 'storage-import',
+    })
     : [];
 
   return {
@@ -129,6 +136,8 @@ async function createImportRecordsFromFiles({ store, userId, importId, files }) 
     jobCount: jobs.length,
     jobs,
     source: parsed.source || 'user-export',
+    requestId: trace.requestId || '',
+    correlationId: trace.correlationId || '',
   };
 }
 
@@ -151,6 +160,11 @@ async function processStorageImport({ store, config, importEntry }) {
         userId: claimed.userId,
         importId: claimed.id,
         files,
+        trace: {
+          requestId: claimed.requestId || '',
+          correlationId: claimed.correlationId || claimed.requestId || '',
+          sourceAction: 'storage-import',
+        },
       });
     } finally {
       if (pathsToRemove.length) {

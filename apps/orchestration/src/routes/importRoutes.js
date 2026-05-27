@@ -8,6 +8,7 @@ const {
   storagePathBelongsToUser,
   storagePathForUpload,
 } = require('../http/uploads');
+const { traceForRequest } = require('../services/observability');
 
 function registerImportRoutes(app, deps) {
   const { config, http, store, workflows } = deps;
@@ -22,17 +23,20 @@ function registerImportRoutes(app, deps) {
 
   app.post('/api/imports', importRateLimit, upload.array('exportFiles', 20), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
+    const trace = traceForRequest(req);
     const files = req.files?.length ? req.files : req.file ? [req.file] : [];
     if (!files.length) return res.status(400).json({ error: 'Upload Instagram, Pinterest, or X bookmark export files.' });
 
     files.forEach((file) => assertImportFileAllowed(file, config.maxUploadFileSizeBytes || 25 * 1024 * 1024));
-    const result = await createImportFromFiles({ userId: req.user.id, files });
+    const result = await createImportFromFiles({ userId: req.user.id, files, trace });
     if (result.queuedJobCount) {
       result.indexing = await queueIndexingWork({
         reason: 'import-upload',
         userId: req.user.id,
         importId: result.import.id,
         shouldDownload: false,
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
       });
     }
     captureWorkflow(req, 'import completed', {
@@ -43,11 +47,12 @@ function registerImportRoutes(app, deps) {
       queuedJobCount: result.queuedJobCount,
     });
     await refreshSmartCollectionsForUser(req.user.id);
-    return res.json(result);
+    return res.json({ ...result, requestId: trace.requestId, correlationId: trace.correlationId });
   }));
 
   app.post('/api/imports/upload-urls', importRateLimit, asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
+    const trace = traceForRequest(req);
     const requestedFiles = Array.isArray(req.body?.files) ? req.body.files : [];
     if (!requestedFiles.length) return res.status(400).json({ error: 'Choose files before uploading.' });
     if (requestedFiles.length > 20) return res.status(400).json({ error: 'Upload 20 files or fewer at once.' });
@@ -66,11 +71,12 @@ function registerImportRoutes(app, deps) {
       });
     }
 
-    res.json({ bucket, uploads });
+    res.json({ bucket, uploads, requestId: trace.requestId, correlationId: trace.correlationId });
   }));
 
   app.post('/api/imports/upload-chunk', chunkUpload.single('chunk'), asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
+    const trace = traceForRequest(req);
     if (!store.client?.storage) return res.status(503).json({ error: 'Large file upload storage is not configured.' });
     if (!req.file?.buffer?.length) return res.status(400).json({ error: 'Upload chunk is missing.' });
 
@@ -92,11 +98,12 @@ function registerImportRoutes(app, deps) {
       upsert: true,
     });
     if (error) throw error;
-    res.json({ path: storagePath, partPath, index, totalChunks });
+    res.json({ path: storagePath, partPath, index, totalChunks, requestId: trace.requestId, correlationId: trace.correlationId });
   }));
 
   app.post('/api/imports/storage', importRateLimit, asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
+    const trace = traceForRequest(req);
     const storageFiles = Array.isArray(req.body?.files) ? req.body.files : [];
     if (!storageFiles.length) return res.status(400).json({ error: 'Upload files to storage before importing.' });
     if (storageFiles.length > 20) return res.status(400).json({ error: 'Upload 20 files or fewer at once.' });
@@ -110,7 +117,7 @@ function registerImportRoutes(app, deps) {
 
     let result;
     try {
-      result = await createImportFromFiles({ userId: req.user.id, files });
+      result = await createImportFromFiles({ userId: req.user.id, files, trace: { ...trace, sourceAction: 'storage-import' } });
     } finally {
       if (pathsToRemove.length) {
         await store.client.storage.from(bucket).remove(pathsToRemove).catch((error) => {
@@ -124,6 +131,8 @@ function registerImportRoutes(app, deps) {
         userId: req.user.id,
         importId: result.import.id,
         shouldDownload: false,
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
       });
     }
     captureWorkflow(req, 'storage import completed', {
@@ -134,21 +143,26 @@ function registerImportRoutes(app, deps) {
       queuedJobCount: result.queuedJobCount,
     });
     await refreshSmartCollectionsForUser(req.user.id);
-    return res.json(result);
+    return res.json({ ...result, requestId: trace.requestId, correlationId: trace.correlationId });
   }));
 
   app.post('/api/saves/link', importRateLimit, asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
+    const trace = traceForRequest(req);
     const parsed = parseManualLinkPayload(req.body || {});
     const importEntry = await store.createImport({
       userId: req.user.id,
       source: 'manual-link',
       mode: 'export',
       fileNames: [parsed.items[0].url],
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     });
     const initialStatus = req.body?.review === true ? 'needs_review' : 'queued';
     const items = await store.upsertImportData({ userId: req.user.id, importId: importEntry.id, parsed, initialStatus });
-    const jobs = initialStatus === 'queued' ? await store.createJobs({ userId: req.user.id, importId: importEntry.id, items }) : [];
+    const jobs = initialStatus === 'queued'
+      ? await store.createJobs({ userId: req.user.id, importId: importEntry.id, items, ...trace, sourceAction: 'manual-link' })
+      : [];
     let responseItem = null;
     try {
       responseItem = await Promise.resolve(store.getItem(req.user.id, items[0]?.id || parsed.items[0].id));
@@ -167,6 +181,8 @@ function registerImportRoutes(app, deps) {
         userId: req.user.id,
         importId: importEntry.id,
         shouldDownload: false,
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
       });
     }
     captureWorkflow(req, 'manual save created', {
@@ -183,23 +199,29 @@ function registerImportRoutes(app, deps) {
       skippedDuplicateCount: items.length ? 0 : 1,
       queuedJobCount: jobs.length,
       indexing,
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     });
   }));
 
   app.post('/api/imports/:id/process', asyncRoute(async (req, res) => {
     const jobs = await store.getJobs(req.user.id, req.params.id);
+    const trace = traceForRequest(req);
     const indexing = await queueIndexingWork({
       reason: 'import-process',
       userId: req.user.id,
       importId: req.params.id,
       shouldDownload: req.body?.download !== false,
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     });
 
-    res.json({ message: 'Batch indexing queued', jobCount: jobs.length, indexing });
+    res.json({ message: 'Batch indexing queued', jobCount: jobs.length, indexing, requestId: trace.requestId, correlationId: trace.correlationId });
   }));
 
   app.post('/api/jobs/restart', asyncRoute(async (req, res) => {
     const importId = req.body?.importId || null;
+    const trace = traceForRequest(req);
     const resetCount = typeof store.restartJobs === 'function' ? await store.restartJobs(req.user.id, importId) : 0;
     const jobs = await store.getJobs(req.user.id, importId);
     let indexing = null;
@@ -209,6 +231,8 @@ function registerImportRoutes(app, deps) {
         userId: req.user.id,
         importId,
         shouldDownload: req.body?.download !== false,
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
       });
     }
 
@@ -217,6 +241,8 @@ function registerImportRoutes(app, deps) {
       resetCount,
       jobCount: jobs.length,
       indexing,
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     });
   }));
 

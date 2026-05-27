@@ -279,11 +279,19 @@ function publicRefForUser(userId) {
   return `usr_${crypto.createHash('sha1').update(String(userId || '')).digest('hex').slice(0, 12)}`;
 }
 
+function referenceIdFor(...values) {
+  const value = values.find((entry) => String(entry || '').trim());
+  return String(value || '').replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 12);
+}
+
 function publicDataExportRequest(state, request) {
   if (!request) return null;
   return {
     id: request.id,
     userId: request.userId,
+    requestId: request.requestId || '',
+    correlationId: request.correlationId || request.requestId || '',
+    referenceId: referenceIdFor(request.correlationId, request.requestId, request.id),
     status: request.status,
     format: request.format || 'zip',
     requestedAt: request.requestedAt,
@@ -395,7 +403,13 @@ function createLocalStore({ dataPath }) {
     const steps = state.accountDeletionSteps
       .filter((step) => step.requestId === request.id)
       .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-    return { ...request, steps };
+    return {
+      ...request,
+      requestId: request.requestId || '',
+      correlationId: request.correlationId || request.requestId || '',
+      referenceId: referenceIdFor(request.correlationId, request.requestId, request.id),
+      steps,
+    };
   }
 
   function activeDeletionRequestForUser(userId) {
@@ -423,7 +437,7 @@ function createLocalStore({ dataPath }) {
       return mapDeletionRequest(state.accountDeletionRequests.find((request) => request.id === id) || null);
     },
 
-    createDeletionRequest({ userId, email, reason = '', exportConfirmed = false }) {
+    createDeletionRequest({ userId, email, reason = '', exportConfirmed = false, requestId = '', correlationId = '' }) {
       const active = activeDeletionRequestForUser(userId);
       if (active) return mapDeletionRequest(active);
       const request = {
@@ -443,11 +457,13 @@ function createLocalStore({ dataPath }) {
         adminActor: null,
         statusMessage: 'Deletion request received.',
         retentionSummary: {},
+        requestId,
+        correlationId: correlationId || requestId,
         createdAt: now(),
         updatedAt: now(),
       };
       state.accountDeletionRequests.push(request);
-      this.recordUserActivity({ userId, eventType: 'deletion_requested', metadata: { requestId: request.id } });
+      this.recordUserActivity({ userId, eventType: 'deletion_requested', metadata: { deletionRequestId: request.id, requestId, correlationId: correlationId || requestId } });
       save();
       return mapDeletionRequest(request);
     },
@@ -819,7 +835,7 @@ function createLocalStore({ dataPath }) {
       };
     },
 
-    createDataExportRequest(userId, { includeFiles = false } = {}) {
+    createDataExportRequest(userId, { includeFiles = false, requestId = '', correlationId = '' } = {}) {
       const request = {
         id: `data-export-${Date.now()}-${state.dataExportRequests.length + 1}`,
         userId,
@@ -832,10 +848,12 @@ function createLocalStore({ dataPath }) {
         storageBucket: '',
         storagePath: '',
         errorMessage: '',
+        requestId,
+        correlationId: correlationId || requestId,
         metadata: { includeFiles: Boolean(includeFiles) },
       };
       state.dataExportRequests.push(request);
-      this.recordUserActivity({ userId, eventType: 'data_export_requested', metadata: { requestId: request.id } });
+      this.recordUserActivity({ userId, eventType: 'data_export_requested', metadata: { exportRequestId: request.id, requestId, correlationId: correlationId || requestId } });
       save();
       return publicDataExportRequest(state, request);
     },
@@ -1248,7 +1266,7 @@ function createLocalStore({ dataPath }) {
       return feedback;
     },
 
-    createImport({ userId, source, mode = 'export', fileNames = [], status = 'imported', storageFiles = [] }) {
+    createImport({ userId, source, mode = 'export', fileNames = [], status = 'imported', storageFiles = [], requestId = '', correlationId = '' }) {
       const entry = {
         id: `import-${Date.now()}`,
         userId,
@@ -1258,6 +1276,9 @@ function createLocalStore({ dataPath }) {
         status,
         storageFiles,
         error: null,
+        requestId,
+        correlationId: correlationId || requestId,
+        referenceId: referenceIdFor(correlationId, requestId),
         createdAt: now(),
         updatedAt: now(),
       };
@@ -1265,7 +1286,7 @@ function createLocalStore({ dataPath }) {
       this.recordUserActivity({
         userId,
         eventType: status === 'queued_storage' ? 'import_started' : 'import_completed',
-        metadata: { importId: entry.id, source, fileCount: fileNames.length },
+        metadata: { importId: entry.id, source, fileCount: fileNames.length, requestId, correlationId: correlationId || requestId },
       });
       save();
       return entry;
@@ -1301,7 +1322,7 @@ function createLocalStore({ dataPath }) {
       this.recordUserActivity({
         userId: entry.userId,
         eventType: status === 'failed' ? 'import_failed' : status === 'imported' ? 'import_completed' : 'import_status_changed',
-        metadata: { importId: entry.id, status, errorCategory: error ? 'import_error' : '' },
+        metadata: { importId: entry.id, status, errorCategory: error ? 'import_error' : '', requestId: entry.requestId || '', correlationId: entry.correlationId || '' },
       });
       save();
       return entry;
@@ -1552,9 +1573,19 @@ function createLocalStore({ dataPath }) {
       return hydrateLocalItem(state, removed);
     },
 
-    createJobs({ userId, importId, items }) {
+    createJobs({ userId, importId, items, requestId = '', correlationId = '', sourceAction = '' }) {
       const existingJobs = state.jobs.filter((job) => job.userId === userId && job.importId === importId);
-      const jobs = createJobsForImport({ importId, items, existingJobs }).map((job) => ({ ...job, userId }));
+      const importEntry = state.imports.find((entry) => entry.userId === userId && entry.id === importId);
+      const effectiveRequestId = requestId || importEntry?.requestId || '';
+      const effectiveCorrelationId = correlationId || importEntry?.correlationId || effectiveRequestId;
+      const jobs = createJobsForImport({ importId, items, existingJobs }).map((job) => ({
+        ...job,
+        userId,
+        requestId: effectiveRequestId,
+        correlationId: effectiveCorrelationId,
+        referenceId: referenceIdFor(effectiveCorrelationId, effectiveRequestId, job.id),
+        sourceAction,
+      }));
       state.jobs.push(...jobs);
       save();
       return jobs;
@@ -2030,6 +2061,7 @@ function createLocalStore({ dataPath }) {
       severity = 'info',
       result = 'success',
       requestId = '',
+      correlationId = '',
       route = '',
       method = '',
       ipHash = '',
@@ -2046,6 +2078,7 @@ function createLocalStore({ dataPath }) {
         severity,
         result,
         requestId,
+        correlationId: correlationId || requestId,
         route,
         method,
         ipHash,

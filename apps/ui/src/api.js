@@ -4,11 +4,12 @@ const API_BASE = import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http:/
 let accessToken = '';
 
 export class ApiError extends Error {
-  constructor(message, { status, requestId, endpoint, action } = {}) {
+  constructor(message, { status, requestId, correlationId, endpoint, action } = {}) {
     super(requestId ? `${message} Reference ID: ${requestId}` : message);
     this.name = 'ApiError';
     this.status = status;
     this.requestId = requestId || '';
+    this.correlationId = correlationId || requestId || '';
     this.endpoint = endpoint || '';
     this.action = action || '';
   }
@@ -31,20 +32,23 @@ async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
   const method = String(options.method || 'GET').toUpperCase();
   const requestId = options.requestId || createRequestId();
+  const correlationId = options.correlationId || requestId;
   const action = options.action || safeAction(path, method);
   headers.set('X-Request-ID', requestId);
+  headers.set('X-Correlation-ID', correlationId);
   headers.set('X-IScraper-Client-Action', action);
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
   let response;
   try {
     response = await fetch(`${API_BASE}${path}`, { ...options, headers });
   } catch {
-    const apiError = new ApiError('Network request failed.', { status: 0, requestId, endpoint: path, action });
-    captureClientError(apiError, { requestId, endpoint: path, action, status: 0 });
+    const apiError = new ApiError('Network request failed.', { status: 0, requestId, correlationId, endpoint: path, action });
+    captureClientError(apiError, { requestId, correlationId, endpoint: path, action, status: 0 });
     throw apiError;
   }
   const responseRequestId = response.headers.get('x-request-id') || requestId;
   const body = await response.json().catch(() => ({}));
+  const responseCorrelationId = response.headers.get('x-correlation-id') || body?.correlationId || correlationId;
   if (!response.ok) {
     const message = response.status === 413
       ? 'This file is too large. Upload files must be 20 MB or smaller.'
@@ -52,13 +56,14 @@ async function request(path, options = {}) {
     const apiError = new ApiError(message, {
       status: response.status,
       requestId: body.requestId || responseRequestId,
+      correlationId: body.correlationId || responseCorrelationId,
       endpoint: path,
       action,
     });
-    captureClientError(apiError, { requestId: apiError.requestId, endpoint: path, action, status: response.status });
+    captureClientError(apiError, { requestId: apiError.requestId, correlationId: apiError.correlationId, endpoint: path, action, status: response.status });
     throw apiError;
   }
-  captureClientEvent('api request completed', { requestId: responseRequestId, endpoint: path, action, status: response.status });
+  captureClientEvent('api request completed', { requestId: responseRequestId, correlationId: responseCorrelationId, endpoint: path, action, status: response.status });
   return body;
 }
 
@@ -219,9 +224,11 @@ export function createDataExport({ includeFiles = false } = {}) {
 export async function downloadDataExport(id) {
   const headers = new Headers();
   const requestId = createRequestId();
+  const correlationId = requestId;
   const endpoint = `/data-exports/${id}/download`;
   const action = `get:${endpoint}`;
   headers.set('X-Request-ID', requestId);
+  headers.set('X-Correlation-ID', correlationId);
   headers.set('X-IScraper-Client-Action', action);
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
   const response = await fetch(`${API_BASE}${endpoint}`, { headers });
@@ -230,13 +237,14 @@ export async function downloadDataExport(id) {
     const apiError = new ApiError(body.error || `Request failed: ${response.status}`, {
       status: response.status,
       requestId: body.requestId || response.headers.get('x-request-id') || requestId,
+      correlationId: body.correlationId || response.headers.get('x-correlation-id') || correlationId,
       endpoint,
       action,
     });
-    captureClientError(apiError, { requestId: apiError.requestId, endpoint, action, status: response.status });
+    captureClientError(apiError, { requestId: apiError.requestId, correlationId: apiError.correlationId, endpoint, action, status: response.status });
     throw apiError;
   }
-  captureClientEvent('api request completed', { requestId: response.headers.get('x-request-id') || requestId, endpoint, action, status: response.status });
+  captureClientEvent('api request completed', { requestId: response.headers.get('x-request-id') || requestId, correlationId: response.headers.get('x-correlation-id') || correlationId, endpoint, action, status: response.status });
   return response.blob();
 }
 
@@ -341,8 +349,10 @@ export function getKnowledgeGraph() {
 export async function downloadObsidianGraph() {
   const headers = new Headers();
   const requestId = createRequestId();
+  const correlationId = requestId;
   const action = 'get:/graph/obsidian-export';
   headers.set('X-Request-ID', requestId);
+  headers.set('X-Correlation-ID', correlationId);
   headers.set('X-IScraper-Client-Action', action);
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
   const response = await fetch(`${API_BASE}/graph/obsidian-export`, { headers });
@@ -351,13 +361,14 @@ export async function downloadObsidianGraph() {
     const apiError = new ApiError(body.error || `Request failed: ${response.status}`, {
       status: response.status,
       requestId: body.requestId || response.headers.get('x-request-id') || requestId,
+      correlationId: body.correlationId || response.headers.get('x-correlation-id') || correlationId,
       endpoint: '/graph/obsidian-export',
       action,
     });
-    captureClientError(apiError, { requestId: apiError.requestId, endpoint: '/graph/obsidian-export', action, status: response.status });
+    captureClientError(apiError, { requestId: apiError.requestId, correlationId: apiError.correlationId, endpoint: '/graph/obsidian-export', action, status: response.status });
     throw apiError;
   }
-  captureClientEvent('api request completed', { requestId: response.headers.get('x-request-id') || requestId, endpoint: '/graph/obsidian-export', action, status: response.status });
+  captureClientEvent('api request completed', { requestId: response.headers.get('x-request-id') || requestId, correlationId: response.headers.get('x-correlation-id') || correlationId, endpoint: '/graph/obsidian-export', action, status: response.status });
   return response.blob();
 }
 

@@ -43,6 +43,9 @@ function publicDeletionRequest(request) {
   return {
     request: {
       id: request.id,
+      requestId: request.requestId || '',
+      correlationId: request.correlationId || request.requestId || '',
+      referenceId: request.referenceId || String(request.correlationId || request.requestId || request.id || '').slice(0, 12),
       status: request.status,
       reason: request.reason || '',
       exportConfirmed: Boolean(request.exportConfirmed),

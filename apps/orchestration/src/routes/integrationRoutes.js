@@ -16,6 +16,7 @@ const {
   telegramReply,
   tokenHashFromConnectText,
 } = require('../services/telegramCapture');
+const { traceForRequest } = require('../services/observability');
 
 function registerPublicIntegrationRoutes(app, deps) {
   const { config, http, store, workflows } = deps;
@@ -94,15 +95,18 @@ function registerPublicIntegrationRoutes(app, deps) {
 
   app.post('/api/extension/saves/link', importRateLimit, asyncRoute(async (req, res) => {
     const user = await getExtensionRequestUser(req, 'saves:create');
+    const trace = traceForRequest(req);
     const parsed = parseManualLinkPayload(req.body || {});
     const importEntry = await store.createImport({
       userId: user.id,
       source: 'browser-extension',
       mode: 'export',
       fileNames: [parsed.items[0].url],
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     });
     const items = await store.upsertImportData({ userId: user.id, importId: importEntry.id, parsed, initialStatus: 'queued' });
-    const jobs = await store.createJobs({ userId: user.id, importId: importEntry.id, items });
+    const jobs = await store.createJobs({ userId: user.id, importId: importEntry.id, items, ...trace, sourceAction: 'extension-link' });
 
     let indexing = null;
     if (jobs.length) {
@@ -111,6 +115,8 @@ function registerPublicIntegrationRoutes(app, deps) {
         userId: user.id,
         importId: importEntry.id,
         shouldDownload: false,
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
       });
     }
     captureWorkflow(req, 'extension link saved', {
@@ -127,6 +133,8 @@ function registerPublicIntegrationRoutes(app, deps) {
       skippedDuplicateCount: items.length ? 0 : 1,
       queuedJobCount: jobs.length,
       indexing,
+      requestId: trace.requestId,
+      correlationId: trace.correlationId,
     });
   }));
 
