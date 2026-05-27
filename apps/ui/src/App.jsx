@@ -3319,7 +3319,7 @@ const LEGAL_CONTENT = {
       ['Your rights', `Where legally applicable, including under California privacy law, you may request access, correction, deletion, and information about data practices. Use self-serve export and deletion in Settings where available, or contact ${SUPPORT_EMAIL} for correction, access questions, or rights requests.`],
       ['Retention', 'Saved user content stays until you delete it or your account is deleted. Export artifacts expire after the configured retention window, currently 7 days. Request logs are kept short-term for security and reliability, support-safe events are kept long enough to troubleshoot account issues, billing/audit/deletion hashes may be retained longer where required for security, legal, tax, fraud prevention, or accountability.'],
       ['Deletion', 'Account deletion removes user content, revokes tokens, deletes credentials, disables access, and retains only minimal legal/audit records where required. Deletion-pending accounts can still view privacy information, check/export data, and cancel deletion where allowed.'],
-      ['Security', 'We use Supabase Auth, row-level security, user ownership checks, server-side service-role use only, encryption or hashing for secrets, scoped/revokable tokens, upload limits, rate limits, CORS restrictions, security headers, audit logs, and redaction. No system is perfectly secure, so avoid uploading data you cannot risk processing.'],
+      ['Security', 'We use Supabase Auth, row-level security, user ownership checks, privileged server access kept outside browser code, encryption or hashing for secrets, scoped/revokable tokens, upload limits, rate limits, CORS restrictions, security headers, audit logs, and redaction. No system is perfectly secure, so avoid uploading data you cannot risk processing.'],
       ['Children', 'IScraper is not directed to children under 13. Do not use the service if you are not old enough to consent under your local law.'],
       ['Contact', `For privacy requests, contact us at ${SUPPORT_EMAIL}.`],
     ],
@@ -3330,7 +3330,7 @@ const LEGAL_CONTENT = {
     intro: 'This page explains the practical security controls IScraper uses and how to report a security issue.',
     sections: [
       ['Account protection', 'IScraper uses Supabase Auth with Google or email sign-in for account access. Users must complete profile setup before importing saved content. Keep your login method secure because it controls access to your IScraper account.'],
-      ['Data separation', 'Production data is stored in Supabase with user ownership checks and row-level security policies. The backend uses the service role only on server-side routes, never in browser code.'],
+      ['Data separation', 'Production data is stored in Supabase with user ownership checks and row-level security policies. Privileged database access stays on backend routes and is never exposed in browser code.'],
       ['API keys', 'User AI provider keys are encrypted before storage. Users can add their own keys when they want provider control for AI enrichment.'],
       ['Extension security - coming soon', 'The browser extension uses a scoped extension session created after account sign-in. It does not store your main web-app login token and will not be available to users until browser-store release.'],
       ['Abuse prevention', 'IScraper uses upload limits, rate limits, URL safety checks, CORS restrictions, and security headers to reduce common abuse and accidental exposure.'],
