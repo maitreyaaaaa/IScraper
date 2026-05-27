@@ -57,7 +57,7 @@ function buildManualSavedItem(input = {}) {
   const platform = cleanText(input.platform, 60) || detected.label;
   const sourceAuthor = cleanText(input.author, 120);
   const thumbnailUrl = safeExternalUrl(input.thumbnailUrl || input.thumbnail, 1000);
-  const collection = cleanCollection(input.collection) || 'Web saves';
+  const collection = cleanCollection(input.collection) || 'Random saves';
   const savedAt = new Date().toISOString();
   const caption = [
     title,
@@ -89,7 +89,7 @@ function buildManualSavedItem(input = {}) {
 }
 
 function parseManualLinkPayload(body = {}) {
-  const collection = cleanCollection(body.collection) || 'Web saves';
+  const collection = cleanCollection(body.collection) || 'Random saves';
   const item = buildManualSavedItem({
     url: body.url,
     title: body.title,

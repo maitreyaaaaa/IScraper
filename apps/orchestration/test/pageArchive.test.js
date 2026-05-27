@@ -8,6 +8,7 @@ const {
   extractReadableCopy,
   shouldAttemptPageArchive,
 } = require('../src/services/pageArchive');
+const { metadataPatchFromArchive } = require('../src/application/archiveWorkflow');
 
 test('extractReadableCopy keeps readable text and strips unsafe markup', () => {
   const archive = extractReadableCopy({
@@ -63,4 +64,39 @@ test('shouldAttemptPageArchive only allows normal web saves', () => {
   assert.equal(shouldAttemptPageArchive({ url: 'https://example.com/a', platformKey: 'web' }), true);
   assert.equal(shouldAttemptPageArchive({ url: 'file:///etc/passwd', platformKey: 'web' }), false);
   assert.equal(shouldAttemptPageArchive({ url: 'https://example.com/note', contentType: 'note', platformKey: 'iscraper-note' }), false);
+});
+
+test('archive metadata improves fallback link fields without overwriting user edits', () => {
+  const archive = {
+    status: 'ready',
+    title: 'Useful article',
+    byline: 'Research Team',
+    excerpt: 'A useful summary of the saved page.',
+  };
+
+  assert.deepEqual(
+    metadataPatchFromArchive({
+      id: 'web-1',
+      url: 'https://example.com/article',
+      sourceTitle: 'example.com',
+      sourceAuthor: '',
+      sourceDescription: '',
+    }, archive),
+    {
+      sourceTitle: 'Useful article',
+      sourceAuthor: 'Research Team',
+      sourceDescription: 'A useful summary of the saved page.',
+    },
+  );
+
+  assert.deepEqual(
+    metadataPatchFromArchive({
+      id: 'web-2',
+      url: 'https://example.com/article',
+      sourceTitle: 'My saved title',
+      sourceAuthor: 'Saved author',
+      sourceDescription: 'My note',
+    }, archive),
+    {},
+  );
 });

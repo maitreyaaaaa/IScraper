@@ -48,6 +48,19 @@ test('smart collection generation uses fast metadata and enriched analysis', () 
   assert.ok(candidates.find((collection) => collection.slug === 'topic-design-tools'));
 });
 
+test('smart collection generation recognizes fashion and shopping saves', () => {
+  const candidates = generateSmartCollectionCandidates([
+    savedItem('fashion-1', { sourceTitle: 'Winter outfit with wool jacket and sneakers', status: 'done' }),
+    savedItem('fashion-2', { sourceDescription: 'Wardrobe ideas for dresses, bags, and accessories', status: 'done' }),
+    savedItem('product-1', { sourceTitle: 'Camera gear review and price comparison', status: 'done' }),
+    savedItem('product-2', { caption: 'Shopping list for gadgets to buy later', status: 'done' }),
+  ]);
+
+  assert.ok(candidates.find((collection) => collection.slug === 'fashion-clothes'));
+  assert.ok(candidates.find((collection) => collection.slug === 'products'));
+});
+
+
 test('local smart collections persist edits and manual excludes across refresh', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'iscraper-smart-'));
   const store = createLocalStore({ dataPath: dir });

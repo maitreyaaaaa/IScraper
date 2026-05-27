@@ -1513,6 +1513,7 @@ test('POST /api/saves/link stores one deduped web save', async () => {
     assert.equal(first.newItemCount, 1);
     assert.equal(first.queuedJobCount, 1);
     assert.equal(first.item.status, 'queued');
+    assert.deepEqual(first.item.collections, ['Random saves']);
     assert.equal(second.newItemCount, 0);
     assert.equal(second.skippedDuplicateCount, 1);
     assert.equal(store.getItems('local-dev-user').length, 1);

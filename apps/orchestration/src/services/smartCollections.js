@@ -4,6 +4,18 @@ const DEFAULT_VISIBLE_COLLECTIONS_LIMIT = 12;
 
 const CATEGORY_RULES = [
   {
+    slug: 'fashion-clothes',
+    name: 'Fashion / clothes',
+    description: 'Outfits, clothing, accessories, style references, and wardrobe ideas.',
+    terms: ['fashion', 'clothes', 'clothing', 'outfit', 'wardrobe', 'style', 'dress', 'shirt', 'jacket', 'jeans', 'sneakers', 'shoes', 'accessory', 'accessories', 'bag', 'watch', 'jewelry'],
+  },
+  {
+    slug: 'products',
+    name: 'Products',
+    description: 'Products, shopping research, comparisons, and things you may want to buy later.',
+    terms: ['product', 'products', 'shop', 'shopping', 'buy', 'price', 'deal', 'review', 'comparison', 'amazon', 'etsy', 'store', 'cart', 'gadget', 'gear'],
+  },
+  {
     slug: 'ui-inspiration',
     name: 'UI inspiration',
     description: 'Screens, layouts, components, and interface ideas you saved.',

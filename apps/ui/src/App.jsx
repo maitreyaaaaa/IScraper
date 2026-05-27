@@ -122,7 +122,7 @@ import { supabase } from './supabaseClient';
 gsap.registerPlugin(ScrollTrigger);
 
 const STATUS_META = {
-  needs_review: { color: 'text-accent', icon: FileText },
+  needs_review: { color: 'text-muted-foreground', icon: FileText },
   done: { color: 'text-primary', icon: CheckCircle2 },
   failed: { color: 'text-destructive', icon: AlertCircle },
   paused: { color: 'text-muted-foreground', icon: Pause },
@@ -134,7 +134,7 @@ const STATUS_META = {
 const INDEXING_META = {
   metadata_ready: { label: 'Metadata', color: 'text-muted-foreground', icon: FileText },
   text_indexed: { label: 'Text indexed', color: 'text-primary', icon: CheckCircle2 },
-  visual_indexing: { label: 'Indexing', color: 'text-accent', icon: Loader2 },
+  visual_indexing: { label: 'Indexing', color: 'text-muted-foreground', icon: Loader2 },
   visual_indexed: { label: 'Visual indexed', color: 'text-primary', icon: Eye },
   deep_indexed: { label: 'Transcript ready', color: 'text-primary', icon: Sparkles },
   index_failed: { label: 'Metadata', color: 'text-destructive', icon: AlertCircle },
@@ -1955,10 +1955,10 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
             <BrandLogo className="h-20 w-64 md:h-[7.5rem] md:w-[24rem]" />
           </button>
           <nav className="pointer-events-auto hidden justify-self-center rounded-full border border-white/10 bg-black/75 p-1 text-sm font-semibold text-muted-foreground shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl md:flex">
-            <a href="#features" onClick={(event) => scrollToSection(event, '#features')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Features</a>
-            <a href="#how-it-works" onClick={(event) => scrollToSection(event, '#how-it-works')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">How it works</a>
-            <a href="#extension" onClick={(event) => scrollToSection(event, '#extension')} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">Extension</a>
-            <button type="button" onClick={onOpenHowTo} className="nav-item rounded-full px-4 py-2 transition hover:bg-orange-500 hover:text-black">How to Use</button>
+            <a href="#features" onClick={(event) => scrollToSection(event, '#features')} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">Features</a>
+            <a href="#how-it-works" onClick={(event) => scrollToSection(event, '#how-it-works')} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">How it works</a>
+            <a href="#extension" onClick={(event) => scrollToSection(event, '#extension')} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">Extension</a>
+            <button type="button" onClick={onOpenHowTo} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">How to Use</button>
           </nav>
           <div className="nav-item pointer-events-auto flex items-center gap-2 justify-self-end">
             {landingSession ? (
@@ -2013,7 +2013,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         />
         <div
           className="parallax-glow-secondary absolute right-0 top-40 h-[520px] w-[520px] rounded-full opacity-30 blur-[140px]"
-          style={{ background: 'radial-gradient(circle, var(--glow-2) 0%, transparent 70%)' }}
+          style={{ background: 'radial-gradient(circle, var(--glow) 0%, transparent 70%)' }}
         />
 
         <div className="hero-content relative mx-auto w-full max-w-[100rem] overflow-visible px-6 md:px-10 md:pr-20 xl:px-14 xl:pr-24">
@@ -2023,7 +2023,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           >
             {heroWords.map((word) => (
               <span key={word} className="mr-[0.18em] inline-block overflow-visible last:mr-0">
-                <span className={`word inline-block ${word === 'Lose' ? 'relative isolate' : ''} ${word === 'Post' ? 'rounded-[5px] bg-orange-500 px-[0.08em] italic text-black' : ''}`}>
+                <span className={`word inline-block ${word === 'Lose' ? 'relative isolate' : ''} ${word === 'Post' ? 'italic text-primary' : ''}`}>
                   {word === 'Lose' && (
                     <img
                       src="/hero/lose-circle.png"
@@ -2160,14 +2160,14 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
               [Clock, 'Set reminders for useful saves', 'Bring a save back when it is actually time to use it. Future you gets a small favor.'],
               [ShieldCheck, 'Check your library', 'Spot links and saves that need attention before your collection turns into digital attic dust.'],
               [Lock, 'Private by default', 'Your library belongs to your account, and you choose what becomes searchable.'],
-            ].map(([Icon, title, description], index) => (
+            ].map(([Icon, title, description]) => (
               <div
                 key={title}
                 className="step-card group relative min-h-56 overflow-hidden rounded-2xl border border-white/10 bg-black/80 p-7 transition-all hover:-translate-y-1 hover:border-primary/60"
               >
                 <div
                   className="absolute -right-12 -top-12 h-40 w-40 rounded-full opacity-0 blur-3xl transition-opacity group-hover:opacity-100"
-                  style={{ background: index % 2 ? 'var(--glow-2)' : 'var(--glow)' }}
+                  style={{ background: 'var(--glow)' }}
                 />
                 <div className="relative">
                   <Icon className="mb-8 h-6 w-6 text-primary" />
@@ -3247,7 +3247,7 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
 
           <form onSubmit={handleSupportSubmit} className="mt-6 grid gap-3">
             <label className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
-              Your email <span className="text-orange-500">*</span>
+              Your email <span className="text-destructive">*</span>
             </label>
             <input
               type="email"
@@ -3425,7 +3425,7 @@ function AnimatedFeatureSelect({ value, onChange, options = FEEDBACK_FEATURE_OPT
         }`}
       >
         <span className="flex items-center gap-3">
-          <span className="h-2.5 w-2.5 rounded-full bg-orange-500 shadow-[0_0_16px_rgba(255,106,0,0.75)]" />
+          <span className="h-2.5 w-2.5 rounded-full bg-primary shadow-[0_0_16px_rgba(165,255,24,0.45)]" />
           {value}
         </span>
         <ChevronDown className={`h-4 w-4 text-muted-foreground transition duration-200 ${open ? 'rotate-180 text-primary' : 'group-hover:text-primary'}`} />
@@ -3450,7 +3450,7 @@ function AnimatedFeatureSelect({ value, onChange, options = FEEDBACK_FEATURE_OPT
                 setOpen(false);
               }}
               className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition duration-150 ${
-                selected ? 'bg-orange-500 text-black' : 'text-foreground hover:bg-orange-500/15 hover:text-orange-300'
+                selected ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-primary/10 hover:text-primary'
               }`}
             >
               <span>{option}</span>
@@ -3520,7 +3520,7 @@ function DashboardFilterSelect({ label, value, options, onChange, ariaLabel, ico
                 setOpen(false);
               }}
               className={`flex w-full items-center justify-between gap-3 whitespace-nowrap rounded-xl px-3 py-2.5 text-left text-xs transition duration-150 ${
-                selected ? 'bg-orange-500 text-black' : 'text-foreground hover:bg-orange-500/15 hover:text-orange-300'
+                selected ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-primary/10 hover:text-primary'
               }`}
             >
               <span>{filterLabel(option)}</span>
@@ -3730,7 +3730,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [files, setFiles] = useState([]);
   const [importSourceType, setImportSourceType] = useState('auto');
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
-  const [uploadInitialMode, setUploadInitialMode] = useState('upload');
+  const [uploadInitialMode, setUploadInitialMode] = useState('link');
   const [noteForm, setNoteForm] = useState({ title: '', body: '', links: '', images: [] });
   const [credentials, setCredentials] = useState([]);
   const [agentTokens, setAgentTokens] = useState([]);
@@ -4426,17 +4426,18 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setError('');
     setNotice('');
     try {
-      const result = await saveLink({ ...payload, review: options.review === true, startProcessing: false });
+      const requiresReview = options.review === true;
+      const result = await saveLink({ ...payload, review: requiresReview, startProcessing: false });
       const duplicate = result.skippedDuplicateCount > 0;
       const queued = result.item?.status === 'queued' || result.queuedJobCount > 0;
       const backingUp = result.item?.archive?.status === 'pending';
       setNotice(duplicate
         ? 'That link was already in your library.'
         : backingUp
-          ? 'Link saved to your Library. Readable copy is saving in the background.'
+          ? 'Saved. IScraper is improving the title, source, and collections in the background.'
           : queued
-            ? 'Link saved to your Library and queued for indexing.'
-            : 'Link saved to your Library.');
+            ? 'Saved. IScraper is organizing and indexing it in the background.'
+            : 'Saved to your Library.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
       await Promise.all([loadItems(), loadLibraryPage({ reset: true }), loadSmartCollections()]);
@@ -4603,7 +4604,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
       setSearchResults((current) => (current ? current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)) : current));
       setSelected((current) => (current?.id === nextItem.id ? nextItem : current));
-      setNotice('Added to Library.');
+      setNotice('Added to Library. Search for it when you need it.');
       await loadSmartCollections();
     } catch (err) {
       setError(err.message);
@@ -4785,9 +4786,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const sidebarVisibleExpanded = sidebarExpanded || sidebarHoverExpanded;
   const advancedExpanded = sidebarVisibleExpanded && (advancedOpen || advancedActive);
 
-  const selectTab = useCallback((nextTab) => {
+  const selectTab = useCallback((nextTab, options = {}) => {
     if (!DASHBOARD_TABS.includes(nextTab)) return;
-    if (nextTab === 'upload') setUploadInitialMode('upload');
+    if (nextTab === 'upload') setUploadInitialMode(options.initialAddMode || 'link');
     setTab(nextTab);
     replaceAppTabUrl(nextTab);
     resetPageScroll();
@@ -5070,7 +5071,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           <button
             type="button"
             onClick={() => setQuickAddOpen(true)}
-            className="fixed bottom-6 right-6 z-40 inline-flex h-16 w-16 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-2xl shadow-primary/30 transition hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-black"
+            className="fixed bottom-6 right-6 z-40 inline-flex h-16 w-16 items-center justify-center rounded-full bg-accent text-accent-foreground shadow-2xl shadow-accent/30 transition hover:scale-105 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-black"
             aria-label="Add to your library"
             title="Add to your library"
           >
@@ -5368,9 +5369,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           onImport={handleImport}
           busy={busy}
           onOpenHowTo={onOpenHowTo}
-          onOpenFullAdd={() => {
+          onOpenFullAdd={(initialAddMode = 'upload') => {
             setQuickAddOpen(false);
-            selectTab('upload');
+            selectTab('upload', { initialAddMode });
           }}
           onClose={() => setQuickAddOpen(false)}
           onError={setError}
@@ -6096,7 +6097,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                                   handleReveal(group);
                                 }}
                                 disabled={busy}
-                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-3 py-3 text-xs font-semibold transition hover:bg-white/5 disabled:opacity-60"
+                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-accent/40 px-3 py-3 text-xs font-semibold text-accent transition hover:bg-accent/10 disabled:opacity-60"
                               >
                                 {revealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                                 {revealed ? 'Hide' : 'Reveal'}
@@ -6109,10 +6110,10 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                             </div>
                           </div>
                           {confirmRevealGroup === group.id && !revealed && (
-                            <div className="mt-3 rounded-xl border border-orange-500/40 bg-orange-500/10 p-3 text-sm leading-6 text-orange-100">
+                            <div className="mt-3 rounded-xl border border-accent/40 bg-accent/10 p-3 text-sm leading-6 text-orange-100">
                               Revealing an API key exposes the full secret on this screen. Only do this on your own device.
                               <div className="mt-3 flex flex-wrap gap-2">
-                                <button type="button" onClick={() => handleReveal(group)} className="rounded-lg bg-orange-500 px-3 py-2 text-xs font-semibold text-black">Reveal key</button>
+                                <button type="button" onClick={() => handleReveal(group)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground">Reveal key</button>
                                 <button type="button" onClick={() => setConfirmRevealGroup(null)} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-foreground">Cancel</button>
                               </div>
                             </div>
@@ -6509,7 +6510,7 @@ function QuickAddModal({
               ))}
               <button
                 type="button"
-                onClick={onOpenFullAdd}
+                onClick={() => onOpenFullAdd('link')}
                 className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
               >
                 <Upload className="h-4 w-4" /> Open full Add Saves page
@@ -6690,7 +6691,7 @@ function QuickAddModal({
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={onOpenFullAdd}
+                  onClick={() => onOpenFullAdd('upload')}
                   className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
                 >
                   Full upload
@@ -7351,8 +7352,8 @@ function ImportHealthPanel({ health, pendingReviewCount, indexingActivity }) {
   const Icon = healthMeta.icon;
   const checks = [
     ['Ready to save', health.title, health.copy, Icon, healthMeta.color],
-    ['Needs your OK', `${formatUsageNumber(pendingReviewCount)} waiting`, pendingReviewCount ? 'Review these saved links before they appear in your library.' : 'Nothing is waiting for you right now.', CheckCircle2, pendingReviewCount ? 'text-accent' : 'text-primary'],
-    ['Still updating', `${formatUsageNumber(indexingActivity.activeTotal)} active`, indexingActivity.activeTotal ? 'We are adding more details in the background.' : 'Nothing is updating in the background right now.', indexingActivity.activeTotal ? Loader2 : CheckCircle2, indexingActivity.activeTotal ? 'text-accent' : 'text-primary'],
+    ['Needs your OK', `${formatUsageNumber(pendingReviewCount)} waiting`, pendingReviewCount ? 'Review these saved links before they appear in your library.' : 'Nothing is waiting for you right now.', CheckCircle2, pendingReviewCount ? 'text-muted-foreground' : 'text-primary'],
+    ['Still updating', `${formatUsageNumber(indexingActivity.activeTotal)} active`, indexingActivity.activeTotal ? 'We are adding more details in the background.' : 'Nothing is updating in the background right now.', indexingActivity.activeTotal ? Loader2 : CheckCircle2, indexingActivity.activeTotal ? 'text-muted-foreground' : 'text-primary'],
   ];
 
   return (
@@ -7384,6 +7385,81 @@ function ImportHealthPanel({ health, pendingReviewCount, indexingActivity }) {
           Large uploads may take a little longer. You can keep this page open while we prepare them.
         </p>
       )}
+    </section>
+  );
+}
+
+function ActivationPathCard({ activationState, onTrySearch }) {
+  const steps = [
+    {
+      key: 'add',
+      label: 'Add',
+      title: 'Paste a link',
+      copy: activationState.total
+        ? `${formatUsageNumber(activationState.total)} saved so far`
+        : 'Save one link, note, or export.',
+      icon: ExternalLink,
+    },
+    {
+      key: 'approve',
+      label: 'Organize',
+      title: 'IScraper sorts it',
+      copy: activationState.needsReview
+        ? `${formatUsageNumber(activationState.needsReview)} waiting for cleanup`
+        : 'Parser rules and AI improve details later.',
+      icon: Sparkles,
+    },
+    {
+      key: 'search',
+      label: 'Search',
+      title: 'Find it later',
+      copy: activationState.searchable
+        ? `${formatUsageNumber(activationState.searchable)} searchable`
+        : 'Search starts as soon as it is saved.',
+      icon: Search,
+    },
+  ];
+
+  return (
+    <section className="rounded-2xl border border-primary/25 bg-primary/5 p-5">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Simple save path</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Save now, organize automatically</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">Click Save once. IScraper handles the cleanup in the background.</p>
+        </div>
+        {activationState.searchable > 0 && (
+          <button
+            type="button"
+            onClick={() => onTrySearch(activationState.searchQuery)}
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
+          >
+            <Search className="h-4 w-4" /> Search this save
+          </button>
+        )}
+      </div>
+      <div className="mt-5 grid gap-3 md:grid-cols-3">
+        {steps.map(({ key, label, title, copy, icon: Icon }, index) => {
+          const active = activationState.currentStep === key;
+          const complete = key === 'add'
+            ? activationState.total > 0
+            : key === 'approve'
+              ? activationState.searchable > 0
+              : false;
+          return (
+            <div key={key} className={`rounded-xl border p-4 ${active ? 'border-primary bg-black/50' : 'border-white/10 bg-black/30'}`}>
+              <div className={`mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] ${active ? 'text-primary' : complete ? 'text-foreground' : 'text-muted-foreground'}`}>
+                <span className="grid h-7 w-7 place-items-center rounded-full border border-white/10">{complete ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
+                {label}
+              </div>
+              <div className="flex items-center gap-2 font-semibold">
+                <Icon className="h-4 w-4 text-primary" /> {title}
+              </div>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">{copy}</p>
+            </div>
+          );
+        })}
+      </div>
     </section>
   );
 }
@@ -7810,10 +7886,10 @@ function LibraryTab({
 const PIN_BACKDROPS = [
   '#d6ff24',
   '#f4f4f0',
-  '#ff6a00',
+  '#a5ff18',
   '#29ffc6',
-  '#ffb347',
-  '#ff8a1f',
+  '#e5e7eb',
+  '#86efac',
 ];
 
 function firstUsefulCardChip(item) {
@@ -8135,7 +8211,7 @@ const LibraryListRow = memo(function LibraryListRow({ item, height = 172, onClic
         </div>
         <h3 className="truncate font-display text-xl font-bold tracking-tight text-foreground md:text-2xl">{card.title}</h3>
         <div className="mt-1 truncate font-mono text-xs text-primary">{card.source}</div>
-        <p className="mt-2 line-clamp-2 text-sm leading-5 text-muted-foreground">{searchReason || card.preview}</p>
+        <p className="mt-2 line-clamp-2 text-sm leading-5 text-muted-foreground">{searchReason ? `Why it matched: ${searchReason}` : card.preview}</p>
       </div>
       <div className="flex min-w-0 shrink-0 flex-col items-end justify-between gap-3">
         {item.thumbnailUrl ? (
@@ -8225,12 +8301,12 @@ const GalleryCard = memo(function GalleryCard({ item, height = 380, onClick, sea
       <div className="flex min-h-[132px] flex-col p-4">
         <div className="mb-2 flex items-center justify-between gap-3">
           <span className="min-w-0 truncate font-mono text-[11px] uppercase tracking-[0.18em] text-primary">{card.source}</span>
-          <span className={`shrink-0 rounded-full border border-white/10 px-2 py-1 text-[10px] ${item.sourceStatus === 'needs_review' ? 'text-accent' : 'text-muted-foreground'}`}>
+          <span className="shrink-0 rounded-full border border-white/10 px-2 py-1 text-[10px] text-muted-foreground">
             {statusText}
           </span>
         </div>
         <h3 className="line-clamp-2 font-display text-xl font-bold leading-tight tracking-tight">{card.title}</h3>
-        <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{searchReason || card.preview}</p>
+        <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{searchReason ? `Why it matched: ${searchReason}` : card.preview}</p>
         <div className="mt-auto flex items-center justify-between gap-3 pt-3">
           {card.chip ? (
             <span className="min-w-0 truncate rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-muted-foreground">{card.chip}</span>
@@ -8316,7 +8392,7 @@ const PinCard = memo(function PinCard({ item, index, height = 420, onClick, sear
         )}
         {searchReason && (
           <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs leading-5 text-muted-foreground">
-            {searchReason}
+            Why it matched: {searchReason}
           </p>
         )}
         {searchActive && onSearchFeedback && (
@@ -8335,7 +8411,7 @@ function UploadTab({
   setFiles,
   importSourceType,
   setImportSourceType,
-  initialAddMode = 'upload',
+  initialAddMode = 'link',
   linkForm,
   setLinkForm,
   noteForm,
@@ -8354,8 +8430,9 @@ function UploadTab({
   onTrySearch,
 }) {
   const [dragging, setDragging] = useState(false);
-  const [activeAddMode, setActiveAddMode] = useState(() => (['link', 'note', 'upload'].includes(initialAddMode) ? initialAddMode : 'upload'));
+  const [activeAddMode, setActiveAddMode] = useState(() => (['link', 'note', 'upload'].includes(initialAddMode) ? initialAddMode : 'link'));
   const linkInputRef = useRef(null);
+  const reviewSectionRef = useRef(null);
   const noteImageInputRef = useRef(null);
   const importHealth = useMemo(() => importHealthForFiles(files, importSourceType), [files, importSourceType]);
   const addModeOptions = [
@@ -8369,6 +8446,13 @@ function UploadTab({
     { value: 'pinterest', label: 'Pinterest', help: 'For files downloaded from Pinterest.' },
     { value: 'x', label: 'X bookmarks', help: 'For bookmark CSV, JSON, JS, TXT, or ZIP files.' },
   ];
+
+  useEffect(() => {
+    if (pendingReviews.length > 0) {
+      reviewSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [pendingReviews.length]);
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-6 py-20">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -8385,6 +8469,8 @@ function UploadTab({
           <FileText className="h-4 w-4" /> How to Use
         </button>
       </div>
+
+      <ActivationPathCard activationState={activationState} onTrySearch={onTrySearch} />
 
       <div className="grid gap-2 rounded-2xl border border-white/10 bg-white/[0.025] p-2 md:grid-cols-3">
         {addModeOptions.map(({ value, label, icon: Icon }) => (
@@ -8594,7 +8680,7 @@ function UploadTab({
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save a link</div>
           <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Paste a link you want to keep</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            We will show you what we found before it is added to your Library.
+            We save it immediately, then improve the title, source, and collections in the background.
           </p>
           <p className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
         </div>
@@ -8629,12 +8715,12 @@ function UploadTab({
       )}
 
       {pendingReviews.length > 0 && (
-        <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+        <section ref={reviewSectionRef} className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
           <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Confirm links</div>
-              <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saved links need a quick check</h2>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">Check the title and note, then add them to your Library.</p>
+              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Advanced cleanup</div>
+              <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saved links can be cleaned up</h2>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">Update optional title, note, or collection details when you want more control.</p>
               <p className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
             </div>
             <button
@@ -8662,6 +8748,25 @@ function UploadTab({
                 onApprove={onApproveReview}
               />
             ))}
+          </div>
+        </section>
+      )}
+
+      {pendingReviews.length === 0 && activationState.searchable > 0 && (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Step 3 - search</div>
+              <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Now prove you can find it again</h2>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">Search by title, topic, source, or the reason you saved it.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onTrySearch(activationState.searchQuery)}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
+            >
+              <Search className="h-4 w-4" /> Search this save
+            </button>
           </div>
         </section>
       )}
@@ -8910,23 +9015,23 @@ function SettingsTab({
             placeholder="Token name"
             className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black px-4 py-3 text-sm outline-none focus:border-primary"
           />
-          <button disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60">
+          <button disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground disabled:opacity-60">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
             Create token
           </button>
         </form>
 
         {createdAgentAccess?.secret && (
-          <div className="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-4">
+          <div className="space-y-3 rounded-xl border border-accent/40 bg-accent/10 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Copy now</div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-accent">Copy now</div>
                 <p className="mt-1 text-sm text-muted-foreground">This token is shown once.</p>
               </div>
               <button
                 type="button"
                 onClick={() => copyAgentValue(createdAgentAccess.secret, 'agent-secret')}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground"
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2 text-xs font-semibold text-accent-foreground"
               >
                 <Copy className="h-4 w-4" /> {copiedAgentValue === 'agent-secret' ? 'Copied' : 'Copy token'}
               </button>
@@ -9015,14 +9120,14 @@ function SettingsTab({
           type="button"
           onClick={createTelegramCode}
           disabled={busy || captureBusy}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 font-semibold text-accent-foreground disabled:opacity-60"
         >
           {captureBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
           Create Telegram bot link code
         </button>
         {telegramCode && (
-          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Private bot link code</div>
+          <div className="rounded-xl border border-accent/40 bg-accent/10 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">Private bot link code</div>
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
               <code className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-white/10 bg-black px-3 py-2 text-xs text-foreground">
                 /connect {telegramCode}
@@ -9032,7 +9137,7 @@ function SettingsTab({
                 onClick={() => {
                   navigator.clipboard?.writeText(`/connect ${telegramCode}`).then(() => onNotice?.('Telegram connect command copied.'));
                 }}
-                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-white/5"
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-accent-foreground transition hover:brightness-110"
               >
                 <Copy className="h-4 w-4" /> Copy
               </button>
@@ -9065,9 +9170,7 @@ function SettingsTab({
               }}
               className={`rounded-lg px-4 py-3 text-left text-sm transition ${
                 credentialForm.setup === setup
-                  ? setup === 'openrouter_all'
-                    ? 'bg-orange-500 text-black'
-                    : 'bg-primary text-primary-foreground'
+                  ? 'bg-primary text-primary-foreground'
                   : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
               }`}
             >
@@ -9125,7 +9228,7 @@ function SettingsTab({
             }`}
           />
         </div>
-        <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
+        <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 font-semibold text-accent-foreground disabled:opacity-60">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
           Save key
         </button>
@@ -9167,9 +9270,9 @@ function SettingsTab({
 
       {providerWarningCopy && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-red-500/60 bg-black p-6 shadow-[0_24px_80px_rgba(0,0,0,0.65)]">
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-red-400">Before you continue</div>
-            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight text-red-100">{providerWarningCopy.title}</h2>
+          <div className="w-full max-w-md rounded-2xl border border-accent/60 bg-black p-6 shadow-[0_24px_80px_rgba(0,0,0,0.65)]">
+            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-accent">Before you continue</div>
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight text-orange-100">{providerWarningCopy.title}</h2>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
               {providerWarningCopy.body} For the easiest full setup, use OpenRouter.
             </p>
@@ -9190,7 +9293,7 @@ function SettingsTab({
                   setCredentialForm((current) => ({ ...current, setup: providerWarning }));
                   setProviderWarning(null);
                 }}
-                className="rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-foreground"
+                className="rounded-xl border border-accent/40 px-4 py-3 text-sm font-semibold text-accent transition hover:bg-accent/10"
               >
                 Continue anyway
               </button>
@@ -9734,7 +9837,7 @@ function graphNodeColor(type) {
     topic: '#a5ff18',
     tag: '#22d3ee',
     brand: '#60a5fa',
-    tool: '#f97316',
+    tool: '#94a3b8',
     person: '#f472b6',
     collection: '#c084fc',
   };
