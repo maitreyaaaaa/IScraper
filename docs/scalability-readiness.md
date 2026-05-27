@@ -54,6 +54,7 @@ These are readiness targets, not guaranteed public SLAs.
 - Supabase migration security gate: `npm.cmd run security:supabase`
 - Read-only Supabase query audit: `npm.cmd run db:audit:supabase`
 - k6 mixed-load harness: `npm.cmd run load:smoke`
+- Supabase-authenticated k6 harness: `npm.cmd run load:auth:supabase`
 - Backend tests: `npm.cmd --workspace @iscraper/orchestration test`
 - Build: `npm.cmd run build`
 - Lint: `npm.cmd run lint`

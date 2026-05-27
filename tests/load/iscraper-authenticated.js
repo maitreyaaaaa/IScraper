@@ -1,6 +1,6 @@
 import http from 'k6/http';
 import { check, group, sleep } from 'k6';
-import { Rate } from 'k6/metrics';
+import { Counter, Rate } from 'k6/metrics';
 
 http.setResponseCallback(http.expectedStatuses({ min: 200, max: 499 }));
 
@@ -10,6 +10,10 @@ if (!token) {
 }
 
 const failureRate = new Rate('iscraper_authenticated_failed_checks');
+const invalidAuthResponses = new Counter('iscraper_auth_invalid_responses');
+const unauthorizedResponses = new Counter('iscraper_auth_unauthorized_responses');
+const forbiddenResponses = new Counter('iscraper_auth_forbidden_responses');
+const profileRequiredResponses = new Counter('iscraper_auth_profile_required_responses');
 const baseUrl = (__ENV.BASE_URL || 'https://iscraper.vercel.app').replace(/\/$/, '');
 const profile = String(__ENV.LOAD_PROFILE || 'deployed-auth-readonly').toLowerCase();
 const mutationEnabled = /^true$/i.test(String(__ENV.AUTH_MUTATION_ENABLED || 'false'));
@@ -34,6 +38,7 @@ const defaultsByProfile = {
 };
 
 const defaults = defaultsByProfile[profile] || defaultsByProfile['deployed-auth-readonly'];
+let invalidAuthWarningPrinted = false;
 
 const scenarios = {
   profile_read: scenario('profileRead', 'authenticated', envNumber('PROFILE_RATE', defaults.profileRate), '1s', 2, 10),
@@ -55,6 +60,7 @@ export const options = {
     'http_req_duration{route_group:import}': ['p(95)<1500', 'p(99)<3000'],
     'http_req_duration{route_group:search}': ['p(95)<1500', 'p(99)<3000'],
     iscraper_authenticated_failed_checks: ['rate<0.05'],
+    iscraper_auth_invalid_responses: ['count==0'],
   },
 };
 
@@ -90,9 +96,32 @@ function requestTags(routeGroup, routeName) {
 }
 
 function record(response, expectations) {
+  recordAuthStatus(response);
   const ok = check(response, expectations);
   failureRate.add(!ok);
   return ok;
+}
+
+function recordAuthStatus(response) {
+  if (response.status === 401) {
+    unauthorizedResponses.add(1);
+    invalidAuthResponses.add(1);
+    printInvalidAuthWarning();
+  } else if (response.status === 403) {
+    forbiddenResponses.add(1);
+    invalidAuthResponses.add(1);
+    printInvalidAuthWarning();
+  } else if (response.status === 428) {
+    profileRequiredResponses.add(1);
+    invalidAuthResponses.add(1);
+    printInvalidAuthWarning();
+  }
+}
+
+function printInvalidAuthWarning() {
+  if (invalidAuthWarningPrinted) return;
+  invalidAuthWarningPrinted = true;
+  console.error('Invalid authenticated latency evidence: received 401/403/428 before signed-in route logic completed.');
 }
 
 export function profileRead() {

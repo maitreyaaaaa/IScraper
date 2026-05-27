@@ -28,6 +28,7 @@
     "db:audit:supabase": "node scripts/supabase-db-audit.js",
     "load:smoke": "k6 run tests/load/iscraper-mixed.js",
     "load:auth": "k6 run tests/load/iscraper-authenticated.js",
+    "load:auth:supabase": "node scripts/authenticated-load-runner.js",
     "load:region": "k6 run tests/load/iscraper-region-probe.js",
     "region:probe": "node scripts/region-probe.js",
     "check": "npm run lint && npm run test && npm run build"
