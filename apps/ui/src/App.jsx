@@ -2495,7 +2495,19 @@ function AdminSupportPage({ onBack }) {
           <form onSubmit={loadUsers} className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
             <label className="block text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Admin API key</label>
             <input
+              type="text"
+              name="admin-key-context"
+              autoComplete="username"
+              value="IScraper admin API"
+              readOnly
+              className="hidden"
+              tabIndex={-1}
+              aria-hidden="true"
+            />
+            <input
               type="password"
+              name="admin-api-key"
+              autoComplete="new-password"
               value={adminKey}
               onChange={(event) => saveAdminKey(event.target.value)}
               placeholder="Paste admin key"
@@ -9211,6 +9223,16 @@ function SettingsTab({
         <div className={`space-y-3 rounded-xl border p-4 transition ${
           credentialSaveSuccess ? 'border-emerald-400 bg-emerald-500/15' : 'border-white/10 bg-transparent'
         }`}>
+          <input
+            type="text"
+            name="provider-key-context"
+            autoComplete="username"
+            value="IScraper provider API"
+            readOnly
+            className="hidden"
+            tabIndex={-1}
+            aria-hidden="true"
+          />
           {credentialSaveSuccess && (
             <div className="rounded-lg border border-emerald-300/40 bg-emerald-400/15 px-4 py-3 text-sm leading-6 text-emerald-100">
               <div className="font-display text-xl font-black tracking-tight text-emerald-200">SUCCESS</div>
@@ -9219,6 +9241,8 @@ function SettingsTab({
           )}
           <input
             type="password"
+            name="provider-api-key"
+            autoComplete="new-password"
             value={credentialForm.apiKey}
             onChange={(event) => setCredentialForm((current) => ({ ...current, apiKey: event.target.value }))}
             placeholder="Paste API key"
