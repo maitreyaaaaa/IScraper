@@ -4952,7 +4952,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setAdvancedOpen(false);
       setSidebarHoverExpanded(false);
       sidebarHoverTimerRef.current = null;
-    }, 220);
+    }, 280);
   };
 
   return (
@@ -4961,7 +4961,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         ref={sidebarRef}
         onMouseEnter={handleSidebarMouseEnter}
         onMouseLeave={handleSidebarMouseLeave}
-        className={`hidden h-screen shrink-0 flex-col overflow-hidden border-r border-white/5 bg-black transition-[width] duration-200 md:flex ${
+        className={`hidden h-screen shrink-0 flex-col overflow-hidden border-r border-white/5 bg-black transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] md:flex ${
           sidebarVisibleExpanded ? 'w-60' : 'w-[76px]'
         }`}
       >
