@@ -8574,7 +8574,7 @@ function UploadTab({
     { value: 'auto', label: 'Choose for me', help: 'Best if you are not sure.' },
     { value: 'instagram', label: 'Instagram', help: 'For files downloaded from Instagram.' },
     { value: 'pinterest', label: 'Pinterest', help: 'For files downloaded from Pinterest.' },
-    { value: 'x', label: 'X bookmarks', help: 'For bookmark CSV, JSON, JS, TXT, or ZIP files.' },
+    { value: 'x', label: 'X', help: 'For bookmark CSV, JSON, JS, TXT, or ZIP files.' },
   ];
 
   useEffect(() => {
