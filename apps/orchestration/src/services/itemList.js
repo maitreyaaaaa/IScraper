@@ -1,5 +1,6 @@
 const DEFAULT_PAGE_LIMIT = 60;
 const MAX_PAGE_LIMIT = 100;
+const { sourceSavedAtOrCreatedAt } = require('./sourceDates');
 
 function normalizeCursor(cursor) {
   if (!cursor) return 0;
@@ -81,15 +82,15 @@ function itemStateMatches(item, state) {
 function sortedItems(items, sort) {
   const copy = [...items];
   if (sort === 'oldest') {
-    return copy.sort((a, b) => String(a.createdAt || a.savedAt || '').localeCompare(String(b.createdAt || b.savedAt || '')) || String(a.id).localeCompare(String(b.id)));
+    return copy.sort((a, b) => String(sourceSavedAtOrCreatedAt(a)).localeCompare(String(sourceSavedAtOrCreatedAt(b))) || String(a.id).localeCompare(String(b.id)));
   }
   if (sort === 'updated') {
-    return copy.sort((a, b) => String(b.updatedAt || b.createdAt || b.savedAt || '').localeCompare(String(a.updatedAt || a.createdAt || a.savedAt || '')) || String(a.id).localeCompare(String(b.id)));
+    return copy.sort((a, b) => String(b.updatedAt || sourceSavedAtOrCreatedAt(b)).localeCompare(String(a.updatedAt || sourceSavedAtOrCreatedAt(a))) || String(a.id).localeCompare(String(b.id)));
   }
   if (sort === 'title') {
     return copy.sort((a, b) => String(a.sourceTitle || a.analysis?.title || a.caption || '').localeCompare(String(b.sourceTitle || b.analysis?.title || b.caption || '')) || String(a.id).localeCompare(String(b.id)));
   }
-  return copy.sort((a, b) => String(b.createdAt || b.savedAt || '').localeCompare(String(a.createdAt || a.savedAt || '')) || String(a.id).localeCompare(String(b.id)));
+  return copy.sort((a, b) => String(sourceSavedAtOrCreatedAt(b)).localeCompare(String(sourceSavedAtOrCreatedAt(a))) || String(a.id).localeCompare(String(b.id)));
 }
 
 function facetsForItems(items = []) {

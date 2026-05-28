@@ -590,16 +590,17 @@ function itemStateMatches(item, stateFilter) {
 
 function sortedItems(items, sortOrder) {
   const copy = [...items];
+  const savedDate = (item) => item.saved || item.raw?.savedAt || item.raw?.createdAt || '';
   if (sortOrder === 'oldest') {
-    return copy.sort((a, b) => String(a.raw?.createdAt || a.saved || '').localeCompare(String(b.raw?.createdAt || b.saved || '')));
+    return copy.sort((a, b) => String(savedDate(a)).localeCompare(String(savedDate(b))));
   }
   if (sortOrder === 'updated') {
-    return copy.sort((a, b) => String(b.raw?.updatedAt || b.raw?.createdAt || b.saved || '').localeCompare(String(a.raw?.updatedAt || a.raw?.createdAt || a.saved || '')));
+    return copy.sort((a, b) => String(b.raw?.updatedAt || savedDate(b)).localeCompare(String(a.raw?.updatedAt || savedDate(a))));
   }
   if (sortOrder === 'title') {
     return copy.sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
   }
-  return copy.sort((a, b) => String(b.raw?.createdAt || b.saved || '').localeCompare(String(a.raw?.createdAt || a.saved || '')));
+  return copy.sort((a, b) => String(savedDate(b)).localeCompare(String(savedDate(a))));
 }
 
 function noteImageError(file, existingCount = 0) {

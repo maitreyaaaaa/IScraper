@@ -54,7 +54,7 @@ test('parseXBookmarksExport parses CSV and text URL exports', async () => {
     {
       originalname: 'bookmarks.csv',
       mimetype: 'text/csv',
-      buffer: Buffer.from('tweet_url,text,username\nhttps://x.com/team/status/1777000000000000002,"Launch thread #saas",team\n'),
+      buffer: Buffer.from('tweet_url,text,username,created_at\nhttps://x.com/team/status/1777000000000000002,"Launch thread #saas",team,"Mon May 20 10:00:00 +0000 2026"\n'),
     },
     {
       originalname: 'x-links.txt',
@@ -65,6 +65,7 @@ test('parseXBookmarksExport parses CSV and text URL exports', async () => {
 
   assert.equal(parsed.items.length, 2);
   assert.deepEqual(parsed.collections[0].name, 'X bookmarks');
+  assert.equal(parsed.items[0].savedAt, '2026-05-20T10:00:00.000Z');
   assert.equal(parsed.items[0].sourceTitle, 'Launch thread #saas');
   assert.equal(parsed.items[1].url, 'https://x.com/design/status/1777000000000000003');
 });

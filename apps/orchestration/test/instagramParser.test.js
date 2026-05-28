@@ -44,7 +44,9 @@ test('parseInstagramExport extracts every saved post with owner, hashtags, and d
   assert.equal(result.items[0].platformKey, 'instagram');
   assert.equal(result.items[0].sourceId, 'AAA111');
   assert.equal(result.items[0].sourceAuthor, 'tech.builder');
+  assert.equal(result.items[0].savedAt, '2026-05-05T03:07:00.000Z');
   assert.equal(result.items[1].contentType, 'post');
+  assert.equal(result.items[1].savedAt, '2026-05-04T20:00:00.000Z');
 });
 
 test('parseInstagramExport links collection names to saved items', () => {

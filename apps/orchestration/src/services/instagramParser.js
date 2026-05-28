@@ -1,5 +1,6 @@
 const cheerio = require('cheerio');
 const path = require('path');
+const { normalizeSourceSavedAt } = require('./sourceDates');
 
 const DEFAULT_INSTAGRAM_COLLECTION = 'Instagram saved posts';
 
@@ -106,7 +107,8 @@ function parsePostsHtml(html, sourceName, collectionName = null) {
     const caption = extractFieldFromTable($, table, 'Caption');
     const ownerName = extractFieldFromTable($, table, 'Name');
     const ownerUsername = extractFieldFromTable($, table, 'Username');
-    const savedAt = normalizeText($(record).find('div._3-94._a6-o').first().text());
+    const rawSavedAt = normalizeText($(record).find('div._3-94._a6-o').first().text());
+    const savedAt = normalizeSourceSavedAt(rawSavedAt) || rawSavedAt;
     const id = getShortcode(url);
 
     byUrl.set(url, {
@@ -192,7 +194,7 @@ function itemFromJsonUrl(url, sourceName, record = {}, collectionName = null) {
   const caption = valueFromStringMap(stringMap, ['Caption', 'Title', 'Text']) || normalizeText(record.title || '');
   const ownerName = valueFromStringMap(stringMap, ['Name', 'Full name']);
   const ownerUsername = valueFromStringMap(stringMap, ['Username', 'Author', 'Account username']);
-  const savedAt = savedAtFromStringMap(stringMap);
+  const savedAt = normalizeSourceSavedAt(savedAtFromStringMap(stringMap));
   const id = getShortcode(url);
 
   return {

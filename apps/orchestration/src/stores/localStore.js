@@ -37,6 +37,7 @@ const {
 const { publicArchive } = require('../services/pageArchive');
 const { publicLinkHealth, publicReminder } = require('../services/libraryCare');
 const { sanitizeAuditMetadata } = require('../services/auditLog');
+const { createdAtForImportedItem } = require('../services/sourceDates');
 
 const DEFAULT_USER_ID = 'local-dev-user';
 
@@ -1351,14 +1352,15 @@ function createLocalStore({ dataPath }) {
           continue;
         }
 
+        const timestamp = now();
         const created = {
           ...item,
           userId,
           importId,
           status: initialStatus,
           analysis: null,
-          createdAt: now(),
-          updatedAt: now(),
+          createdAt: createdAtForImportedItem(item, timestamp),
+          updatedAt: timestamp,
         };
         state.items.push(created);
         items.push(created);

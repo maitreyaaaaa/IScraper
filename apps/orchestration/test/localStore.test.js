@@ -117,6 +117,49 @@ test('localStore listItemsPage applies filters and stable cursors', () => {
   }
 });
 
+test('localStore uses source saved dates for newest and oldest import ordering', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+
+  try {
+    store.upsertImportData({
+      userId: 'date-user',
+      importId: 'date-import',
+      parsed: {
+        collections: [],
+        items: [
+          {
+            id: 'older',
+            url: 'https://instagram.com/p/older',
+            contentType: 'post',
+            caption: 'Older save',
+            collections: ['Ideas'],
+            savedAt: '2026-05-01T10:00:00.000Z',
+          },
+          {
+            id: 'newer',
+            url: 'https://instagram.com/p/newer',
+            contentType: 'post',
+            caption: 'Newer save',
+            collections: ['Ideas'],
+            savedAt: '2026-05-20T10:00:00.000Z',
+          },
+        ],
+      },
+      initialStatus: 'done',
+    });
+
+    const newest = store.listItemsPage('date-user', { sort: 'newest' });
+    assert.deepEqual(newest.items.map((item) => item.id), ['newer', 'older']);
+    assert.equal(newest.items[0].createdAt, '2026-05-20T10:00:00.000Z');
+
+    const oldest = store.listItemsPage('date-user', { sort: 'oldest' });
+    assert.deepEqual(oldest.items.map((item) => item.id), ['older', 'newer']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('localStore stores item archives and removes them with saved items', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

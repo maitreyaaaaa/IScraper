@@ -30,6 +30,7 @@ const {
 const { publicArchive } = require('../services/pageArchive');
 const { publicLinkHealth, publicReminder } = require('../services/libraryCare');
 const { sanitizeAuditMetadata } = require('../services/auditLog');
+const { createdAtForImportedItem } = require('../services/sourceDates');
 
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
 const IMPORT_INSERT_BATCH_SIZE = 500;
@@ -1146,27 +1147,32 @@ function createSupabaseStore({ url, serviceRoleKey }) {
 
       const items = parsed.items
         .filter((item) => !shouldSkipExisting || (!existingKeys.has(`id:${item.id}`) && !existingKeys.has(`url:${item.url}`)))
-        .map((item) => ({
-        id: cleanDbText(item.id),
-        user_id: userId,
-        import_id: importId,
-        url: cleanDbText(item.url),
-        content_type: cleanDbText(item.contentType),
-        caption: cleanDbText(item.caption),
-        hashtags: cleanTextArray(item.hashtags),
-        owner_name: cleanDbText(item.ownerName),
-        owner_username: cleanDbText(item.ownerUsername),
-        saved_at_text: cleanDbText(item.savedAt),
-        collections: cleanTextArray(item.collections),
-        platform: cleanDbText(item.platform || 'Instagram'),
-        platform_key: cleanDbText(item.platformKey || 'instagram'),
-        source_id: cleanDbText(item.sourceId || item.id),
-        source_title: cleanDbText(item.sourceTitle || ''),
-        source_author: cleanDbText(item.sourceAuthor || item.ownerUsername || item.ownerName || ''),
-        source_description: cleanDbText(item.sourceDescription || ''),
-        thumbnail_url: cleanDbText(item.thumbnailUrl || ''),
-        status: initialStatus,
-      }));
+        .map((item) => {
+          const timestamp = new Date().toISOString();
+          return {
+            id: cleanDbText(item.id),
+            user_id: userId,
+            import_id: importId,
+            url: cleanDbText(item.url),
+            content_type: cleanDbText(item.contentType),
+            caption: cleanDbText(item.caption),
+            hashtags: cleanTextArray(item.hashtags),
+            owner_name: cleanDbText(item.ownerName),
+            owner_username: cleanDbText(item.ownerUsername),
+            saved_at_text: cleanDbText(item.savedAt),
+            collections: cleanTextArray(item.collections),
+            platform: cleanDbText(item.platform || 'Instagram'),
+            platform_key: cleanDbText(item.platformKey || 'instagram'),
+            source_id: cleanDbText(item.sourceId || item.id),
+            source_title: cleanDbText(item.sourceTitle || ''),
+            source_author: cleanDbText(item.sourceAuthor || item.ownerUsername || item.ownerName || ''),
+            source_description: cleanDbText(item.sourceDescription || ''),
+            thumbnail_url: cleanDbText(item.thumbnailUrl || ''),
+            status: initialStatus,
+            created_at: createdAtForImportedItem(item, timestamp),
+            updated_at: timestamp,
+          };
+        });
       if (!items.length) return [];
       const inserted = await insertSavedItemRows(client, items);
       return inserted.map(mapItem);

@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const JSZip = require('jszip');
+const { normalizeSourceSavedAt } = require('./sourceDates');
 
 const X_TEXT_EXTENSIONS = new Set(['.js', '.json', '.csv', '.txt']);
 const X_HOST_RE = /^(?:mobile\.)?(?:twitter\.com|x\.com)$/i;
@@ -165,7 +166,8 @@ function entryToItem(entry, sourceName) {
   const text = cleanText(entry.full_text || entry.fullText || entry.text || entry.caption || entry.description || entry.note, 1200);
   const author = cleanText(entry.name || entry.author || entry.user_name || entry.userName || entry.user?.name, 120);
   const username = cleanText(entry.screen_name || entry.screenName || entry.username || entry.user_screen_name || entry.user?.screen_name || entry.user?.screenName, 80).replace(/^@/, '');
-  const createdAt = cleanText(entry.created_at || entry.createdAt || entry.date || entry.bookmarked_at || entry.saved_at, 80);
+  const rawCreatedAt = cleanText(entry.created_at || entry.createdAt || entry.date || entry.bookmarked_at || entry.saved_at, 80);
+  const createdAt = normalizeSourceSavedAt(rawCreatedAt) || rawCreatedAt;
   const title = text ? cleanText(text, 120) : `X bookmark ${sourceId}`;
   const sourceAuthor = username ? `@${username}` : author || 'X';
   const caption = [
