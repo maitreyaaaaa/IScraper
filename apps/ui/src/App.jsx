@@ -3896,6 +3896,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     }
   }, [mapSmartCollection]);
 
+  const refreshSaveSurfaces = useCallback((successLabel = 'Saved') => {
+    Promise.all([loadItems(), loadLibraryPage({ reset: true }), loadSmartCollections()])
+      .catch((err) => setError(`${successLabel}, but the library refresh failed: ${err.message}`));
+  }, [loadItems, loadLibraryPage, loadSmartCollections]);
+
   const loadSmartCollectionItems = useCallback(async (collectionId) => {
     if (!collectionId) {
       setSmartCollectionItems([]);
@@ -4495,6 +4500,14 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const duplicate = result.skippedDuplicateCount > 0;
       const queued = result.item?.status === 'queued' || result.queuedJobCount > 0;
       const backingUp = result.item?.archive?.status === 'pending';
+      if (result.item) {
+        const nextItem = mapItem(result.item);
+        setItems((current) => [nextItem, ...current.filter((entry) => entry.id !== nextItem.id)]);
+        setLibraryItems((current) => {
+          if (!itemTypeMatches(nextItem, typeFilter)) return current;
+          return [nextItem, ...current.filter((entry) => entry.id !== nextItem.id)];
+        });
+      }
       setNotice(duplicate
         ? 'That link was already in your library.'
         : backingUp
@@ -4504,8 +4517,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             : 'Saved to your Library.');
       setLinkForm({ url: '', title: '', description: '', note: '' });
       window.localStorage.removeItem('iscraper.pendingSaveLink');
-      await Promise.all([loadItems(), loadLibraryPage({ reset: true }), loadSmartCollections()]);
       options.onSuccess?.();
+      refreshSaveSurfaces('Saved');
       return true;
     } catch (err) {
       setError(err.message);
@@ -4513,7 +4526,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     } finally {
       setBusy(false);
     }
-  }, [linkForm, loadItems, loadLibraryPage, loadSmartCollections, requireProfile, requireSignIn]);
+  }, [linkForm, refreshSaveSurfaces, requireProfile, requireSignIn, typeFilter]);
 
   const handleCreateNote = useCallback(async (event, options = {}) => {
     event.preventDefault();
@@ -4534,13 +4547,17 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       const result = await createNote({ title, body, links, images: noteForm.images });
       const nextItem = mapItem(result.item);
       setItems((current) => [nextItem, ...current.filter((entry) => entry.id !== nextItem.id)]);
+      setLibraryItems((current) => {
+        if (!itemTypeMatches(nextItem, typeFilter)) return current;
+        return [nextItem, ...current.filter((entry) => entry.id !== nextItem.id)];
+      });
       setNoteForm({ title: '', body: '', links: '', images: [] });
       setTab('library');
       replaceAppTabUrl('library');
       setTypeFilter('notes');
       setNotice('Note saved to Library.');
-      await loadSmartCollections();
       options.onSuccess?.();
+      refreshSaveSurfaces('Note saved');
       return true;
     } catch (err) {
       setError(err.message);
@@ -4548,7 +4565,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     } finally {
       setBusy(false);
     }
-  }, [loadSmartCollections, noteForm, requireProfile, requireSignIn]);
+  }, [noteForm, refreshSaveSurfaces, requireProfile, requireSignIn, typeFilter]);
 
   useEffect(() => {
     if (pendingSaveHandledRef.current || loading || (authEnabled && (!session || profileRequired))) return;
@@ -4626,7 +4643,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         const skippedCount = result.skippedDuplicateCount ?? 0;
         setNotice(`Added ${newCount} new saves. ${skippedCount} already existed.`);
       }
-      await Promise.all([loadItems(), loadLibraryPage({ reset: true }), loadSmartCollections()]);
+      refreshSaveSurfaces('Import finished');
       return true;
     } catch (err) {
       setError(err.message);
@@ -5397,13 +5414,25 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     onSave={saveCredential}
                     onDelete={async (id) => {
                       setBusy(true);
-                      await deleteProviderCredential(id).then(loadControls).catch((err) => setError(err.message));
-                      setBusy(false);
+                      try {
+                        await deleteProviderCredential(id);
+                        await loadControls();
+                      } catch (err) {
+                        setError(err.message);
+                      } finally {
+                        setBusy(false);
+                      }
                     }}
                     onTest={async (id) => {
                       setBusy(true);
-                      await testProviderCredential(id).then(() => setNotice('Provider key works.')).catch((err) => setError(err.message));
-                      setBusy(false);
+                      try {
+                        await testProviderCredential(id);
+                        setNotice('Provider key works.');
+                      } catch (err) {
+                        setError(err.message);
+                      } finally {
+                        setBusy(false);
+                      }
                     }}
                     busy={busy}
                     authEnabled={authEnabled}
