@@ -2023,7 +2023,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           >
             {heroWords.map((word) => (
               <span key={word} className="mr-[0.18em] inline-block overflow-visible last:mr-0">
-                <span className={`word inline-block ${word === 'Lose' ? 'relative isolate' : ''} ${word === 'Post' ? 'italic text-primary' : ''}`}>
+                <span className={`word inline-block ${word === 'Lose' ? 'relative isolate' : ''} ${word === 'Post' ? 'rounded-[5px] bg-accent px-[0.08em] italic text-accent-foreground' : ''}`}>
                   {word === 'Lose' && (
                     <img
                       src="/hero/lose-circle.png"
@@ -2061,7 +2061,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
                   Start my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
                 </button>
               )}
-              <button type="button" onClick={(event) => scrollToSection(event, '#how-it-works')} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
+              <button type="button" onClick={(event) => scrollToSection(event, '#how-it-works')} className="inline-flex items-center justify-center gap-2 rounded-full border border-accent/45 px-6 py-4 text-sm font-semibold text-accent transition hover:bg-accent/10">
                 See how it works
               </button>
               <button type="button" onClick={onOpenHowTo} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/15 px-6 py-4 text-sm transition hover:bg-white/5">
