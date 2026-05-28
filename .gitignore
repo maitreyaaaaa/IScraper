@@ -23,6 +23,7 @@ coverage/
 
 # Logs and local runtime files
 .codex-logs/
+.codex-runtime-logs/
 logs/
 output/
 *.log
@@ -50,6 +51,8 @@ Thumbs.db
 *.sw?
 
 .vercel
+local-private-backups/
+docs/product-brief.md
 
 # Source asset folders copied into app/public already
 Logo/
