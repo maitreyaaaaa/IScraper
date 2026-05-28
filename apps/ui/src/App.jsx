@@ -6122,7 +6122,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                             </div>
                           </div>
                           {confirmRevealGroup === group.id && !revealed && (
-                            <div className="mt-3 rounded-xl border border-accent/40 bg-accent/10 p-3 text-sm leading-6 text-orange-100">
+                            <div className="mt-3 rounded-xl border border-accent/40 bg-accent/10 p-3 text-sm leading-6 text-accent">
                               Revealing an API key exposes the full secret on this screen. Only do this on your own device.
                               <div className="mt-3 flex flex-wrap gap-2">
                                 <button type="button" onClick={() => handleReveal(group)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground">Reveal key</button>
@@ -9296,7 +9296,7 @@ function SettingsTab({
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-accent/60 bg-black p-6 shadow-[0_24px_80px_rgba(0,0,0,0.65)]">
             <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-accent">Before you continue</div>
-            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight text-orange-100">{providerWarningCopy.title}</h2>
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight text-accent">{providerWarningCopy.title}</h2>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
               {providerWarningCopy.body} For the easiest full setup, use OpenRouter.
             </p>
