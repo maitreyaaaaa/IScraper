@@ -46,6 +46,8 @@ test('buildOpenRouterSearchAnswerRequest asks for grounded JSON only', () => {
   assert.equal(request.model, 'deepseek/deepseek-v4-pro');
   assert.equal(request.response_format.type, 'json_object');
   assert.match(request.messages[0].content, /Never invent/);
+  assert.match(request.messages[0].content, /30-50 word answer/);
+  assert.match(request.messages[0].content, /best matching saved item/);
   assert.match(request.messages[1].content, /security audit/);
 });
 

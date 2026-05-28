@@ -146,6 +146,7 @@ const TYPE_FILTERS = ['all', 'uploaded', 'links', 'notes'];
 const STATE_FILTERS = ['all', 'needs_review', 'searchable', 'enriched', 'failed'];
 const SORT_OPTIONS = ['newest', 'oldest'];
 const DASHBOARD_TABS = ['library', 'smart', 'care', 'graph', 'upload', 'settings'];
+const SEARCH_MODES = ['saved', 'web'];
 const LIBRARY_LAYOUT_STORAGE_KEY = 'iscraper.libraryLayout.v1';
 const LIBRARY_LAYOUT_OPTIONS = ['grid-2', 'grid-3', 'gallery', 'list'];
 const LIBRARY_LAYOUT_ITEMS = [
@@ -3736,6 +3737,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [indexingSummary, setIndexingSummary] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
   const [searchMeta, setSearchMeta] = useState({ eventId: '', ai: null, feedback: {} });
+  const [searchMode, setSearchMode] = useState('saved');
   const [libraryChat, setLibraryChat] = useState({ open: false, query: '', messages: [], loading: false, error: '' });
   const [visualSearch, setVisualSearch] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -3766,7 +3768,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -3914,6 +3916,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     activeSearchRef.current += 1;
     setSearchResults(null);
     setSearchMeta({ eventId: '', ai: null, feedback: {} });
+    setSearchMode('saved');
     setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
     setVisualSearch(null);
     setQuery('');
@@ -4287,6 +4290,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     event?.preventDefault();
     if (!requireSignIn('search your library')) return;
     const searchText = String(event?.searchQuery ?? query).trim();
+    const mode = SEARCH_MODES.includes(event?.searchMode) ? event.searchMode : searchMode;
     const searchRun = activeSearchRef.current + 1;
     activeSearchRef.current = searchRun;
     setBusy(true);
@@ -4300,65 +4304,97 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         await loadItems();
       } else {
         setVisualSearch(null);
-        const body = await searchItems(searchText, {}, { includeAi: false });
-        const mappedResults = (body.results || []).map(mapItem);
-        setSearchResults(mappedResults);
-        setSearchMeta({ eventId: body.searchEventId || '', ai: null, feedback: {} });
-        const initialUserMessage = createLibraryChatMessage('user', searchText);
-        setLibraryChat({
-          open: true,
-          query: searchText,
-          messages: [initialUserMessage],
-          loading: true,
-          error: '',
-        });
-        askLibraryChat(searchText, [{ role: 'user', content: searchText }])
-          .then((chatBody) => {
-            if (activeSearchRef.current !== searchRun) return;
-            const chatResults = (chatBody.results || []).map(mapItem);
-            const assistantMessage = createLibraryChatMessage(
-              'assistant',
-              chatBody.ai?.answer || chatBody.ai?.error || 'I found matching saves. Ask a follow-up and I will answer from your Library.',
-              { ai: chatBody.ai || null, results: chatResults.length ? chatResults : mappedResults }
-            );
-            setSearchMeta((current) => ({ ...current, ai: chatBody.ai || null }));
-            setLibraryChat((current) => ({
-              ...current,
-              query: searchText,
-              messages: [initialUserMessage, assistantMessage],
-              loading: false,
-              error: '',
-            }));
-          })
-          .catch((err) => {
-            if (activeSearchRef.current !== searchRun) return;
-            setLibraryChat((current) => ({
-              ...current,
-              loading: false,
-              error: err.message,
-              messages: current.messages.length
-                ? current.messages
-                : seedLibraryChatMessages(searchText, null, mappedResults),
-            }));
+        setSearchMode(mode);
+        if (mode === 'web') {
+          const initialUserMessage = createLibraryChatMessage('user', searchText);
+          setLibraryChat({
+            open: true,
+            query: searchText,
+            messages: [initialUserMessage],
+            loading: true,
+            error: '',
           });
-        const suggestedIds = (body.suggestedEnrichmentIds || mappedResults.filter(shouldEnrichItem).slice(0, 3).map((item) => item.id)).slice(0, 3);
-        if (suggestedIds.length) {
-          enrichIntentBatch(suggestedIds)
-            .then((batch) => {
-              if (activeSearchRef.current !== searchRun) return;
-              for (const result of batch.results || []) {
-                if (result.item) mergeUpdatedItem(result.item);
-              }
-            })
-            .catch(() => {});
+          const chatBody = await askLibraryChat(searchText, [{ role: 'user', content: searchText }]);
+          if (activeSearchRef.current !== searchRun) return;
+          const chatResults = (chatBody.results || []).map(mapItem);
+          const assistantMessage = createLibraryChatMessage(
+            'assistant',
+            chatBody.ai?.answer || chatBody.ai?.error || 'I found matching saves. Ask a follow-up and I will answer from your Library.',
+            { ai: chatBody.ai || null, results: chatResults }
+          );
+          setSearchResults(chatResults);
+          setSearchMeta({ eventId: chatBody.searchEventId || '', ai: chatBody.ai || null, feedback: {} });
+          setLibraryChat((current) => ({
+            ...current,
+            query: searchText,
+            messages: [initialUserMessage, assistantMessage],
+            loading: false,
+            error: '',
+          }));
+        } else {
+          const body = await searchItems(searchText, {}, { includeAi: true });
+          const mappedResults = (body.results || []).map(mapItem);
+          setSearchResults(mappedResults);
+          setSearchMeta({ eventId: body.searchEventId || '', ai: body.ai || null, feedback: {} });
+          setLibraryChat({ open: false, query: searchText, messages: [], loading: false, error: '' });
+          const suggestedIds = (body.suggestedEnrichmentIds || mappedResults.filter(shouldEnrichItem).slice(0, 3).map((item) => item.id)).slice(0, 3);
+          if (suggestedIds.length) {
+            enrichIntentBatch(suggestedIds)
+              .then((batch) => {
+                if (activeSearchRef.current !== searchRun) return;
+                for (const result of batch.results || []) {
+                  if (result.item) mergeUpdatedItem(result.item);
+                }
+              })
+              .catch(() => {});
+          }
         }
       }
     } catch (err) {
       setError(err.message);
+      if (mode === 'web') {
+        setLibraryChat((current) => ({
+          ...current,
+          loading: false,
+          error: err.message,
+        }));
+      }
     } finally {
       setBusy(false);
     }
-  }, [loadItems, mergeUpdatedItem, query, requireSignIn]);
+  }, [loadItems, mergeUpdatedItem, query, requireSignIn, searchMode]);
+
+  const openSearchFollowUp = useCallback(() => {
+    const cleanQuery = String(query || libraryChat.query || '').trim();
+    const baseResults = searchResults || items;
+    const messages = [];
+    if (cleanQuery) messages.push(createLibraryChatMessage('user', cleanQuery));
+    if (searchMeta.ai?.answer || searchMeta.ai?.error) {
+      messages.push(createLibraryChatMessage(
+        'assistant',
+        searchMeta.ai.answer || searchMeta.ai.error,
+        { ai: searchMeta.ai, results: baseResults }
+      ));
+    }
+    setSearchMode('web');
+    setLibraryChat({
+      open: true,
+      query: cleanQuery,
+      messages,
+      loading: false,
+      error: '',
+    });
+  }, [items, libraryChat.query, query, searchMeta.ai, searchResults]);
+
+  const handleSearchModeChange = useCallback((mode) => {
+    if (!SEARCH_MODES.includes(mode)) return;
+    setSearchMode(mode);
+    if (mode === 'web') {
+      openSearchFollowUp();
+    } else {
+      setLibraryChat((current) => ({ ...current, open: false, loading: false, error: '' }));
+    }
+  }, [openSearchFollowUp]);
 
   const handleLibraryChatSubmit = useCallback(async (question) => {
     const cleanQuestion = String(question || '').trim();
@@ -4796,11 +4832,17 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const SidebarToggleIcon = sidebarExpanded ? PanelLeftClose : PanelLeftOpen;
   const advancedActive = advancedNavItems.some(([key]) => key === tab);
   const sidebarVisibleExpanded = sidebarExpanded || sidebarHoverExpanded;
-  const advancedExpanded = sidebarVisibleExpanded && (advancedOpen || advancedActive);
+  const advancedMenuOpen = sidebarVisibleExpanded && advancedOpen;
 
   const selectTab = useCallback((nextTab, options = {}) => {
     if (!DASHBOARD_TABS.includes(nextTab)) return;
     if (nextTab === 'upload') setUploadInitialMode(options.initialAddMode || 'link');
+    if (sidebarHoverTimerRef.current) {
+      window.clearTimeout(sidebarHoverTimerRef.current);
+      sidebarHoverTimerRef.current = null;
+    }
+    setSidebarHoverExpanded(false);
+    setAdvancedOpen(false);
     setTab(nextTab);
     replaceAppTabUrl(nextTab);
     resetPageScroll();
@@ -4847,8 +4889,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     const nextQuery = String(searchText || '').trim();
     selectTab('library');
     if (!nextQuery) return;
+    setSearchMode('saved');
     setQuery(nextQuery);
-    handleSearch({ preventDefault: () => {}, searchQuery: nextQuery });
+    handleSearch({ preventDefault: () => {}, searchQuery: nextQuery, searchMode: 'saved' });
   }, [handleSearch, selectTab]);
 
   useLayoutEffect(() => {
@@ -4856,10 +4899,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     const frame = window.requestAnimationFrame(resetPageScroll);
     return () => window.cancelAnimationFrame(frame);
   }, [tab]);
-
-  useEffect(() => {
-    if (advancedActive) setAdvancedOpen(true);
-  }, [advancedActive]);
 
   useEffect(() => () => {
     if (sidebarHoverTimerRef.current) window.clearTimeout(sidebarHoverTimerRef.current);
@@ -4881,8 +4920,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (sidebarExpanded) return;
     if (sidebarHoverTimerRef.current) window.clearTimeout(sidebarHoverTimerRef.current);
     sidebarHoverTimerRef.current = window.setTimeout(() => {
+      setAdvancedOpen(false);
       setSidebarHoverExpanded(false);
-    }, 500);
+      sidebarHoverTimerRef.current = null;
+    }, 220);
   };
 
   return (
@@ -5020,9 +5061,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             <button
               type="button"
               onClick={() => setAdvancedOpen((current) => !current)}
-              title="Advanced Options"
+              title={sidebarVisibleExpanded ? undefined : 'Advanced Options'}
               aria-label="Advanced Options"
-              aria-expanded={advancedExpanded}
+              aria-expanded={advancedMenuOpen}
               className={`flex min-h-11 items-center rounded-lg text-sm transition ${
                 advancedActive ? 'text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
               } ${
@@ -5034,11 +5075,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 {sidebarVisibleExpanded && <span className="truncate">Advanced Options</span>}
               </span>
               {sidebarVisibleExpanded && (
-                <ChevronDown className={`h-4 w-4 shrink-0 transition ${advancedExpanded ? 'rotate-90' : '-rotate-90'}`} />
+                <ChevronDown className={`h-4 w-4 shrink-0 transition ${advancedMenuOpen ? 'rotate-90' : '-rotate-90'}`} />
               )}
             </button>
           </div>
-          {advancedExpanded && (
+          {advancedMenuOpen && (
             <div
               className="fixed bottom-16 z-[80] w-60 rounded-2xl border border-white/10 bg-black/95 p-2 shadow-2xl shadow-black/70 backdrop-blur"
               style={{ left: sidebarVisibleExpanded ? '15.75rem' : '5.25rem' }}
@@ -5054,7 +5095,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     selectTab(key);
                     setAdvancedOpen(false);
                   }}
-                  title={title}
+                  title={sidebarVisibleExpanded ? undefined : title}
                   aria-label={title}
                   aria-current={tab === key ? 'page' : undefined}
                   className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition ${
@@ -5138,6 +5179,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     setQuery={setQuery}
                     onClearSearch={clearSearchState}
                     onSearch={handleSearch}
+                    searchMode={searchMode}
+                    onSearchModeChange={handleSearchModeChange}
+                    onFollowUp={openSearchFollowUp}
                     onVisualSearch={handleVisualSearch}
                     visualSearch={visualSearch}
                     busy={busy}
@@ -7571,6 +7615,9 @@ function LibraryTab({
   searchActive,
   searchResultCount,
   searchAi,
+  searchMode,
+  onSearchModeChange,
+  onFollowUp,
   libraryChatOpen,
   onOpenLibraryChat,
   searchFeedback,
@@ -7625,15 +7672,36 @@ function LibraryTab({
       <section className="flex min-h-[66dvh] items-center justify-center py-6 md:min-h-[70dvh]">
         <div className="w-full max-w-[44rem]">
           <form
-          onSubmit={(event) => {
-            onSearch(event);
-          }}
-          className="w-full rounded-2xl border border-white/10 bg-white/[0.035] p-4 shadow-2xl shadow-black/40 transition focus-within:border-primary focus-within:bg-white/[0.05] md:p-5"
-        >
+            onSubmit={(event) => {
+              onSearch(event);
+            }}
+            className="w-full rounded-2xl border border-white/10 bg-white/[0.035] p-4 shadow-2xl shadow-black/40 transition focus-within:border-primary focus-within:bg-white/[0.05] md:p-5"
+          >
+          <div className="mb-4 inline-flex rounded-full border border-white/10 bg-black p-1" aria-label="Search mode">
+            {[
+              ['saved', 'Saved'],
+              ['web', 'Web search'],
+            ].map(([mode, label]) => {
+              const active = searchMode === mode;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => onSearchModeChange(mode)}
+                  className={`min-h-9 rounded-full px-4 text-sm font-semibold transition ${
+                    active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/10 hover:text-foreground'
+                  }`}
+                  aria-pressed={active}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
           <textarea
             autoFocus
             rows={1}
-            aria-label="Search saved items"
+            aria-label={searchMode === 'web' ? 'Ask web search' : 'Search saved items'}
             value={query}
             onChange={(event) => {
               const nextQuery = event.target.value;
@@ -7647,14 +7715,14 @@ function LibraryTab({
               event.preventDefault();
               onSearch(event);
             }}
-            placeholder="Search your saved posts, links, and notes..."
+            placeholder={searchMode === 'web' ? 'Ask a follow-up or research your saved library...' : 'Search your saved posts, links, and notes...'}
             className="min-h-10 w-full resize-none bg-transparent text-base leading-6 outline-none placeholder:text-muted-foreground md:min-h-12 md:text-lg"
           />
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <span className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 px-3 text-sm font-medium text-foreground">
                 <Search className="h-3.5 w-3.5 text-primary" />
-                Search
+                {searchMode === 'web' ? 'Web search' : 'Search'}
               </span>
               <input
                 ref={visualSearchInputRef}
@@ -7696,7 +7764,7 @@ function LibraryTab({
                   <X className="h-3.5 w-3.5" />
                 </button>
               )}
-              <button type="submit" className="grid h-10 w-10 place-items-center rounded-full bg-primary text-primary-foreground transition hover:scale-[1.03] disabled:opacity-60" aria-label="Search saves" disabled={busy}>
+              <button type="submit" className="grid h-10 w-10 place-items-center rounded-full bg-primary text-primary-foreground transition hover:scale-[1.03] disabled:opacity-60" aria-label={searchMode === 'web' ? 'Open web search' : 'Search saves'} disabled={busy}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-5 w-5" />}
               </button>
             </div>
@@ -7726,11 +7794,23 @@ function LibraryTab({
         </div>
       </section>
 
+      {searchActive && !visualSearch && searchMode === 'saved' && (
+        <div className="mx-auto max-w-4xl">
+          {searchAi ? (
+            <SearchAiPanel ai={searchAi} items={items} onSelect={onSelect} onFollowUp={onFollowUp} inline />
+          ) : (
+            <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5 text-sm leading-6 text-muted-foreground">
+              Showing saved matches now. The AI answer will appear here when AI search is configured and enough saved context is available.
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="mx-auto max-w-4xl">
         <IndexingProgressCard activity={indexingActivity} />
       </div>
 
-      {searchActive && (
+      {searchActive && searchMode === 'web' && (
         <div className="mx-auto mt-5 max-w-4xl">
           <button
             type="button"
@@ -7933,62 +8013,78 @@ function createLibraryChatMessage(role, content, extra = {}) {
   };
 }
 
-function seedLibraryChatMessages(query, ai, results = []) {
-  const userMessage = createLibraryChatMessage('user', query);
-  if (ai?.answer || ai?.error) {
-    return [
-      userMessage,
-      createLibraryChatMessage('assistant', ai.answer || ai.error, { ai, results }),
-    ];
-  }
-  const fallback = results.length
-    ? 'I found matching saves. Ask a follow-up and I will answer from your Library.'
-    : 'I could not find enough matching saves yet. Try asking with another topic, creator, tag, or collection.';
-  return [
-    userMessage,
-    createLibraryChatMessage('assistant', fallback, { ai: null, results }),
-  ];
-}
-
-function SearchAiPanel({ ai, items, onSelect }) {
+function SearchAiPanel({ ai, items, onSelect, onFollowUp, inline = false }) {
   if (!ai) return null;
   if (ai.error) {
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5 text-sm text-muted-foreground">
-        {ai.error}
+      <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5 text-sm leading-6 text-muted-foreground">
+        <div>{ai.error}</div>
+        {inline && onFollowUp && (
+          <button
+            type="button"
+            onClick={onFollowUp}
+            className="mt-4 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-4 py-2 font-semibold text-primary transition hover:bg-primary/15"
+          >
+            <Sparkles className="h-4 w-4" /> Follow-up
+          </button>
+        )}
       </div>
     );
   }
   const citations = (ai.citations || []).filter((citation) => items.some((item) => item.id === citation.id));
-  if (!ai.answer || !citations.length) return null;
+  if (!ai.answer) return null;
   return (
     <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
-      <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em] text-primary">
-        <Sparkles className="h-3.5 w-3.5" /> From your saved items
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em] text-primary">
+          <Sparkles className="h-3.5 w-3.5" /> From your saved items
+        </div>
+        {inline && onFollowUp && (
+          <button
+            type="button"
+            onClick={onFollowUp}
+            className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
+          >
+            <Sparkles className="h-4 w-4" /> Follow-up
+          </button>
+        )}
       </div>
       <p className="text-sm leading-6 text-foreground">{ai.answer}</p>
+      {citations.length > 0 && (
       <div className="mt-4 flex flex-wrap gap-2">
         {citations.slice(0, 4).map((citation) => {
           const item = items.find((entry) => entry.id === citation.id);
           return (
-            <button
+            <a
               key={citation.id}
-              type="button"
-              onClick={() => item && onSelect(item)}
+              href={item?.url || '#'}
+              target={item?.url ? '_blank' : undefined}
+              rel={item?.url ? 'noreferrer' : undefined}
+              onClick={(event) => {
+                if (!item?.url) {
+                  event.preventDefault();
+                  if (item) onSelect(item);
+                }
+              }}
               className="max-w-full rounded-full border border-white/10 px-3 py-1.5 text-left text-xs text-muted-foreground transition hover:border-primary hover:text-foreground"
               title={citation.reason || citation.snippet}
             >
-              <span className="line-clamp-1">{citation.title || item?.sourceTitle || item?.title || 'Saved item'}</span>
-            </button>
+              <span className="inline-flex items-center gap-1">
+                <span className="line-clamp-1">{citation.title || item?.sourceTitle || item?.title || 'Saved item'}</span>
+                {item?.url ? <ExternalLink className="h-3 w-3 shrink-0" /> : null}
+              </span>
+            </a>
           );
         })}
       </div>
+      )}
     </div>
   );
 }
 
 function LibraryChatPanel({ chat, items, onAsk, onClose, onSelect }) {
   const [draft, setDraft] = useState('');
+  const draftRef = useRef(null);
   const open = Boolean(chat?.open);
   const messages = chat?.messages || [];
   const suggestions = messages
@@ -8003,6 +8099,12 @@ function LibraryChatPanel({ chat, items, onAsk, onClose, onSelect }) {
     setDraft('');
     onAsk(text);
   };
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() => draftRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
 
   if (!open) return null;
 
@@ -8079,6 +8181,7 @@ function LibraryChatPanel({ chat, items, onAsk, onClose, onSelect }) {
           )}
           <form onSubmit={submit} className="flex items-end gap-2 rounded-2xl border border-white/10 bg-white/[0.035] p-2 focus-within:border-primary">
             <textarea
+              ref={draftRef}
               rows={1}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}

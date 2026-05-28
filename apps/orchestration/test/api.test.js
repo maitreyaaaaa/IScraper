@@ -295,6 +295,85 @@ test('no-AI search uses lean keyword path without semantic provider lookup', asy
   }
 });
 
+test('AI search returns inline grounded answer with saved citations', async () => {
+  let searchEvents = 0;
+  const store = {
+    supportsSemanticSearch: false,
+    ensureUserRecord() {},
+    async searchLean() {
+      return [{
+        id: 'save-1',
+        url: 'https://example.com/soc2',
+        sourceTitle: 'SOC 2 checklist',
+        sourceDescription: 'Security controls and audit readiness notes.',
+        platform: 'Web',
+        analysis: {
+          title: 'SOC 2 checklist',
+          summary: 'Security controls and audit readiness notes.',
+          topics: ['security'],
+        },
+      }];
+    },
+    async search() {
+      return [];
+    },
+    async recordSearchEvent({ resultIds, includeAi }) {
+      searchEvents += 1;
+      assert.deepEqual(resultIds, ['save-1']);
+      assert.equal(includeAi, true);
+    },
+  };
+  const app = createApp({
+    store,
+    config: {
+      openRouterApiKey: 'test-openrouter-key',
+      aiSearchModel: 'test-model',
+      aiSearchTimeoutMs: 1000,
+    },
+  });
+  const server = app.listen(0);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).startsWith('https://openrouter.ai/')) {
+      const request = JSON.parse(options.body);
+      assert.match(request.messages[0].content, /best matching saved item/);
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              answer: 'Use the SOC 2 checklist save for audit prep because it directly covers security controls and readiness notes.',
+              citations: [{ id: 'save-1', reason: 'It directly covers audit controls.', snippet: 'Security controls and audit readiness notes.' }],
+              resultReasons: [{ id: 'save-1', reason: 'Best match for audit prep.' }],
+              suggestions: ['Ask what to do next'],
+            }),
+          },
+        }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return originalFetch(url, options);
+  };
+
+  try {
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'SOC 2 audit', includeAi: true }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.results.length, 1);
+    assert.equal(body.ai.answer, 'Use the SOC 2 checklist save for audit prep because it directly covers security controls and readiness notes.');
+    assert.equal(body.ai.citations[0].id, 'save-1');
+    assert.equal(body.ai.citations[0].url, 'https://example.com/soc2');
+    assert.equal(searchEvents, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('CORS does not allow arbitrary origins when allowlist is empty', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
