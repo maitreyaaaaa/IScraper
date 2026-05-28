@@ -33,6 +33,7 @@ import {
   Loader2,
   Lock,
   Mail,
+  Mic,
   Pause,
   PanelLeftClose,
   PanelLeftOpen,
@@ -174,6 +175,20 @@ const HERO_PLATFORMS = [
   { name: 'Substack', src: '/platforms/substack.svg', bg: '#ff6719', scale: 0.92 },
 ];
 const HERO_OUTCOME_WORDS = ['usable', 'searchable', 'exportable', 'organized', 'summarized', 'findable'];
+const SAVE_SOURCE_LABELS = [
+  'pinterest',
+  'youtube',
+  'x',
+  'instagram',
+  'documents',
+  'web',
+  'voice notes',
+  'tiktok',
+  'articles',
+  'products',
+  'screenshots',
+  'notes',
+];
 const IMPORT_STORAGE_BUCKET = import.meta.env.VITE_SUPABASE_IMPORT_BUCKET || 'instagram-assets';
 const VERCEL_SAFE_UPLOAD_BYTES = 4 * 1024 * 1024;
 const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv', '.js', '.txt']);
@@ -2094,7 +2109,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         <div className="marquee flex gap-12 whitespace-nowrap font-display text-5xl font-bold tracking-tighter md:text-7xl">
           {Array.from({ length: 2 }).map((_, index) => (
             <div key={index} className="flex gap-12">
-              {['instagram saves', 'pinterest ideas', 'x bookmarks', 'youtube links', 'tiktok videos', 'articles', 'products', 'screenshots', 'notes'].map((label) => (
+              {SAVE_SOURCE_LABELS.map((label) => (
                 <span key={`${index}-${label}`} className="text-foreground/20 transition hover:text-primary">
                   {label} <span className="text-primary">✦</span>
                 </span>
@@ -2120,12 +2135,12 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {[
-              [Images, 'Instagram saves', 'Reels, posts, and collections you planned to revisit.'],
-              [ExternalLink, 'Pinterest ideas', 'Moodboards, recipes, outfits, interiors, products, and travel plans.'],
-              [Hash, 'X bookmarks', 'Threads, posts, and ideas that should not disappear into the feed.'],
-              [Zap, 'YouTube and TikTok links', 'Videos worth saving without turning your browser into a junk drawer.'],
-              [FileText, 'Articles and products', 'Research, shopping links, docs, and sites you want again later.'],
-              [Brain, 'Screenshots and notes', 'The random useful things that usually end up lost in your camera roll.'],
+              [ExternalLink, 'Pinterest', 'Moodboards, recipes, outfits, interiors, products, and travel plans.'],
+              [Zap, 'YouTube', 'Videos worth saving without turning your browser into a junk drawer.'],
+              [Hash, 'X', 'Threads and posts that should not disappear into the feed.'],
+              [Images, 'Instagram', 'Reels, posts, and collections you planned to revisit.'],
+              [FileText, 'Documents and web', 'Research, shopping links, articles, docs, and sites you want again later.'],
+              [Mic, 'Voice notes and notes', 'Quick thoughts, screenshots, and useful context that usually gets lost.'],
             ].map(([Icon, title, description]) => (
               <article key={title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
                 <Icon className="h-5 w-5 text-primary" />
