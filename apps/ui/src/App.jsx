@@ -7722,27 +7722,6 @@ function LibraryTab({
             }}
             className="w-full rounded-2xl border border-white/10 bg-white/[0.035] p-4 shadow-2xl shadow-black/40 transition focus-within:border-primary focus-within:bg-white/[0.05] md:p-5"
           >
-          <div className="mb-4 inline-flex rounded-full border border-white/10 bg-black p-1" aria-label="Search mode">
-            {[
-              ['saved', 'Saved'],
-              ['web', 'Web search'],
-            ].map(([mode, label]) => {
-              const active = searchMode === mode;
-              return (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => onSearchModeChange(mode)}
-                  className={`min-h-9 rounded-full px-4 text-sm font-semibold transition ${
-                    active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/10 hover:text-foreground'
-                  }`}
-                  aria-pressed={active}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
           <textarea
             autoFocus
             rows={1}
@@ -7765,14 +7744,10 @@ function LibraryTab({
           />
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <span className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 px-3 text-sm font-medium text-foreground">
-                <Search className="h-3.5 w-3.5 text-primary" />
-                {searchMode === 'web' ? 'Web search' : 'Search'}
-              </span>
               <input
                 ref={visualSearchInputRef}
                 type="file"
-                aria-label="Upload image for Same Vibe search"
+                aria-label="Upload image for visual search"
                 accept="image/png,image/jpeg,image/webp"
                 className="sr-only"
                 onChange={(event) => {
@@ -7785,11 +7760,32 @@ function LibraryTab({
                 type="button"
                 onClick={() => visualSearchInputRef.current?.click()}
                 disabled={busy}
-                className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 px-3 text-sm font-medium text-foreground transition hover:border-primary hover:bg-white/5 disabled:opacity-60"
+                className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-black text-primary transition hover:border-primary hover:bg-primary/10 disabled:opacity-60"
+                aria-label="Upload image for visual search"
               >
-                <Images className="h-3.5 w-3.5 text-primary" />
-                Same vibe
+                <Plus className="h-4 w-4" />
               </button>
+              <div className="inline-flex rounded-full border border-white/10 bg-black p-1" aria-label="Search mode">
+                {[
+                  ['saved', 'Saved'],
+                  ['web', 'Web search'],
+                ].map(([mode, label]) => {
+                  const active = searchMode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => onSearchModeChange(mode)}
+                      className={`min-h-9 rounded-full px-4 text-sm font-semibold transition ${
+                        active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/10 hover:text-foreground'
+                      }`}
+                      aria-pressed={active}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
               {searchActive && (
                 <span className="hidden text-xs text-muted-foreground sm:inline">
                   {visualSearch ? `${searchResultCount} visual matches` : `${searchResultCount} matching saves`}
@@ -7809,9 +7805,6 @@ function LibraryTab({
                   <X className="h-3.5 w-3.5" />
                 </button>
               )}
-              <button type="submit" className="grid h-10 w-10 place-items-center rounded-full bg-primary text-primary-foreground transition hover:scale-[1.03] disabled:opacity-60" aria-label={searchMode === 'web' ? 'Open web search' : 'Search saves'} disabled={busy}>
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-5 w-5" />}
-              </button>
             </div>
           </div>
           </form>
