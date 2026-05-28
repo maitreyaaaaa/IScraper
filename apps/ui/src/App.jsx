@@ -7698,6 +7698,7 @@ function LibraryTab({
   onLoadMore,
 }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
   const visualSearchInputRef = useRef(null);
   const activeFilters = (typeFilter !== 'all' ? 1 : 0) + (stateFilter !== 'all' ? 1 : 0) + (collectionFilter !== 'all' ? 1 : 0) + (platformFilter !== 'all' ? 1 : 0);
   const updateFilter = useCallback((setter) => (value) => {
@@ -7753,18 +7754,43 @@ function LibraryTab({
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   event.target.value = '';
+                  setUploadMenuOpen(false);
                   if (file) onVisualSearch(file);
                 }}
               />
-              <button
-                type="button"
-                onClick={() => visualSearchInputRef.current?.click()}
-                disabled={busy}
-                className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-black text-primary transition hover:border-primary hover:bg-primary/10 disabled:opacity-60"
-                aria-label="Upload image for visual search"
-              >
-                <Plus className="h-4 w-4" />
-              </button>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setUploadMenuOpen((open) => !open)}
+                  disabled={busy}
+                  className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-black text-primary transition hover:border-primary hover:bg-primary/10 disabled:opacity-60"
+                  aria-label="Open upload options"
+                  aria-expanded={uploadMenuOpen}
+                  aria-haspopup="menu"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+                {uploadMenuOpen && (
+                  <div
+                    className="absolute bottom-full left-0 z-20 mb-2 min-w-32 rounded-xl border border-white/10 bg-black p-2 shadow-2xl shadow-black/50"
+                    role="menu"
+                    aria-label="Upload options"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUploadMenuOpen(false);
+                        visualSearchInputRef.current?.click();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-foreground transition hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                      role="menuitem"
+                    >
+                      <Upload className="h-4 w-4 text-primary" />
+                      Upload
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="inline-flex rounded-full border border-white/10 bg-black p-1" aria-label="Search mode">
                 {[
                   ['saved', 'Saved'],
