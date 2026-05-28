@@ -77,8 +77,15 @@ function sourceSavedAtOrCreatedAt(item = {}) {
   return normalizeSourceSavedAt(item.savedAt) || normalizeSourceSavedAt(item.createdAt) || '';
 }
 
-function createdAtForImportedItem(item = {}, fallbackIso = new Date().toISOString()) {
-  return sourceSavedAtOrCreatedAt(item) || fallbackIso;
+function offsetIsoTimestamp(value, offsetMs = 0) {
+  const base = new Date(value);
+  const timestamp = base.getTime();
+  if (!Number.isFinite(timestamp)) return value;
+  return new Date(timestamp - Math.max(0, Number(offsetMs) || 0)).toISOString();
+}
+
+function createdAtForImportedItem(item = {}, fallbackIso = new Date().toISOString(), fallbackOffsetMs = 0) {
+  return sourceSavedAtOrCreatedAt(item) || offsetIsoTimestamp(fallbackIso, fallbackOffsetMs);
 }
 
 module.exports = {

@@ -267,6 +267,12 @@ function mergeItems(items) {
   return [...byUrl.values()];
 }
 
+function orderItemsForImport(items) {
+  const merged = mergeItems(items);
+  if (merged.length > 1 && merged.every((item) => !item.savedAt)) return merged.reverse();
+  return merged;
+}
+
 function parseInstagramExport(files) {
   const allItems = [];
   const allCollections = [];
@@ -291,7 +297,7 @@ function parseInstagramExport(files) {
   }
 
   return {
-    items: mergeItems(allItems),
+    items: orderItemsForImport(allItems),
     collections: allCollections,
   };
 }

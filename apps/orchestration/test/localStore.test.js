@@ -160,6 +160,48 @@ test('localStore uses source saved dates for newest and oldest import ordering',
   }
 });
 
+test('localStore gives date-less imports deterministic newest-first timestamps', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+
+  try {
+    store.upsertImportData({
+      userId: 'date-less-user',
+      importId: 'date-less-import',
+      parsed: {
+        collections: [],
+        items: [
+          {
+            id: 'newest-first',
+            url: 'https://instagram.com/p/newest-first',
+            contentType: 'post',
+            caption: 'Newest after parser reversal',
+            collections: ['Ideas'],
+            savedAt: '',
+          },
+          {
+            id: 'oldest-last',
+            url: 'https://instagram.com/p/oldest-last',
+            contentType: 'post',
+            caption: 'Oldest after parser reversal',
+            collections: ['Ideas'],
+            savedAt: '',
+          },
+        ],
+      },
+      initialStatus: 'done',
+    });
+
+    const newest = store.listItemsPage('date-less-user', { sort: 'newest' });
+    const oldest = store.listItemsPage('date-less-user', { sort: 'oldest' });
+    assert.deepEqual(newest.items.map((item) => item.id), ['newest-first', 'oldest-last']);
+    assert.deepEqual(oldest.items.map((item) => item.id), ['oldest-last', 'newest-first']);
+    assert.ok(Date.parse(newest.items[0].createdAt) > Date.parse(newest.items[1].createdAt));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('localStore stores item archives and removes them with saved items', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

@@ -1144,11 +1144,12 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       const urls = [...new Set(parsed.items.map((item) => item.url).filter(Boolean))];
       const existingKeys = await getExistingSavedItemKeys(client, { userId, ids, urls });
       const shouldSkipExisting = duplicateMode === 'skipExisting';
+      const importedAt = new Date().toISOString();
 
       const items = parsed.items
         .filter((item) => !shouldSkipExisting || (!existingKeys.has(`id:${item.id}`) && !existingKeys.has(`url:${item.url}`)))
-        .map((item) => {
-          const timestamp = new Date().toISOString();
+        .map((item, index) => {
+          const timestamp = importedAt;
           return {
             id: cleanDbText(item.id),
             user_id: userId,
@@ -1169,7 +1170,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
             source_description: cleanDbText(item.sourceDescription || ''),
             thumbnail_url: cleanDbText(item.thumbnailUrl || ''),
             status: initialStatus,
-            created_at: createdAtForImportedItem(item, timestamp),
+            created_at: createdAtForImportedItem(item, timestamp, index),
             updated_at: timestamp,
           };
         });

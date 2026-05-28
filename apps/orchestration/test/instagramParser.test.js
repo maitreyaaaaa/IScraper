@@ -88,9 +88,34 @@ test('parseInstagramExport canonicalizes Instagram URLs before deduping', () => 
   const result = parseInstagramExport([{ originalname: 'saved_posts.html', buffer: Buffer.from(html) }]);
 
   assert.equal(result.items.length, 2);
-  assert.equal(result.items[0].url, 'https://instagram.com/reel/AAA111');
-  assert.equal(result.items[0].id, 'AAA111');
-  assert.equal(result.items[1].url, 'https://instagram.com/p/BBB222');
+  assert.deepEqual(new Set(result.items.map((item) => item.url)), new Set([
+    'https://instagram.com/reel/AAA111',
+    'https://instagram.com/p/BBB222',
+  ]));
+  assert.deepEqual(new Set(result.items.map((item) => item.id)), new Set(['AAA111', 'BBB222']));
+});
+
+test('parseInstagramExport reverses date-less Instagram export order for newest-first imports', () => {
+  const html = `
+    <main>
+      <div class="_a6-g"><table>
+        <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/p/OLD111/">old</a></div></td></tr>
+        <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Oldest exported save</td></tr>
+      </table></div>
+      <div class="_a6-g"><table>
+        <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/p/MID222/">mid</a></div></td></tr>
+        <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Middle exported save</td></tr>
+      </table></div>
+      <div class="_a6-g"><table>
+        <tr><td colspan="2" class="_a6_q">URL<div><a href="https://www.instagram.com/p/NEW333/">new</a></div></td></tr>
+        <tr><td class="_a6_q">Caption</td><td class="_2piu _a6_r">Newest exported save</td></tr>
+      </table></div>
+    </main>`;
+
+  const result = parseInstagramExport([{ originalname: 'saved_posts.html', buffer: Buffer.from(html) }]);
+
+  assert.deepEqual(result.items.map((item) => item.id), ['NEW333', 'MID222', 'OLD111']);
+  assert.deepEqual(result.items.map((item) => item.savedAt), ['', '', '']);
 });
 
 test('parseInstagramExport accepts Instagram saved-post JSON files', () => {

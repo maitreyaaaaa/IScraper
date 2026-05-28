@@ -1338,7 +1338,8 @@ function createLocalStore({ dataPath }) {
       }
 
       const items = [];
-      for (const item of parsed.items) {
+      const importedAt = now();
+      for (const [index, item] of parsed.items.entries()) {
         const existing = state.items.find((entry) => entry.userId === userId && (entry.id === item.id || entry.url === item.url));
         if (existing) {
           if (duplicateMode === 'skipExisting') continue;
@@ -1352,14 +1353,14 @@ function createLocalStore({ dataPath }) {
           continue;
         }
 
-        const timestamp = now();
+        const timestamp = importedAt;
         const created = {
           ...item,
           userId,
           importId,
           status: initialStatus,
           analysis: null,
-          createdAt: createdAtForImportedItem(item, timestamp),
+          createdAt: createdAtForImportedItem(item, timestamp, index),
           updatedAt: timestamp,
         };
         state.items.push(created);
