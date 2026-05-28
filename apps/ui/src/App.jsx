@@ -4410,12 +4410,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const handleSearchModeChange = useCallback((mode) => {
     if (!SEARCH_MODES.includes(mode)) return;
     setSearchMode(mode);
-    if (mode === 'web') {
-      openSearchFollowUp();
-    } else {
-      setLibraryChat((current) => ({ ...current, open: false, loading: false, error: '' }));
-    }
-  }, [openSearchFollowUp]);
+    setLibraryChat((current) => ({ ...current, open: false, loading: false, error: '' }));
+  }, []);
 
   const handleLibraryChatSubmit = useCallback(async (question) => {
     const cleanQuestion = String(question || '').trim();
