@@ -326,7 +326,7 @@ test('AI search returns inline grounded answer with saved citations', async () =
   const app = createApp({
     store,
     config: {
-      openRouterApiKey: 'test-openrouter-key',
+      openAiApiKey: 'test-openai-key',
       aiSearchModel: 'test-model',
       aiSearchTimeoutMs: 1000,
     },
@@ -334,7 +334,7 @@ test('AI search returns inline grounded answer with saved citations', async () =
   const server = app.listen(0);
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
-    if (String(url).startsWith('https://openrouter.ai/')) {
+    if (String(url).startsWith('https://api.openai.com/')) {
       const request = JSON.parse(options.body);
       assert.match(request.messages[0].content, /best matching saved item/);
       return new Response(JSON.stringify({

@@ -39,7 +39,7 @@ test('worker preflight fails closed without leaking secret values', () => {
     storageMode: 'local',
     supabaseServiceRoleKey: 'super-secret-service-role',
     credentialEncryptionKey: 'super-secret-encryption-key',
-    openRouterApiKey: 'super-secret-openrouter-key',
+    openAiApiKey: 'super-secret-openai-key',
   });
   const serialized = JSON.stringify(result);
 
@@ -48,7 +48,7 @@ test('worker preflight fails closed without leaking secret values', () => {
   assert.match(serialized, /SUPABASE_URL/);
   assert.equal(serialized.includes('super-secret-service-role'), false);
   assert.equal(serialized.includes('super-secret-encryption-key'), false);
-  assert.equal(serialized.includes('super-secret-openrouter-key'), false);
+  assert.equal(serialized.includes('super-secret-openai-key'), false);
 });
 
 test('worker preflight accepts Supabase mode with a text indexing provider path', () => {
@@ -57,14 +57,14 @@ test('worker preflight accepts Supabase mode with a text indexing provider path'
     supabaseUrl: 'https://project.supabase.co',
     supabaseServiceRoleKey: 'super-secret-service-role',
     credentialEncryptionKey: 'super-secret-encryption-key',
-    openRouterApiKey: 'super-secret-openrouter-key',
+    openAiApiKey: 'super-secret-openai-key',
   });
   const serialized = JSON.stringify(result);
 
   assert.equal(result.ok, true);
   assert.equal(serialized.includes('super-secret-service-role'), false);
   assert.equal(serialized.includes('super-secret-encryption-key'), false);
-  assert.equal(serialized.includes('super-secret-openrouter-key'), false);
+  assert.equal(serialized.includes('super-secret-openai-key'), false);
 });
 
 test('local worker smoke pass claims one job and returns aggregate-only status', async () => {
@@ -146,7 +146,7 @@ test('shutdown controller interrupts idle sleep and logs only aggregate signal d
   assert.equal(events[0].properties.signal, 'SIGTERM');
   assert.equal(elapsedMs < 1000, true);
   assert.equal(serialized.includes('SUPABASE_SERVICE_ROLE_KEY'), false);
-  assert.equal(serialized.includes('OPENROUTER_API_KEY'), false);
+  assert.equal(serialized.includes('OPENAI_API_KEY'), false);
 });
 
 test('Render worker blueprint uses the loop command and keeps secrets unsynced', () => {
@@ -158,5 +158,6 @@ test('Render worker blueprint uses the loop command and keeps secrets unsynced',
   assert.match(blueprint, /startCommand:\s*npm run worker:loop/);
   assert.match(blueprint, /key:\s*SUPABASE_SERVICE_ROLE_KEY\s*\r?\n\s*sync:\s*false/);
   assert.match(blueprint, /key:\s*CREDENTIAL_ENCRYPTION_KEY\s*\r?\n\s*sync:\s*false/);
+  assert.match(blueprint, /key:\s*OPENAI_API_KEY\s*\r?\n\s*sync:\s*false/);
   assert.equal(blueprint.includes('super-secret'), false);
 });

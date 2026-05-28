@@ -1,23 +1,26 @@
 const path = require('path');
 const fs = require('fs');
-const { analyzeMediaWithGemini, analyzeTextMetadata, analyzeTextWithOpenRouter, mergeAnalysis } = require('./analyzer');
-const { buildEmbeddingContent, createOpenRouterEmbedding } = require('./embeddings');
+const { analyzeTextMetadata, mergeAnalysis } = require('./analyzer');
+const { buildEmbeddingContent, createEmbeddingWithCredential } = require('./embeddings');
 const { analyzeMediaWithCredential, analyzeTextWithCredential, buildTextBaseAnalysis, isProviderLimitError } = require('./providerClients');
 const { DEFAULT_MAX_JOB_ATTEMPTS, nextRetryAt, pickNextProcessableJob } = require('./queue');
 const { downloadInstagramMedia } = require('./downloader');
-const { DEFAULT_APP_MEDIA_MODEL } = require('./providers');
 const { recordSupportEvent } = require('./auditLog');
 
 const AI_STEP_TIMEOUT_MS = 90 * 1000;
 
-async function analyzeItem({ item, mediaPaths = [], geminiApiKey = null, openRouterApiKey = null, openRouterModel = 'deepseek/deepseek-v4-pro' }) {
+async function analyzeItem({ item, mediaPaths = [], openAiApiKey = null, openAiModel = 'gpt-4o', openAiMediaModel = 'gpt-4o' }) {
   let baseAnalysis = null;
-  if (mediaPaths.length && geminiApiKey) {
+  if (mediaPaths.length && openAiApiKey) {
     try {
-      const geminiAnalysis = await analyzeMediaWithGemini({ apiKey: geminiApiKey, mediaPaths, item });
-      if (geminiAnalysis) baseAnalysis = { ...analyzeTextMetadata({ caption: item.caption }), ...geminiAnalysis };
+      const mediaAnalysis = await analyzeMediaWithCredential({
+        credential: appOpenAICredential({ purpose: 'media', apiKey: openAiApiKey, model: openAiMediaModel }),
+        mediaPaths,
+        item,
+      });
+      if (mediaAnalysis) baseAnalysis = { ...analyzeTextMetadata({ caption: item.caption }), ...mediaAnalysis };
     } catch (error) {
-      console.warn(`Gemini media analysis failed for ${item.id}: ${error.message}`);
+      console.warn(`OpenAI media analysis failed for ${item.id}: ${error.message}`);
     }
   }
 
@@ -30,18 +33,17 @@ async function analyzeItem({ item, mediaPaths = [], geminiApiKey = null, openRou
     });
   }
 
-  if (!openRouterApiKey) return baseAnalysis;
+  if (!openAiApiKey) return baseAnalysis;
 
   try {
-    const llmAnalysis = await analyzeTextWithOpenRouter({
-      apiKey: openRouterApiKey,
-      model: openRouterModel,
+    const llmAnalysis = await analyzeTextWithCredential({
+      credential: appOpenAICredential({ purpose: 'text', apiKey: openAiApiKey, model: openAiModel }),
       item,
       baseAnalysis,
     });
     return mergeAnalysis(baseAnalysis, llmAnalysis);
   } catch (error) {
-    console.warn(`OpenRouter analysis failed for ${item.id}: ${error.message}`);
+    console.warn(`OpenAI analysis failed for ${item.id}: ${error.message}`);
     return baseAnalysis;
   }
 }
@@ -52,11 +54,10 @@ async function processImportJobs({
   importId,
   videoDir,
   shouldDownload = true,
-  geminiApiKey = null,
-  openRouterApiKey = null,
-  openRouterModel = 'deepseek/deepseek-v4-pro',
-  openRouterMediaModel = DEFAULT_APP_MEDIA_MODEL,
-  openRouterEmbeddingModel = 'openai/text-embedding-3-small',
+  openAiApiKey = null,
+  openAiModel = 'gpt-4o',
+  openAiMediaModel = 'gpt-4o',
+  openAiEmbeddingModel = 'text-embedding-3-small',
   embeddingDimensions = 1536,
   credentialEncryptionKey = null,
   indexingConcurrency = 3,
@@ -96,10 +97,10 @@ async function processImportJobs({
       alreadyClaimed: typeof store.claimNextJobs === 'function',
       videoDir,
       shouldDownload,
-      openRouterApiKey,
-      openRouterModel,
-      openRouterMediaModel,
-      openRouterEmbeddingModel,
+      openAiApiKey,
+      openAiModel,
+      openAiMediaModel,
+      openAiEmbeddingModel,
       embeddingDimensions,
       credentialEncryptionKey,
       maxAttempts,
@@ -120,10 +121,10 @@ async function processOneJob({
   alreadyClaimed = false,
   videoDir,
   shouldDownload,
-  openRouterApiKey,
-  openRouterModel,
-  openRouterMediaModel,
-  openRouterEmbeddingModel,
+  openAiApiKey,
+  openAiModel,
+  openAiMediaModel,
+  openAiEmbeddingModel,
   embeddingDimensions,
   credentialEncryptionKey,
   maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS,
@@ -174,10 +175,10 @@ async function processOneJob({
       userId,
       item,
       credentialEncryptionKey,
-      openRouterApiKey,
-      openRouterModel,
-      openRouterMediaModel,
-      openRouterEmbeddingModel,
+      openAiApiKey,
+      openAiModel,
+      openAiMediaModel,
+      openAiEmbeddingModel,
     });
 
     let mediaPaths = [];
@@ -225,9 +226,11 @@ async function processOneJob({
       try {
         const content = buildEmbeddingContent(item, analysis);
         const embedding = await withTimeout(
-          createOpenRouterEmbedding({
-            apiKey: analysisPlan.embeddingCredential.apiKey,
-            model: analysisPlan.embeddingCredential.model || openRouterEmbeddingModel,
+          createEmbeddingWithCredential({
+            credential: {
+              ...analysisPlan.embeddingCredential,
+              model: analysisPlan.embeddingCredential.model || openAiEmbeddingModel,
+            },
             input: content,
             dimensions: embeddingDimensions,
             inputType: 'search_document',
@@ -239,11 +242,11 @@ async function processOneJob({
           embeddingPayload = {
             content,
             embedding,
-            model: analysisPlan.embeddingCredential.model || openRouterEmbeddingModel,
+            model: analysisPlan.embeddingCredential.model || openAiEmbeddingModel,
           };
         }
       } catch (error) {
-        console.warn(`OpenRouter embedding failed for ${item.id}: ${error.message}`);
+        console.warn(`Search embedding failed for ${item.id}: ${error.message}`);
       }
     }
     if (!(await isLeaseStillOwned({ store, userId, job: currentJob }))) return null;
@@ -357,10 +360,10 @@ async function chooseAnalysisPlan({
   userId,
   item,
   credentialEncryptionKey,
-  openRouterApiKey = null,
-  openRouterModel = 'deepseek/deepseek-v4-pro',
-  openRouterMediaModel = DEFAULT_APP_MEDIA_MODEL,
-  openRouterEmbeddingModel = 'openai/text-embedding-3-small',
+  openAiApiKey = null,
+  openAiModel = 'gpt-4o',
+  openAiMediaModel = 'gpt-4o',
+  openAiEmbeddingModel = 'text-embedding-3-small',
 }) {
   const needsMedia = requiresMediaAnalysis(item);
 
@@ -387,14 +390,14 @@ async function chooseAnalysisPlan({
     };
   }
 
-  const appTextCredential = openRouterApiKey
-    ? appOpenRouterCredential({ purpose: 'text', apiKey: openRouterApiKey, model: openRouterModel })
+  const appTextCredential = openAiApiKey
+    ? appOpenAICredential({ purpose: 'text', apiKey: openAiApiKey, model: openAiModel })
     : null;
-  const appMediaCredential = openRouterApiKey
-    ? appOpenRouterCredential({ purpose: 'media', apiKey: openRouterApiKey, model: openRouterMediaModel })
+  const appMediaCredential = openAiApiKey
+    ? appOpenAICredential({ purpose: 'media', apiKey: openAiApiKey, model: openAiMediaModel })
     : null;
-  const appEmbeddingCredential = openRouterApiKey
-    ? appOpenRouterCredential({ purpose: 'embedding', apiKey: openRouterApiKey, model: openRouterEmbeddingModel })
+  const appEmbeddingCredential = openAiApiKey
+    ? appOpenAICredential({ purpose: 'embedding', apiKey: openAiApiKey, model: openAiEmbeddingModel })
     : null;
 
   if (appTextCredential && typeof store.getCredits === 'function') {
@@ -414,10 +417,10 @@ async function chooseAnalysisPlan({
   throw pauseError('paused_missing_provider', 'Saved post did not process because no text AI provider key is connected.');
 }
 
-function appOpenRouterCredential({ purpose, apiKey, model }) {
+function appOpenAICredential({ purpose, apiKey, model }) {
   return {
-    id: `app-openrouter-${purpose}`,
-    provider: 'openrouter',
+    id: `app-openai-${purpose}`,
+    provider: 'openai',
     purpose,
     model,
     apiKey,

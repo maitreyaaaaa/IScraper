@@ -31,9 +31,38 @@ function buildEmbeddingContent(item, analysis = {}) {
 function parseOpenRouterEmbeddingResponse(response) {
   const embedding = response?.data?.[0]?.embedding;
   if (!Array.isArray(embedding) || !embedding.length) {
-    throw new Error('OpenRouter returned no embedding.');
+    throw new Error('Embedding provider returned no embedding.');
   }
   return embedding;
+}
+
+async function createOpenAIEmbedding({
+  apiKey,
+  model = 'text-embedding-3-small',
+  input,
+  dimensions = 1536,
+  fetchImpl = fetch,
+}) {
+  if (!apiKey || !compactText(input)) return null;
+
+  const response = await fetchImpl('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      input,
+      dimensions,
+    }),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body?.error?.message || `OpenAI embedding request failed with ${response.status}`);
+  }
+  return parseOpenRouterEmbeddingResponse(body);
 }
 
 async function createOpenRouterEmbedding({
@@ -69,8 +98,37 @@ async function createOpenRouterEmbedding({
   return parseOpenRouterEmbeddingResponse(body);
 }
 
+async function createEmbeddingWithCredential({
+  credential,
+  input,
+  dimensions = 1536,
+  inputType = 'search_document',
+  fetchImpl = fetch,
+}) {
+  if (!credential?.apiKey) return null;
+  if (credential.provider === 'openai') {
+    return createOpenAIEmbedding({
+      apiKey: credential.apiKey,
+      model: credential.model || 'text-embedding-3-small',
+      input,
+      dimensions,
+      fetchImpl,
+    });
+  }
+  return createOpenRouterEmbedding({
+    apiKey: credential.apiKey,
+    model: credential.model || 'openai/text-embedding-3-small',
+    input,
+    dimensions,
+    inputType,
+    fetchImpl,
+  });
+}
+
 module.exports = {
   buildEmbeddingContent,
+  createEmbeddingWithCredential,
+  createOpenAIEmbedding,
   createOpenRouterEmbedding,
   parseOpenRouterEmbeddingResponse,
 };

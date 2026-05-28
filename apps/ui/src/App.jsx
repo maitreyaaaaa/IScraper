@@ -376,7 +376,7 @@ const KEY_SETUP_OPTIONS = {
       {
         purpose: 'text',
         provider: 'openai',
-        model: options?.textProviders?.openai?.defaultModel || 'gpt-4o-mini',
+        model: options?.textProviders?.openai?.defaultModel || 'gpt-4o',
       },
     ],
   },

@@ -110,7 +110,7 @@ function createSearchWorkflow({ store, config, http }) {
           const embeddingStartedAt = process.hrtime.bigint();
           queryEmbedding = await createOpenRouterEmbedding({
             apiKey: embeddingCredential.apiKey,
-            model: embeddingCredential.model || config.openRouterEmbeddingModel,
+            model: embeddingCredential.model || 'openai/text-embedding-3-small',
             input: query,
             dimensions: config.embeddingDimensions,
             inputType: 'search_query',
@@ -137,9 +137,9 @@ function createSearchWorkflow({ store, config, http }) {
   }
 
   async function runAiSearchAnswer({ req, userId, query, results }) {
-    if (config.aiSearchEnabled === false || !config.openRouterApiKey || !query || !results.length) return null;
+    if (config.aiSearchEnabled === false || !config.openAiApiKey || !query || !results.length) return null;
     const topResults = results.slice(0, aiContextLimit());
-    const model = config.aiSearchModel || 'google/gemini-2.5-flash';
+    const model = config.aiSearchModel || config.openAiModel || 'gpt-4o';
     const cacheKey = aiSearchCacheKey({ userId, query, results: topResults, model });
     const cached = aiSearchCache.get(cacheKey);
     const now = Date.now();
@@ -148,7 +148,7 @@ function createSearchWorkflow({ store, config, http }) {
     assertAiSearchUsageAllowed(req, config, clientIp);
     const ai = await withTimeout(
       createOpenRouterSearchAnswer({
-        apiKey: config.openRouterApiKey,
+        apiKey: config.openAiApiKey,
         model,
         query,
         results: topResults,
@@ -221,7 +221,7 @@ function createSearchWorkflow({ store, config, http }) {
       };
     }
 
-    if (config.aiSearchEnabled === false || !config.openRouterApiKey) {
+    if (config.aiSearchEnabled === false || !config.openAiApiKey) {
       return {
         searchEventId,
         ai: {
@@ -234,12 +234,12 @@ function createSearchWorkflow({ store, config, http }) {
     }
 
     assertAiSearchUsageAllowed(req, config, clientIp);
-    const model = config.aiSearchModel || 'google/gemini-2.5-flash';
+    const model = config.aiSearchModel || config.openAiModel || 'gpt-4o';
     let ai;
     try {
       ai = await withTimeout(
         createOpenRouterLibraryChatAnswer({
-          apiKey: config.openRouterApiKey,
+          apiKey: config.openAiApiKey,
           model,
           question: cleanQuestion,
           messages: normalizeChatMessages(messages),

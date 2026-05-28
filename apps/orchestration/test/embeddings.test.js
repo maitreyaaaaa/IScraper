@@ -3,6 +3,7 @@ const test = require('node:test');
 
 const {
   buildEmbeddingContent,
+  createOpenAIEmbedding,
   createOpenRouterEmbedding,
   parseOpenRouterEmbeddingResponse,
 } = require('../src/services/embeddings');
@@ -54,5 +55,29 @@ test('createOpenRouterEmbedding sends OpenRouter embedding request without expos
   assert.equal(body.model, 'openai/text-embedding-3-small');
   assert.equal(body.input_type, 'search_query');
   assert.deepEqual(embedding, [0.4, 0.5]);
+  assert.doesNotMatch(request.init.body, /test-key/);
+});
+
+test('createOpenAIEmbedding sends native OpenAI embedding request', async () => {
+  let request = null;
+  const embedding = await createOpenAIEmbedding({
+    apiKey: 'test-key',
+    model: 'text-embedding-3-small',
+    input: 'agent memory tools',
+    dimensions: 1536,
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return {
+        ok: true,
+        json: async () => ({ data: [{ embedding: [0.6, 0.7] }] }),
+      };
+    },
+  });
+
+  const body = JSON.parse(request.init.body);
+  assert.equal(request.url, 'https://api.openai.com/v1/embeddings');
+  assert.equal(body.model, 'text-embedding-3-small');
+  assert.equal(body.input_type, undefined);
+  assert.deepEqual(embedding, [0.6, 0.7]);
   assert.doesNotMatch(request.init.body, /test-key/);
 });

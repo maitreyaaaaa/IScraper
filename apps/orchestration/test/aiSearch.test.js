@@ -91,10 +91,8 @@ test('createOpenRouterSearchAnswer returns normalized grounded answer', async ()
       },
     ],
     fetchImpl: async (url, options) => {
-      assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
+      assert.equal(url, 'https://api.openai.com/v1/chat/completions');
       assert.match(options.headers.Authorization, /Bearer test-key/);
-      assert.equal(options.headers['X-Title'], 'IScraper');
-      assert.match(options.headers['HTTP-Referer'], /^http/);
       return {
         ok: true,
         json: async () => ({
@@ -147,10 +145,8 @@ test('createOpenRouterLibraryChatAnswer returns citations from retrieved saves o
       },
     ],
     fetchImpl: async (url, options) => {
-      assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
+      assert.equal(url, 'https://api.openai.com/v1/chat/completions');
       assert.match(options.headers.Authorization, /Bearer test-key/);
-      assert.equal(options.headers['X-Title'], 'IScraper');
-      assert.match(options.headers['HTTP-Referer'], /^http/);
       const request = JSON.parse(options.body);
       assert.match(request.messages[0].content, /IScraper library assistant/);
       return {

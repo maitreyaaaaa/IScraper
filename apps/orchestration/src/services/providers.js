@@ -12,7 +12,7 @@ const TEXT_PROVIDERS = {
   },
   openai: {
     label: 'OpenAI',
-    defaultModel: 'gpt-4o-mini',
+    defaultModel: 'gpt-4o',
   },
   anthropic: {
     label: 'Anthropic Claude',

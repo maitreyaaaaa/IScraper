@@ -19,10 +19,10 @@ function checkWorkerPreflight(config = {}) {
     errors.push('CREDENTIAL_ENCRYPTION_KEY is required for worker provider credentials.');
   }
 
-  if (!config.openRouterApiKey && !config.credentialEncryptionKey) {
-    errors.push('Text indexing needs OPENROUTER_API_KEY or encrypted user provider credentials.');
-  } else if (!config.openRouterApiKey) {
-    warnings.push('OPENROUTER_API_KEY is not configured; text indexing depends on user provider credentials.');
+  if (!config.openAiApiKey && !config.credentialEncryptionKey) {
+    errors.push('Text indexing needs OPENAI_API_KEY or encrypted user provider credentials.');
+  } else if (!config.openAiApiKey) {
+    warnings.push('OPENAI_API_KEY is not configured; text indexing depends on user provider credentials.');
   }
 
   return {

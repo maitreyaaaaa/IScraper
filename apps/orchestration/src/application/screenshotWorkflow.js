@@ -5,13 +5,13 @@ const SCREENSHOT_ANALYSIS_TIMEOUT_MS = 60 * 1000;
 
 function createScreenshotWorkflow({ store, config }) {
   async function chooseScreenshotAnalysisPlan({ userId }) {
-    if (config.openRouterApiKey) {
+    if (config.openAiApiKey) {
       const appCredential = {
-        id: 'app-openrouter-screenshot-media',
-        provider: 'openrouter',
+        id: 'app-openai-screenshot-media',
+        provider: 'openai',
         purpose: 'media',
-        model: config.openRouterMediaModel,
-        apiKey: config.openRouterApiKey,
+        model: config.openAiMediaModel || config.openAiModel || 'gpt-4o',
+        apiKey: config.openAiApiKey,
       };
 
       if (typeof store.getCredits !== 'function') return { credential: appCredential, source: null };

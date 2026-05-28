@@ -137,7 +137,7 @@ test('processing one saved item uses the user key without consuming app credits'
   }
 });
 
-test('processing one saved item uses app OpenRouter key and consumes paid credit', async () => {
+test('processing one saved item uses app OpenAI key and consumes paid credit', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const userId = 'u1';
@@ -206,7 +206,9 @@ test('processing one saved item uses app OpenRouter key and consumes paid credit
       importId: entry.id,
       videoDir: path.join(dir, 'videos'),
       shouldDownload: false,
-      openRouterApiKey: 'app-openrouter-key',
+      openAiApiKey: 'app-openai-key',
+      openAiModel: 'gpt-4o',
+      openAiEmbeddingModel: 'text-embedding-3-small',
       credentialEncryptionKey: 'dev-encryption-key',
     });
 
@@ -296,7 +298,9 @@ test('processing jobs can run with bounded parallel indexing', async () => {
       importId: entry.id,
       videoDir: path.join(dir, 'videos'),
       shouldDownload: false,
-      openRouterApiKey: 'app-openrouter-key',
+      openAiApiKey: 'app-openai-key',
+      openAiModel: 'gpt-4o',
+      openAiEmbeddingModel: 'text-embedding-3-small',
       credentialEncryptionKey: 'dev-encryption-key',
       indexingConcurrency: 3,
     });

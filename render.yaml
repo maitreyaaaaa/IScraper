@@ -37,7 +37,7 @@ services:
         sync: false
       - key: CREDENTIAL_ENCRYPTION_KEY
         sync: false
-      - key: OPENROUTER_API_KEY
+      - key: OPENAI_API_KEY
         sync: false
       - key: POSTHOG_PROJECT_KEY
         sync: false

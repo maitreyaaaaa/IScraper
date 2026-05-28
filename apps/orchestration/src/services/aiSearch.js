@@ -29,23 +29,17 @@ function publicResultSnippet(item, index) {
   };
 }
 
-const OPENROUTER_CHAT_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.5-flash';
+const OPENAI_CHAT_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
+const DEFAULT_OPENAI_MODEL = 'gpt-4o';
 
-function appReferer() {
-  return process.env.APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173';
-}
-
-function openRouterHeaders(apiKey) {
+function openAiHeaders(apiKey) {
   return {
     Authorization: `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
-    'HTTP-Referer': appReferer(),
-    'X-Title': 'IScraper',
   };
 }
 
-function buildOpenRouterSearchAnswerRequest({ model = DEFAULT_OPENROUTER_MODEL, query, results }) {
+function buildOpenRouterSearchAnswerRequest({ model = DEFAULT_OPENAI_MODEL, query, results }) {
   const snippets = results.map(publicResultSnippet);
   return {
     model,
@@ -87,7 +81,7 @@ function compactConversation(messages = []) {
 }
 
 function buildOpenRouterLibraryChatRequest({
-  model = DEFAULT_OPENROUTER_MODEL,
+  model = DEFAULT_OPENAI_MODEL,
   question,
   results,
   messages = [],
@@ -138,10 +132,10 @@ function buildPlainTextRetryRequest(request) {
   };
 }
 
-async function fetchOpenRouterChat({ apiKey, request, fetchImpl }) {
-  const response = await fetchImpl(OPENROUTER_CHAT_ENDPOINT, {
+async function fetchOpenAiChat({ apiKey, request, fetchImpl }) {
+  const response = await fetchImpl(OPENAI_CHAT_ENDPOINT, {
     method: 'POST',
-    headers: openRouterHeaders(apiKey),
+    headers: openAiHeaders(apiKey),
     body: JSON.stringify(request),
   });
 
@@ -232,7 +226,7 @@ function normalizeAiSearchAnswer(parsed = {}, results = []) {
 
 async function createOpenRouterSearchAnswer({
   apiKey,
-  model = DEFAULT_OPENROUTER_MODEL,
+  model = DEFAULT_OPENAI_MODEL,
   query,
   results,
   fetchImpl = fetch,
@@ -240,36 +234,36 @@ async function createOpenRouterSearchAnswer({
   if (!apiKey || !compactText(query) || !results?.length) return null;
 
   const request = buildOpenRouterSearchAnswerRequest({ model, query, results });
-  let { response, body } = await fetchOpenRouterChat({ apiKey, request, fetchImpl });
+  let { response, body } = await fetchOpenAiChat({ apiKey, request, fetchImpl });
   if (!response.ok) {
-    throw new Error(body?.error?.message || `OpenRouter search answer failed with ${response.status}`);
+    throw new Error(body?.error?.message || `OpenAI search answer failed with ${response.status}`);
   }
 
   let content = body?.choices?.[0]?.message?.content;
   if (!content) {
-    ({ response, body } = await fetchOpenRouterChat({
+    ({ response, body } = await fetchOpenAiChat({
       apiKey,
       request: buildPlainTextRetryRequest(request),
       fetchImpl,
     }));
     if (!response.ok) {
-      throw new Error(body?.error?.message || `OpenRouter search retry failed with ${response.status}`);
+      throw new Error(body?.error?.message || `OpenAI search retry failed with ${response.status}`);
     }
     content = body?.choices?.[0]?.message?.content;
   }
-  if (!content) throw new Error('OpenRouter returned no search answer.');
+  if (!content) throw new Error('OpenAI returned no search answer.');
   try {
     return normalizeAiSearchAnswer(parseJsonContent(content), results);
   } catch {
     const fallback = plainTextAiSearchAnswer(content, results);
     if (fallback) return fallback;
-    throw new Error('OpenRouter returned an answer that could not be parsed.');
+    throw new Error('OpenAI returned an answer that could not be parsed.');
   }
 }
 
 async function createOpenRouterLibraryChatAnswer({
   apiKey,
-  model = DEFAULT_OPENROUTER_MODEL,
+  model = DEFAULT_OPENAI_MODEL,
   question,
   results,
   messages = [],
@@ -278,30 +272,30 @@ async function createOpenRouterLibraryChatAnswer({
   if (!apiKey || !compactText(question) || !results?.length) return null;
 
   const request = buildOpenRouterLibraryChatRequest({ model, question, results, messages });
-  let { response, body } = await fetchOpenRouterChat({ apiKey, request, fetchImpl });
+  let { response, body } = await fetchOpenAiChat({ apiKey, request, fetchImpl });
   if (!response.ok) {
-    throw new Error(body?.error?.message || `OpenRouter library chat failed with ${response.status}`);
+    throw new Error(body?.error?.message || `OpenAI library chat failed with ${response.status}`);
   }
 
   let content = body?.choices?.[0]?.message?.content;
   if (!content) {
-    ({ response, body } = await fetchOpenRouterChat({
+    ({ response, body } = await fetchOpenAiChat({
       apiKey,
       request: buildPlainTextRetryRequest(request),
       fetchImpl,
     }));
     if (!response.ok) {
-      throw new Error(body?.error?.message || `OpenRouter library chat retry failed with ${response.status}`);
+      throw new Error(body?.error?.message || `OpenAI library chat retry failed with ${response.status}`);
     }
     content = body?.choices?.[0]?.message?.content;
   }
-  if (!content) throw new Error('OpenRouter returned no library chat answer.');
+  if (!content) throw new Error('OpenAI returned no library chat answer.');
   try {
     return normalizeAiSearchAnswer(parseJsonContent(content), results);
   } catch {
     const fallback = plainTextAiSearchAnswer(content, results);
     if (fallback) return fallback;
-    throw new Error('OpenRouter returned a library chat answer that could not be parsed.');
+    throw new Error('OpenAI returned a library chat answer that could not be parsed.');
   }
 }
 

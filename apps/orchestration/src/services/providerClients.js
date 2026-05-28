@@ -227,6 +227,15 @@ async function analyzeMediaWithCredential({ credential, mediaPaths, item, fetchI
   if (credential.provider === 'gemini') {
     return analyzeMediaWithGemini({ apiKey: credential.apiKey, mediaPaths, item });
   }
+  if (credential.provider === 'openai') {
+    return analyzeMediaWithOpenAI({
+      apiKey: credential.apiKey,
+      model: credential.model,
+      mediaPaths,
+      item,
+      fetchImpl,
+    });
+  }
   if (credential.provider === 'openrouter') {
     return analyzeMediaWithOpenRouter({
       apiKey: credential.apiKey,
@@ -250,6 +259,16 @@ async function analyzeImageBufferWithCredential({ credential, imageBuffer, mimeT
       item,
     });
   }
+  if (credential.provider === 'openai') {
+    return analyzeImageBufferWithOpenAI({
+      apiKey: credential.apiKey,
+      model: credential.model,
+      imageBuffer,
+      mimeType,
+      item,
+      fetchImpl,
+    });
+  }
   if (credential.provider === 'openrouter') {
     return analyzeImageBufferWithOpenRouter({
       apiKey: credential.apiKey,
@@ -261,6 +280,43 @@ async function analyzeImageBufferWithCredential({ credential, imageBuffer, mimeT
     });
   }
   return null;
+}
+
+async function analyzeMediaWithOpenAI({ apiKey, model, mediaPaths, item, fetchImpl = fetch }) {
+  const imagePaths = (mediaPaths || []).filter((mediaPath) => !/\.(mp4|mov|webm|m4v)$/i.test(mediaPath));
+  if (!imagePaths.length) return null;
+  const content = [
+    {
+      type: 'text',
+      text: [
+        'Analyze this Instagram saved item media for a searchable personal knowledge base.',
+        'OCR visible text, describe the visual content, and extract searchable topics.',
+        'Return strict JSON only with these keys: title, summary, transcript, ocrText, visualDescription, brandsMentioned, toolsMentioned, reposMentioned, peopleMentioned, topics, tags, whyUseful.',
+        'Use an empty string for transcript unless there is spoken/audio content.',
+        `Original caption: ${item.caption || ''}`,
+      ].join('\n'),
+    },
+    ...imagePaths.map(mediaContentPart),
+  ];
+
+  const response = await fetchImpl('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.1,
+      max_tokens: 1600,
+      response_format: { type: 'json_object' },
+      messages: [{ role: 'user', content }],
+    }),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body?.error?.message || `OpenAI media request failed with ${response.status}`);
+  return parseOpenRouterAnalysisResponse(body);
 }
 
 async function analyzeMediaWithOpenRouter({ apiKey, model, mediaPaths, item, fetchImpl = fetch }) {
@@ -314,6 +370,32 @@ function mediaContentPart(mediaPath) {
     type: 'image_url',
     image_url: { url: dataUrl },
   };
+}
+
+async function analyzeImageBufferWithOpenAI({ apiKey, model, imageBuffer, mimeType, item, fetchImpl = fetch }) {
+  const response = await fetchImpl('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.1,
+      max_tokens: 900,
+      response_format: { type: 'json_object' },
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: screenshotAnalysisPrompt(item) },
+          imageContentPart(imageBuffer, mimeType),
+        ],
+      }],
+    }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body?.error?.message || `OpenAI image analysis failed with ${response.status}`);
+  return normalizeScreenshotAnalysis(parseOpenRouterAnalysisResponse(body));
 }
 
 async function analyzeImageBufferWithOpenRouter({ apiKey, model, imageBuffer, mimeType, item, fetchImpl = fetch }) {
