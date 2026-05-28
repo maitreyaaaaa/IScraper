@@ -6516,7 +6516,7 @@ function QuickAddModal({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm md:items-end md:justify-end md:p-6" role="dialog" aria-modal="true" aria-label="Add to your library">
+    <div className="fixed inset-0 z-[260] flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm md:items-end md:justify-end md:p-6" role="dialog" aria-modal="true" aria-label="Add to your library">
       <div className="flex max-h-[78dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-black shadow-2xl shadow-black md:mb-20 md:w-[26rem] md:rounded-2xl">
         <div className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4">
           <div>
