@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { SkeletonCardGrid } from './LoadingStates';
 
 function columnCountForWidth(width, layoutMode) {
   if (layoutMode === 'list') return 1;
@@ -98,7 +99,9 @@ export default function VirtualLibraryGrid({
         ))}
       </div>
       {loadingMore && (
-        <div className="mt-4 flex justify-center text-sm text-muted-foreground">Loading more saves...</div>
+        <div className="mt-5">
+          <SkeletonCardGrid count={layoutMode === 'list' ? 2 : Math.max(columns, 2)} layout={layoutMode} />
+        </div>
       )}
     </div>
   );

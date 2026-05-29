@@ -117,6 +117,14 @@ import {
 } from './api';
 import SmartCollectionsView from './components/SmartCollectionsView';
 import VirtualLibraryGrid from './components/VirtualLibraryGrid';
+import {
+  AppShellSkeleton,
+  LoadingSpinner,
+  ProgressBar,
+  SkeletonBlock,
+  SkeletonCardGrid,
+  SkeletonRows,
+} from './components/LoadingStates';
 import { identifyPostHogUser, resetPostHogUser } from './posthog';
 import { supabase } from './supabaseClient';
 
@@ -189,6 +197,14 @@ const SAVE_SOURCE_LABELS = [
   'screenshots',
   'notes',
 ];
+const IMPORT_PROGRESS_STAGES = {
+  checking: { value: 8, label: 'Checking files' },
+  uploading: { value: 32, label: 'Uploading files' },
+  reading: { value: 56, label: 'Reading export' },
+  adding: { value: 78, label: 'Adding saves' },
+  indexing: { value: 92, label: 'Queueing indexing' },
+  done: { value: 100, label: 'Done' },
+};
 const IMPORT_STORAGE_BUCKET = import.meta.env.VITE_SUPABASE_IMPORT_BUCKET || 'instagram-assets';
 const VERCEL_SAFE_UPLOAD_BYTES = 4 * 1024 * 1024;
 const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv', '.js', '.txt']);
@@ -3743,6 +3759,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [libraryNextCursor, setLibraryNextCursor] = useState(null);
   const [libraryFacets, setLibraryFacets] = useState({ collections: ['all'], platforms: ['all'] });
   const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryHasLoaded, setLibraryHasLoaded] = useState(false);
   const [smartCollections, setSmartCollections] = useState([]);
   const [smartCollectionsLoading, setSmartCollectionsLoading] = useState(false);
   const [selectedSmartCollection, setSelectedSmartCollection] = useState(null);
@@ -3756,8 +3773,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [searchMode, setSearchMode] = useState('saved');
   const [libraryChat, setLibraryChat] = useState({ open: false, query: '', messages: [], loading: false, error: '' });
   const [visualSearch, setVisualSearch] = useState(null);
+  const [visualSearchLoading, setVisualSearchLoading] = useState(false);
   const [selected, setSelected] = useState(null);
   const [files, setFiles] = useState([]);
+  const [importProgress, setImportProgress] = useState(null);
   const [importSourceType, setImportSourceType] = useState('auto');
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
   const [uploadInitialMode, setUploadInitialMode] = useState('link');
@@ -3868,6 +3887,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     } catch (err) {
       setError(err.message);
     } finally {
+      setLibraryHasLoaded(true);
       setLibraryLoading(false);
     }
   }, [collectionFilter, platformFilter, sortOrder, stateFilter, typeFilter]);
@@ -3940,6 +3960,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setSearchMode('saved');
     setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
     setVisualSearch(null);
+    setVisualSearchLoading(false);
     setQuery('');
   }, []);
 
@@ -4094,6 +4115,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setLibraryItems([]);
           setLibraryTotalCount(0);
           setLibraryNextCursor(null);
+          setLibraryHasLoaded(false);
           setSmartCollections([]);
           setSelectedSmartCollection(null);
           setSmartCollectionItems([]);
@@ -4101,6 +4123,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setSearchResults(null);
           setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
           setVisualSearch(null);
+          setVisualSearchLoading(false);
           setCredentials([]);
           setAgentTokens([]);
           setCreatedAgentAccess(null);
@@ -4119,6 +4142,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setLibraryItems([]);
         setLibraryTotalCount(0);
         setLibraryNextCursor(null);
+        setLibraryHasLoaded(false);
         setSmartCollections([]);
         setSelectedSmartCollection(null);
         setSmartCollectionItems([]);
@@ -4126,6 +4150,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setSearchResults(null);
         setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
         setVisualSearch(null);
+        setVisualSearchLoading(false);
         setCredentials([]);
         setAgentTokens([]);
         setCreatedAgentAccess(null);
@@ -4322,9 +4347,11 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setSearchMeta({ eventId: '', ai: null, feedback: {} });
         setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
         setVisualSearch(null);
+        setVisualSearchLoading(false);
         await loadItems();
       } else {
         setVisualSearch(null);
+        setVisualSearchLoading(false);
         setSearchMode(mode);
         if (mode === 'web') {
           const initialUserMessage = createLibraryChatMessage('user', searchText);
@@ -4617,32 +4644,44 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       setError('Upload Instagram, Pinterest, or X bookmark export files.');
       return false;
     }
+    const setImportStage = (stage, detail = '') => {
+      const meta = IMPORT_PROGRESS_STAGES[stage] || IMPORT_PROGRESS_STAGES.checking;
+      setImportProgress({ stage, label: meta.label, value: meta.value, detail });
+    };
     setBusy(true);
     setError('');
     setNotice('');
     try {
+      setImportStage('checking', `${files.length} selected`);
       const selectedFiles = importCandidateFiles(files, importSourceType);
       validateExportFiles(selectedFiles, importSourceType);
       if (selectedFiles.length > 20) {
         throw new Error('Upload at most 20 export files at once. For full exports, upload the original ZIP instead of every folder file.');
       }
+      setImportStage('uploading', `${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'}`);
       const storageFiles = shouldUseStorageUpload(selectedFiles)
         ? await uploadImportFilesToStorage({ files: selectedFiles, session })
         : null;
+      setImportStage('reading', storageFiles ? 'Storage import queued' : 'Parsing selected files');
       const result = storageFiles
         ? await queueStorageImport({ files: storageFiles, sourceType: importSourceType })
         : await importInstagramExport({ files: selectedFiles, sourceType: importSourceType });
       if (result.importQueued) {
+        setImportStage('indexing', 'Import will finish in the background');
         setNotice('Upload received. Parsing from Supabase Storage now.');
       } else {
+        setImportStage('adding', 'Saving new items');
         const newCount = result.newItemCount ?? result.itemCount ?? 0;
         const skippedCount = result.skippedDuplicateCount ?? 0;
         setNotice(`Added ${newCount} new saves. ${skippedCount} already existed.`);
       }
+      setImportStage('done', 'Ready');
+      window.setTimeout(() => setImportProgress(null), 2200);
       refreshSaveSurfaces('Import finished');
       return true;
     } catch (err) {
       setError(err.message);
+      setImportProgress(null);
       return false;
     } finally {
       setBusy(false);
@@ -4888,6 +4927,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     const searchRun = activeSearchRef.current + 1;
     activeSearchRef.current = searchRun;
     setBusy(true);
+    setVisualSearchLoading(true);
     setError('');
     setNotice('');
     try {
@@ -4910,6 +4950,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     } catch (err) {
       setError(err.message);
     } finally {
+      setVisualSearchLoading(false);
       setBusy(false);
     }
   }, [requireProfile, requireSignIn, selectTab]);
@@ -5178,7 +5219,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
               </div>
             )}
             {loading ? (
-              <div className="grid min-h-screen place-items-center text-muted-foreground">Loading your saved index...</div>
+              <AppShellSkeleton />
             ) : (
               <>
                 {authEnabled && !session && tab === 'library' && (
@@ -5213,6 +5254,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     onFollowUp={openSearchFollowUp}
                     onVisualSearch={handleVisualSearch}
                     visualSearch={visualSearch}
+                    visualSearchLoading={visualSearchLoading}
                     busy={busy}
                     typeFilter={typeFilter}
                     setTypeFilter={setTypeFilter}
@@ -5240,6 +5282,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     scrollRef={dashPanelRef}
                     hasMore={!searchActive && Boolean(libraryNextCursor)}
                     loadingMore={libraryLoading}
+                    initialLoading={!searchActive && !libraryHasLoaded && libraryItems.length === 0}
                     onLoadMore={() => {
                       if (!libraryLoading && libraryNextCursor) loadLibraryPage({ cursor: libraryNextCursor });
                     }}
@@ -5367,6 +5410,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     onSaveLink={handleSaveLink}
                     onCreateNote={handleCreateNote}
                     onImport={handleImport}
+                    importProgress={importProgress}
                     pendingReviews={pendingReviews}
                     onApproveReview={handleApproveReview}
                     onUpdateReview={handleUpdateReview}
@@ -5464,6 +5508,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           onSaveLink={handleSaveLink}
           onCreateNote={handleCreateNote}
           onImport={handleImport}
+          importProgress={importProgress}
           busy={busy}
           onOpenHowTo={onOpenHowTo}
           onOpenFullAdd={(initialAddMode = 'upload') => {
@@ -6014,11 +6059,15 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                 </section>
 
                 {usageLoading ? (
-                  <div className="grid min-h-56 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] text-sm text-muted-foreground">
-                    <span className="inline-flex items-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                      Loading usage...
-                    </span>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      {Array.from({ length: 4 }, (_, index) => (
+                        <SkeletonBlock key={index} className="h-28 rounded-xl" />
+                      ))}
+                    </div>
+                    <div className="mt-4">
+                      <SkeletonRows count={3} compact />
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -6260,8 +6309,8 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                         disabled={exportLoading}
                         className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
                       >
-                        {exportLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                        Create ZIP export
+                        {exportLoading ? <LoadingSpinner /> : <Download className="h-4 w-4" />}
+                        {exportLoading ? 'Building export...' : 'Create ZIP export'}
                       </button>
                       <button
                         type="button"
@@ -6273,6 +6322,11 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                       </button>
                     </div>
                   </div>
+                  {exportLoading && (
+                    <div className="mt-4">
+                      <ProgressBar value={null} label="Building export" detail="Preparing your data" />
+                    </div>
+                  )}
                   {dataExports.length > 0 && (
                     <div className="mt-5 space-y-2">
                       {dataExports.slice(0, 5).map((request) => (
@@ -6323,11 +6377,14 @@ function AccountSettingsModal({ open, onClose, session, profile, onProfileSaved 
                 </section>
 
                 {deletionLoading ? (
-                  <div className="grid min-h-36 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] text-sm text-muted-foreground">
-                    <span className="inline-flex items-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                      Loading deletion status...
-                    </span>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <SkeletonBlock className="h-5 w-48 rounded-full" />
+                    <SkeletonBlock className="mt-4 h-8 w-72 max-w-full rounded-full" />
+                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                      {Array.from({ length: 4 }, (_, index) => (
+                        <SkeletonBlock key={index} className="h-20 rounded-xl" />
+                      ))}
+                    </div>
                   </div>
                 ) : deletionState?.request ? (
                   <section className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
@@ -6499,6 +6556,7 @@ function QuickAddModal({
   onSaveLink,
   onCreateNote,
   onImport,
+  importProgress,
   busy,
   onOpenHowTo,
   onOpenFullAdd,
@@ -6658,9 +6716,14 @@ function QuickAddModal({
                 </button>
               )}
               <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-                Save link
+                {busy ? <LoadingSpinner /> : <ExternalLink className="h-4 w-4" />}
+                {busy ? 'Saving link...' : 'Save link'}
               </button>
+              {busy && (
+                <p className="text-xs text-muted-foreground" role="status">
+                  Saving now. IScraper keeps organizing it after the button resets.
+                </p>
+              )}
             </form>
           )}
 
@@ -6730,9 +6793,14 @@ function QuickAddModal({
                 </div>
               )}
               <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                Save note
+                {busy ? <LoadingSpinner /> : <FileText className="h-4 w-4" />}
+                {busy ? 'Saving note...' : 'Save note'}
               </button>
+              {busy && (
+                <p className="text-xs text-muted-foreground" role="status">
+                  Saving now. The button will reset when the save finishes.
+                </p>
+              )}
             </form>
           )}
 
@@ -6782,9 +6850,14 @@ function QuickAddModal({
                 disabled={busy || !files.length}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60"
               >
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-                Add uploaded files
+                {busy ? <LoadingSpinner /> : <Database className="h-4 w-4" />}
+                {importProgress ? importProgress.label : 'Add uploaded files'}
               </button>
+              {importProgress && (
+                <div className="rounded-xl border border-white/10 bg-black/40 p-4">
+                  <ProgressBar value={importProgress.value} label={importProgress.label} detail={importProgress.detail} />
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -7055,9 +7128,14 @@ function LibraryCheckupTab({ care, loading, busy, onCheckLinks, onOpenItem, onRe
               disabled={busy || loading}
               className="mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
             >
-              {busy || loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-              Check my library
+              {busy || loading ? <LoadingSpinner /> : <ShieldCheck className="h-4 w-4" />}
+              {busy || loading ? 'Checking library...' : 'Check my library'}
             </button>
+            {(busy || loading) && (
+              <div className="mt-4">
+                <ProgressBar value={null} label="Checking links" detail="Keeping your current results visible" />
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -7065,7 +7143,9 @@ function LibraryCheckupTab({ care, loading, busy, onCheckLinks, onOpenItem, onRe
       <div className="grid gap-6 xl:grid-cols-[1fr_0.95fr]">
         <section className="space-y-5">
           <SectionHeader icon={ShieldCheck} title="Clean up your saved links" copy="Review possible duplicates and original links that may not open." />
-          {!hasCleanResults && (
+          {loading && !hasCleanResults ? (
+            <SkeletonRows count={4} />
+          ) : !hasCleanResults && (
             <EmptyCheckup icon={CheckCircle2} title="Your library looks clean for now." copy="Run a check whenever you want to look for possible duplicates or links that may not open." />
           )}
           {duplicateGroups.length > 0 && (
@@ -7108,6 +7188,9 @@ function LibraryCheckupTab({ care, loading, busy, onCheckLinks, onOpenItem, onRe
 
         <section className="space-y-5">
           <SectionHeader icon={Clock} title="Rediscover old saves" copy="Bring back useful things you saved but have not opened lately." />
+          {loading && !resurface.dueReminders?.length && !oldSaves.length && !weeklyItems.length && !resurface.randomItem && (
+            <SkeletonRows count={4} />
+          )}
           {resurface.dueReminders?.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-sm font-semibold text-foreground">Reminders ready</h3>
@@ -7140,7 +7223,7 @@ function LibraryCheckupTab({ care, loading, busy, onCheckLinks, onOpenItem, onRe
             <h3 className="text-sm font-semibold text-foreground">Saved 3+ months ago</h3>
             {oldSaves.length ? oldSaves.map((item) => (
               <CareItemRow key={item.id} item={item} reason="Saved 3+ months ago" onOpen={onOpenItem} onRemind={onRemind} busy={busy} />
-            )) : <EmptyCheckup icon={Clock} title="No older saves yet." copy="This section fills in as your library grows." />}
+            )) : !loading ? <EmptyCheckup icon={Clock} title="No older saves yet." copy="This section fills in as your library grows." /> : null}
           </div>
           {weeklyItems.length > 0 && (
             <details className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
@@ -7401,7 +7484,7 @@ function IndexingProgressCard({ activity }) {
       <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3">
         <div className="flex min-w-0 items-center gap-3">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingSpinner />
           </span>
           <div className="min-w-0">
             <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Enrichment</div>
@@ -7411,9 +7494,7 @@ function IndexingProgressCard({ activity }) {
         <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition group-open:rotate-180 group-open:text-primary" />
       </summary>
       <div className="space-y-3 border-t border-primary/20 px-4 pb-4 pt-3">
-        <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
-          <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${progress}%` }} />
-        </div>
+        <ProgressBar value={progress} />
         <div className="flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
           <span>{activity.indexing} indexing</span>
           <span>{activity.visual} visual indexed</span>
@@ -7422,7 +7503,7 @@ function IndexingProgressCard({ activity }) {
         <div className="space-y-2">
           {activity.activeItems.map((item) => (
             <div key={item.id} className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/60 px-3 py-2 text-xs">
-              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+              <LoadingSpinner className="h-3.5 w-3.5 shrink-0" />
               <div className="min-w-0">
                 <div className="truncate font-semibold">{item.title}</div>
                 <div className="truncate text-[11px] text-muted-foreground">{item.source}</div>
@@ -7668,6 +7749,7 @@ function LibraryTab({
   onSearch,
   onVisualSearch,
   visualSearch,
+  visualSearchLoading,
   busy,
   typeFilter,
   setTypeFilter,
@@ -7691,6 +7773,7 @@ function LibraryTab({
   scrollRef,
   hasMore = false,
   loadingMore = false,
+  initialLoading = false,
   onLoadMore,
 }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -7813,6 +7896,12 @@ function LibraryTab({
                   {visualSearch ? `${searchResultCount} visual matches` : `${searchResultCount} matching saves`}
                 </span>
               )}
+              {(busy || visualSearchLoading) && (
+                <span className="inline-flex items-center gap-2 text-xs text-muted-foreground" role="status">
+                  <LoadingSpinner className="h-3.5 w-3.5" />
+                  {visualSearchLoading ? 'Uploading image...' : searchMode === 'web' ? 'Searching web...' : 'Searching...'}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {query && (
@@ -7849,6 +7938,11 @@ function LibraryTab({
             >
               <X className="h-4 w-4" /> Clear
             </button>
+          </div>
+        )}
+        {visualSearchLoading && !visualSearch && (
+          <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+            <ProgressBar value={null} label="Upload" detail="Finding similar saves" />
           </div>
         )}
         </div>
@@ -7934,7 +8028,9 @@ function LibraryTab({
       />
 
       <div className="mt-10 md:mt-[7dvh]">
-        {items.length === 0 ? (
+        {initialLoading ? (
+          <SkeletonCardGrid count={libraryLayout === 'list' ? 5 : 9} layout={libraryLayout} />
+        ) : items.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center md:p-14">
             <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary">
               {searchActive && searchResultCount === 0 ? <Search className="h-5 w-5" /> : <Upload className="h-5 w-5" />}
@@ -8594,6 +8690,7 @@ function UploadTab({
   onSaveLink,
   onCreateNote,
   onImport,
+  importProgress,
   pendingReviews,
   onApproveReview,
   onUpdateReview,
@@ -8738,9 +8835,14 @@ function UploadTab({
 
       <div>
         <button onClick={onImport} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-          Add files to Library
+          {busy ? <LoadingSpinner /> : <Database className="h-4 w-4" />}
+          {importProgress ? importProgress.label : 'Add files to Library'}
         </button>
+        {importProgress && (
+          <div className="mt-3 rounded-xl border border-white/10 bg-black/40 p-4">
+            <ProgressBar value={importProgress.value} label={importProgress.label} detail={importProgress.detail} />
+          </div>
+        )}
         {activationState.searchable > 0 && (
           <button
             type="button"
@@ -8834,9 +8936,14 @@ function UploadTab({
           </div>
         )}
         <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-          Save note to Library
+          {busy ? <LoadingSpinner /> : <FileText className="h-4 w-4" />}
+          {busy ? 'Saving note...' : 'Save note to Library'}
         </button>
+        {busy && (
+          <p className="text-xs text-muted-foreground" role="status">
+            Saving now. The button will reset when the save finishes.
+          </p>
+        )}
       </form>
       )}
 
@@ -8883,9 +8990,14 @@ function UploadTab({
           className="min-h-24 w-full resize-none rounded-xl border border-white/10 bg-black px-4 py-3 text-sm leading-6 outline-none focus:border-primary"
         />
         <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-          Save link
+          {busy ? <LoadingSpinner /> : <ExternalLink className="h-4 w-4" />}
+          {busy ? 'Saving link...' : 'Save link'}
         </button>
+        {busy && (
+          <p className="text-xs text-muted-foreground" role="status">
+            Saving now. IScraper will keep organizing it after the button resets.
+          </p>
+        )}
       </form>
       )}
 
@@ -9740,9 +9852,19 @@ function GraphTab({ onSelectItem }) {
       {error && <Banner type="error">{error}</Banner>}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <GraphStat label="Indexed saves" value={graph?.stats?.indexedItems ?? 0} />
-        <GraphStat label="Concept nodes" value={graph?.stats?.conceptNodes ?? 0} />
-        <GraphStat label="Graph links" value={graph?.stats?.links ?? 0} />
+        {busy ? (
+          <>
+            <SkeletonBlock className="h-24 rounded-xl" />
+            <SkeletonBlock className="h-24 rounded-xl" />
+            <SkeletonBlock className="h-24 rounded-xl" />
+          </>
+        ) : (
+          <>
+            <GraphStat label="Indexed saves" value={graph?.stats?.indexedItems ?? 0} />
+            <GraphStat label="Concept nodes" value={graph?.stats?.conceptNodes ?? 0} />
+            <GraphStat label="Graph links" value={graph?.stats?.links ?? 0} />
+          </>
+        )}
       </div>
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -9768,7 +9890,9 @@ function GraphTab({ onSelectItem }) {
             ))}
           </div>
           {busy ? (
-            <div className="grid h-full place-items-center text-muted-foreground">Loading graph...</div>
+            <div className="h-full p-5">
+              <SkeletonBlock className="h-full rounded-xl" />
+            </div>
           ) : !graph?.nodes?.length ? (
             <div className="grid h-full place-items-center px-8 text-center text-muted-foreground">
               No graph nodes yet. Add searchable saves first, then come back here.
@@ -10396,7 +10520,7 @@ function ArchivePanel({ item, busy, onRetry }) {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
-            {ready ? <CheckCircle2 className="h-3.5 w-3.5 text-primary" /> : pending ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : <FileText className="h-3.5 w-3.5" />}
+            {ready ? <CheckCircle2 className="h-3.5 w-3.5 text-primary" /> : pending ? <LoadingSpinner className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
             Page backup
           </div>
           <div className="text-sm font-semibold text-foreground">{label}</div>
@@ -10415,7 +10539,7 @@ function ArchivePanel({ item, busy, onRetry }) {
               disabled={busy}
               className="inline-flex items-center gap-2 rounded-full bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-60"
             >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+              {busy ? <LoadingSpinner className="h-3 w-3" /> : <RotateCcw className="h-3 w-3" />}
               Try again
             </button>
           )}
@@ -10474,7 +10598,7 @@ function ReminderPanel({ item, busy, onRemind }) {
               disabled={busy}
               className="inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-foreground transition hover:border-primary disabled:opacity-60"
             >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Clock className="h-3 w-3" />}
+              {busy ? <LoadingSpinner className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
               {label}
             </button>
           ))}
@@ -10493,12 +10617,15 @@ function SimilarVisualsPanel({ state, onOpenItem }) {
         <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground">
           <Eye className="h-3 w-3" /> Similar visuals
         </div>
-        {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        {loading && <LoadingSpinner />}
       </div>
       {state.status === 'error' && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {state.error || 'Could not load similar saves.'}
         </div>
+      )}
+      {loading && (
+        <SkeletonCardGrid count={2} layout="grid-2" />
       )}
       {!loading && state.status !== 'error' && !items.length && (
         <div className="rounded-xl border border-white/10 bg-white/[0.025] px-4 py-3 text-sm text-muted-foreground">

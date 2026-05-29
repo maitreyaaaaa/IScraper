@@ -1,4 +1,5 @@
-import { Folder, Loader2, Pencil, Pin, PinOff, RefreshCcw, Search, Trash2, X } from 'lucide-react';
+import { Folder, Pencil, Pin, PinOff, RefreshCcw, Search, Trash2, X } from 'lucide-react';
+import { LoadingSpinner, SkeletonCardGrid, SkeletonRows } from './LoadingStates';
 
 function itemTitle(item) {
   return item?.sourceTitle || item?.title || item?.caption || 'Saved item';
@@ -44,17 +45,14 @@ export default function SmartCollectionsView({
           disabled={busy || loading}
           className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
         >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+          {loading ? <LoadingSpinner /> : <RefreshCcw className="h-4 w-4" />}
           Refresh
         </button>
       </div>
 
       {loading && !hasCollections ? (
-        <div className="grid min-h-64 place-items-center rounded-xl border border-white/10 bg-white/[0.025] text-sm text-muted-foreground">
-          <span className="inline-flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-            Loading Smart Collections...
-          </span>
+        <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+          <SkeletonCardGrid count={6} layout="grid-3" />
         </div>
       ) : !hasCollections ? (
         <div className="grid min-h-64 place-items-center rounded-xl border border-white/10 bg-white/[0.025] px-6 text-center">
@@ -193,11 +191,8 @@ function CollectionDetail({ collection, items, loading, busy, onOpenItem, onRemo
       </div>
       <div className="mt-4 space-y-3">
         {loading ? (
-          <div className="grid min-h-56 place-items-center text-sm text-muted-foreground">
-            <span className="inline-flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin text-primary" />
-              Loading saves...
-            </span>
+          <div className="min-h-56">
+            <SkeletonRows count={4} />
           </div>
         ) : items.length ? items.map((item) => (
           <div key={item.id} className="rounded-lg border border-white/10 bg-black/45 p-3">
