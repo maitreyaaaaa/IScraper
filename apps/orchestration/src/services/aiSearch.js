@@ -2,6 +2,31 @@ function compactText(value, maxLength = 1200) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
+function cleanGeneratedText(value, maxLength = 1200) {
+  let text = compactText(value, maxLength + 400)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\((?:www\.)?[a-z0-9.-]+\.[a-z]{2,}\)/gi, '')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length <= maxLength) return text;
+  const candidate = text.slice(0, maxLength);
+  const sentenceEnd = Math.max(candidate.lastIndexOf('. '), candidate.lastIndexOf('! '), candidate.lastIndexOf('? '));
+  text = sentenceEnd > Math.floor(maxLength * 0.6)
+    ? candidate.slice(0, sentenceEnd + 1)
+    : candidate.replace(/\s+\S*$/, '');
+  return `${text.trim()}...`;
+}
+
+function removeIncompleteEnding(value = '') {
+  const text = String(value || '').trim();
+  if (!text || /[.!?)]$/.test(text)) return text;
+  const sentenceEnd = Math.max(text.lastIndexOf('. '), text.lastIndexOf('! '), text.lastIndexOf('? '));
+  if (sentenceEnd > 80) return text.slice(0, sentenceEnd + 1).trim();
+  return `${text.replace(/\s+\S*$/, '').trim()}...`;
+}
+
 function publicResultSnippet(item, index) {
   const analysis = item.analysis || {};
   return {
@@ -119,37 +144,88 @@ function buildOpenRouterLibraryChatRequest({
   };
 }
 
+function webSearchFiltersForQuestion(question = '') {
+  const text = String(question).toLowerCase();
+  if (/\b(anthropic|claude|opus|sonnet|haiku)\b/.test(text)) {
+    return {
+      allowed_domains: [
+        'anthropic.com',
+        'claude.com',
+        'platform.claude.com',
+        'docs.anthropic.com',
+      ],
+    };
+  }
+  if (/\b(openai|chatgpt|gpt|codex)\b/.test(text)) {
+    return {
+      allowed_domains: [
+        'openai.com',
+        'platform.openai.com',
+        'developers.openai.com',
+        'help.openai.com',
+      ],
+    };
+  }
+  return null;
+}
+
+function buildWebSearchUserPrompt({ question, messages = [], results = [] }) {
+  const snippets = results.map(publicResultSnippet);
+  return [
+    `Question: ${compactText(question, 240)}`,
+    '',
+    'Use the web to answer this question. If saved-library context is relevant, mention it only after the web facts.',
+    '',
+    `Recent conversation: ${JSON.stringify(compactConversation(messages))}`,
+    '',
+    snippets.length
+      ? `Saved-library context: ${JSON.stringify(snippets)}`
+      : 'Saved-library context: none',
+  ].join('\n');
+}
+
 function buildOpenAiWebSearchRequest({
   model = DEFAULT_OPENAI_MODEL,
   question,
   results = [],
   messages = [],
-  toolType = 'web_search_preview',
+  toolType = 'web_search',
+  toolChoice = 'required',
 }) {
+  const tool = {
+    type: toolType,
+    search_context_size: 'high',
+  };
+  const filters = toolType === 'web_search' ? webSearchFiltersForQuestion(question) : null;
+  if (filters) tool.filters = filters;
   return {
     model,
-    tools: [{ type: toolType }],
-    tool_choice: 'auto',
-    max_output_tokens: 1200,
+    tools: [tool],
+    tool_choice: toolChoice,
+    include: toolType === 'web_search' ? ['web_search_call.action.sources'] : undefined,
+    max_output_tokens: 450,
     input: [
       {
         role: 'system',
         content: [
           'You are IScraper web search.',
-          'Answer using live web search and the provided saved-library snippets.',
-          'Search the web for current or external facts when useful.',
-          'Mention when a useful saved item also relates to the answer.',
+          'You must search the web before answering.',
+          'Answer using cited web results and the provided saved-library snippets only.',
+          'For current facts, company news, product releases, model capabilities, pricing, and API details, prefer official vendor sources over news or blogs.',
+          'Use news sources only for context when official sources do not cover the point.',
+          'Every specific factual claim must be supported by a web result citation or a saved-library snippet.',
+          'If the sources do not verify a detail, omit it or say it is not verified.',
+          'Never invent API features, pricing, release dates, benchmark claims, URLs, or model names.',
           'Keep the answer direct, practical, and non-technical.',
-          'Do not invent saved items or URLs.',
+          'Write one compact paragraph under 110 words unless the user asks for more detail.',
+          'Do not use bullets, headings, numbered lists, tables, or long feature inventories.',
+          'Do not include markdown links or raw URLs in the answer text; the app shows sources separately.',
+          'Do not end mid-sentence.',
         ].join(' '),
       },
       {
         role: 'user',
-        content: JSON.stringify({
-          question: compactText(question, 240),
-          conversation: compactConversation(messages),
-          savedLibrarySnippets: results.map(publicResultSnippet),
-        }),
+        content: buildWebSearchUserPrompt({ question, messages, results }),
       },
     ],
   };
@@ -239,36 +315,64 @@ function plainTextAiSearchAnswer(content, results = []) {
 }
 
 function responseOutputText(body = {}) {
-  if (body.output_text) return compactText(body.output_text, 2400);
+  if (body.output_text) return compactText(body.output_text, 8000);
   const messages = Array.isArray(body.output) ? body.output : [];
   return compactText(messages
     .flatMap((item) => Array.isArray(item.content) ? item.content : [])
     .map((content) => content.text || '')
     .filter(Boolean)
-    .join('\n'), 2400);
+    .join('\n'), 8000);
+}
+
+function normalizeCitationUrl(url = '') {
+  try {
+    const parsed = new URL(url);
+    for (const key of Array.from(parsed.searchParams.keys())) {
+      const lowerKey = key.toLowerCase();
+      if (/^utm_/i.test(key) || /_page$/i.test(key) || /^ss_/i.test(key) || ['fbclid', 'gclid', 'mc_cid', 'mc_eid'].includes(lowerKey)) {
+        parsed.searchParams.delete(key);
+      }
+    }
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return String(url || '').split('#')[0].replace(/[?&]utm_[^=]+=[^&\s]+/gi, '').trim();
+  }
 }
 
 function normalizeUrlCitation(annotation = {}) {
-  const url = annotation.url || annotation.uri || '';
+  const url = normalizeCitationUrl(annotation.url || annotation.uri || '');
   if (!url) return null;
+  const rawTitle = annotation.title || annotation.url || annotation.uri || url;
+  const title = /^https?:\/\//i.test(rawTitle) ? normalizeCitationUrl(rawTitle) : rawTitle;
   return {
     url,
-    title: compactText(annotation.title || annotation.url || url, 180),
+    title: compactText(title || url, 180),
     snippet: compactText(annotation.snippet || annotation.text || '', 260),
   };
 }
 
 function responseWebCitations(body = {}) {
   const citations = [];
-  const seen = new Set();
+  const byUrl = new Map();
+  const isBareUrlTitle = (title = '') => /^https?:\/\//i.test(title) || !String(title || '').trim();
   const addCitation = (entry) => {
     const normalized = normalizeUrlCitation(entry);
-    if (!normalized || seen.has(normalized.url)) return;
-    seen.add(normalized.url);
+    if (!normalized) return;
+    const existing = byUrl.get(normalized.url);
+    if (existing) {
+      if (isBareUrlTitle(existing.title) && !isBareUrlTitle(normalized.title)) existing.title = normalized.title;
+      if (!existing.snippet && normalized.snippet) existing.snippet = normalized.snippet;
+      return;
+    }
+    byUrl.set(normalized.url, normalized);
     citations.push(normalized);
   };
 
   for (const item of Array.isArray(body.output) ? body.output : []) {
+    if (Array.isArray(item.action?.sources)) {
+      item.action.sources.forEach(addCitation);
+    }
     if (Array.isArray(item.sources)) {
       item.sources.forEach(addCitation);
     }
@@ -279,6 +383,38 @@ function responseWebCitations(body = {}) {
     }
   }
   return citations.slice(0, 8);
+}
+
+function normalizeWebSearchAnswer(parsed = {}, body = {}, results = []) {
+  const webCitations = responseWebCitations(body);
+  const hasSavedEvidence = Array.isArray(results) && results.length > 0;
+  if (!webCitations.length && !hasSavedEvidence) {
+    const error = new Error('OpenAI web search returned no verifiable sources.');
+    error.statusCode = 502;
+    throw error;
+  }
+  const answer = removeIncompleteEnding(cleanGeneratedText(parsed.answer, 700));
+  if (!answer || parsed.confidence === 'not_enough_evidence') {
+    return {
+      answer: removeIncompleteEnding(cleanGeneratedText(parsed.uncertainty || 'I could not verify this well enough from web sources. Open the sources below or try a more specific question.', 500)),
+      citations: [],
+      webCitations,
+      sources: webCitations,
+      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.map((entry) => cleanGeneratedText(entry, 90)).filter(Boolean).slice(0, 3) : [],
+      mode: 'web',
+      confidence: 'not_enough_evidence',
+    };
+  }
+  const uncertainty = cleanGeneratedText(parsed.uncertainty, 300);
+  return {
+    answer: uncertainty ? `${answer} ${uncertainty}` : answer,
+    citations: [],
+    webCitations,
+    sources: webCitations,
+    suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.map((entry) => cleanGeneratedText(entry, 90)).filter(Boolean).slice(0, 3) : [],
+    mode: 'web',
+    confidence: parsed.confidence || 'grounded',
+  };
 }
 
 function normalizeAiSearchAnswer(parsed = {}, results = []) {
@@ -417,22 +553,37 @@ async function createOpenAiWebSearchAnswer({
 
   let body;
   try {
-    body = await attempt('web_search_preview');
+    body = await attempt('web_search');
   } catch (error) {
     if (error.statusCode && error.statusCode !== 400) throw error;
-    body = await attempt('web_search');
+    try {
+      body = await attempt('web_search_preview');
+    } catch (fallbackError) {
+      if (fallbackError.statusCode && fallbackError.statusCode !== 400) throw fallbackError;
+      const request = buildOpenAiWebSearchRequest({
+        model,
+        question,
+        results,
+        messages,
+        toolType: 'web_search_preview',
+        toolChoice: 'auto',
+      });
+      const fetched = await fetchOpenAiResponses({ apiKey, request, fetchImpl });
+      if (!fetched.response.ok) {
+        throw openAiApiError(fetched.body, `OpenAI web search failed with ${fetched.response.status}`, fetched.response.status);
+      }
+      body = fetched.body;
+    }
   }
 
-  const answer = responseOutputText(body);
-  if (!answer) throw new Error('OpenAI returned no web search answer.');
-  return {
-    answer,
-    citations: [],
-    webCitations: responseWebCitations(body),
-    sources: responseWebCitations(body),
+  const content = responseOutputText(body);
+  if (!content) throw new Error('OpenAI returned no web search answer.');
+  return normalizeWebSearchAnswer({
+    answer: content,
+    uncertainty: '',
     suggestions: [],
-    mode: 'web',
-  };
+    confidence: 'grounded',
+  }, body, results);
 }
 
 module.exports = {

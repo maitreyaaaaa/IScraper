@@ -8222,6 +8222,7 @@ function webStepStatusFromAi(ai) {
 function SearchAiPanel({ ai, items, onSelect, onFollowUp, inline = false }) {
   if (!ai) return null;
   const webCitations = (ai.webCitations || ai.sources || []).filter((citation) => citation.url);
+  const sourceLabel = ai.mode === 'web' ? 'From your saved + web' : 'From your saved items';
   if (ai.error) {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5 text-sm leading-6 text-muted-foreground">
@@ -8244,7 +8245,7 @@ function SearchAiPanel({ ai, items, onSelect, onFollowUp, inline = false }) {
     <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em] text-primary">
-          <Sparkles className="h-3.5 w-3.5" /> From your saved items
+          <Sparkles className="h-3.5 w-3.5" /> {sourceLabel}
         </div>
         {inline && onFollowUp && (
           <button

@@ -56,7 +56,7 @@ test('buildOpenRouterSearchAnswerRequest asks for grounded JSON only', () => {
 test('buildOpenAiWebSearchRequest includes saved snippets and web search tool', () => {
   const request = buildOpenAiWebSearchRequest({
     model: 'gpt-4o',
-    question: 'What is an AI engine?',
+    question: 'Can you tell me about Claude Opus 4.8?',
     messages: [{ role: 'user', content: 'Earlier question' }],
     results: [
       {
@@ -68,11 +68,19 @@ test('buildOpenAiWebSearchRequest includes saved snippets and web search tool', 
   });
 
   assert.equal(request.model, 'gpt-4o');
-  assert.equal(request.tools[0].type, 'web_search_preview');
-  assert.match(request.input[0].content, /Search the web/);
-  const payload = JSON.parse(request.input[1].content);
-  assert.equal(payload.question, 'What is an AI engine?');
-  assert.equal(payload.savedLibrarySnippets[0].id, 'save-1');
+  assert.equal(request.tools[0].type, 'web_search');
+  assert.equal(request.tool_choice, 'required');
+  assert.deepEqual(request.tools[0].filters.allowed_domains, [
+    'anthropic.com',
+    'claude.com',
+    'platform.claude.com',
+    'docs.anthropic.com',
+  ]);
+  assert.match(request.input[0].content, /must search the web/);
+  assert.match(request.input[0].content, /official vendor sources/);
+  assert.match(request.input[1].content, /Question: Can you tell me about Claude Opus 4\.8\?/);
+  assert.match(request.input[1].content, /Saved-library context:/);
+  assert.match(request.input[1].content, /save-1/);
 });
 
 test('buildOpenRouterLibraryChatRequest keeps follow-ups grounded in saved snippets', () => {
@@ -223,11 +231,24 @@ test('createOpenAiWebSearchAnswer returns web citations from Responses API annot
       assert.equal(url, 'https://api.openai.com/v1/responses');
       assert.match(options.headers.Authorization, /Bearer test-key/);
       const request = JSON.parse(options.body);
-      assert.equal(request.tools[0].type, 'web_search_preview');
+      assert.equal(request.tools[0].type, 'web_search');
+      assert.equal(request.input[1].content.startsWith('Question: What is an AI engine?'), true);
       return {
         ok: true,
         json: async () => ({
           output: [
+            {
+              type: 'web_search_call',
+              action: {
+                sources: [
+                  {
+                    type: 'url',
+                    url: 'https://example.com/ai-engine?utm_source=openai',
+                    title: 'AI Engine overview',
+                  },
+                ],
+              },
+            },
             {
               type: 'message',
               content: [
@@ -237,7 +258,7 @@ test('createOpenAiWebSearchAnswer returns web citations from Responses API annot
                   annotations: [
                     {
                       type: 'url_citation',
-                      url: 'https://example.com/ai-engine',
+                      url: 'https://example.com/ai-engine?utm_source=openai',
                       title: 'AI Engine overview',
                     },
                   ],
@@ -259,6 +280,66 @@ test('createOpenAiWebSearchAnswer returns web citations from Responses API annot
     },
   ]);
   assert.equal(answer.mode, 'web');
+  assert.equal(answer.confidence, 'grounded');
+});
+
+test('createOpenAiWebSearchAnswer strips markdown links and raw urls from answer text', async () => {
+  const answer = await createOpenAiWebSearchAnswer({
+    apiKey: 'test-key',
+    model: 'gpt-4o',
+    question: 'Can you tell me about Claude Opus 4.8?',
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        output: [
+          {
+            type: 'web_search_call',
+            action: {
+              sources: [
+                {
+                  type: 'url',
+                  url: 'https://www.anthropic.com/news/claude-opus-4-8?utm_source=openai',
+                  title: 'Introducing Claude Opus 4.8',
+                },
+              ],
+            },
+          },
+          {
+            type: 'message',
+            content: [
+              {
+                type: 'output_text',
+                text: 'Claude Opus 4.8 is described in [Anthropic](https://www.anthropic.com/news/claude-opus-4-8?utm_source=openai) as an Opus upgrade. Read https://example.com for more. (anthropic.com)',
+              },
+            ],
+          },
+        ],
+      }),
+    }),
+  });
+
+  assert.equal(answer.answer, 'Claude Opus 4.8 is described in Anthropic as an Opus upgrade. Read for more.');
+  assert.equal(answer.webCitations[0].url, 'https://www.anthropic.com/news/claude-opus-4-8');
+});
+
+test('createOpenAiWebSearchAnswer fails closed when web answer has no verifiable sources', async () => {
+  await assert.rejects(
+    createOpenAiWebSearchAnswer({
+      apiKey: 'test-key',
+      model: 'gpt-4o',
+      question: 'latest model news',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          output_text: JSON.stringify({
+            answer: 'A confident but uncited answer.',
+          }),
+          output: [],
+        }),
+      }),
+    }),
+    /no verifiable sources/
+  );
 });
 
 test('createOpenRouterSearchAnswer repairs common JSON formatting issues', async () => {
