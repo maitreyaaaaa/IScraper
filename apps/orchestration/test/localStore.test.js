@@ -92,6 +92,36 @@ test('localStore listItemsPage applies filters and stable cursors', () => {
             platformKey: 'web',
             sourceTitle: 'Beta',
           },
+          {
+            id: 'capture',
+            url: 'https://example.com/capture',
+            contentType: 'note',
+            caption: 'Captured screenshot',
+            collections: ['Browser captures'],
+            platform: 'IScraper Extension',
+            platformKey: 'iscraper-extension-capture',
+            sourceTitle: 'Capture',
+          },
+          {
+            id: 'note',
+            url: 'https://iscraper.local/note',
+            contentType: 'note',
+            caption: 'Private note',
+            collections: ['Notes'],
+            platform: 'IScraper Notes',
+            platformKey: 'iscraper-note',
+            sourceTitle: 'Note',
+          },
+          {
+            id: 'voice',
+            url: 'https://iscraper.local/voice',
+            contentType: 'voice_note',
+            caption: 'Voice memo',
+            collections: ['Voice notes'],
+            platform: 'IScraper Extension',
+            platformKey: 'iscraper-voice-note',
+            sourceTitle: 'Voice',
+          },
         ],
       },
       initialStatus: 'done',
@@ -100,18 +130,34 @@ test('localStore listItemsPage applies filters and stable cursors', () => {
     const first = store.listItemsPage('page-user', { limit: 1, sort: 'title' });
     assert.equal(first.items.length, 1);
     assert.equal(first.items[0].id, 'alpha');
-    assert.equal(first.totalCount, 2);
+    assert.equal(first.totalCount, 5);
     assert.ok(first.nextCursor);
-    assert.deepEqual(first.facets.collections, ['all', 'Ideas', 'Research']);
+    assert.deepEqual(first.facets.collections, ['all', 'Browser captures', 'Ideas', 'Notes', 'Research', 'Voice notes']);
+    assert.deepEqual(first.facets.platforms, ['all', 'Instagram', 'IScraper Extension', 'Web']);
 
     const second = store.listItemsPage('page-user', { limit: 1, sort: 'title', cursor: first.nextCursor });
     assert.equal(second.items.length, 1);
     assert.equal(second.items[0].id, 'beta');
-    assert.equal(second.nextCursor, null);
 
     const links = store.listItemsPage('page-user', { type: 'links' });
     assert.equal(links.totalCount, 1);
     assert.equal(links.items[0].id, 'beta');
+
+    const screenshots = store.listItemsPage('page-user', { type: 'screenshots' });
+    assert.equal(screenshots.totalCount, 1);
+    assert.equal(screenshots.items[0].id, 'capture');
+
+    const notes = store.listItemsPage('page-user', { type: 'notes' });
+    assert.equal(notes.totalCount, 1);
+    assert.equal(notes.items[0].id, 'note');
+
+    const voiceNotes = store.listItemsPage('page-user', { type: 'voice_notes' });
+    assert.equal(voiceNotes.totalCount, 1);
+    assert.equal(voiceNotes.items[0].id, 'voice');
+
+    const uploaded = store.listItemsPage('page-user', { type: 'uploaded' });
+    assert.equal(uploaded.totalCount, 1);
+    assert.equal(uploaded.items[0].id, 'alpha');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

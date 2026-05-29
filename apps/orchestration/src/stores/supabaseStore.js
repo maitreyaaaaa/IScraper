@@ -1138,6 +1138,21 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return data ? mapImport(data) : null;
     },
     async upsertImportData({ userId, importId, parsed, initialStatus = 'queued', duplicateMode = 'skipExisting' }) {
+      const parsedCollections = [...new Set(cleanTextArray((parsed.collections || []).map((collection) => collection?.name)))];
+      if (parsedCollections.length) {
+        const collectionRows = parsedCollections.map((name) => {
+          const sourceName = (parsed.collections || []).find((collection) => collection?.name === name)?.sourceName || '';
+          return {
+            user_id: userId,
+            name: cleanDbText(name),
+            source_name: cleanDbText(sourceName),
+          };
+        });
+        const { error: collectionError } = await client
+          .from('collections')
+          .upsert(collectionRows, { onConflict: 'user_id,name', ignoreDuplicates: true });
+        if (collectionError) throw collectionError;
+      }
       if (!parsed.items.length) return [];
 
       const ids = [...new Set(parsed.items.map((item) => item.id).filter(Boolean))];
@@ -1229,11 +1244,13 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       const items = await Promise.all(rows.map((row) => mapItemWithAnalysis(row, client)));
       if (recordTiming) recordTiming('listPageMapMs', mapStartedAt);
       const facetStartedAt = process.hrtime.bigint();
-      const facetRows = await selectUserRows(client, 'saved_items', userId, 'collections,platform', 10000);
+      const facetRows = await selectUserRows(client, 'saved_items', userId, 'collections,platform,platform_key,content_type', 10000);
       if (recordTiming) recordTiming('listFacetFetchMs', facetStartedAt);
       const facets = facetsForItems(facetRows.map((row) => ({
         collections: row.collections || [],
         platform: row.platform || 'Instagram',
+        platformKey: row.platform_key || 'instagram',
+        contentType: row.content_type || 'unknown',
       })));
       return {
         items,
@@ -2639,11 +2656,23 @@ function encodePageCursor(offset, totalCount) {
 
 function applySavedItemListFilters(query, options) {
   if (options.type === 'notes') {
-    query = query.or('content_type.eq.note,platform_key.eq.iscraper-note');
+    query = query.or('and(content_type.eq.note,platform_key.neq.iscraper-extension-capture),platform_key.eq.iscraper-note');
   } else if (options.type === 'links') {
     query = query.or('platform_key.eq.web,id.like.web-%');
+  } else if (options.type === 'screenshots') {
+    query = query.eq('platform_key', 'iscraper-extension-capture');
+  } else if (options.type === 'voice_notes') {
+    query = query.or('content_type.eq.voice,content_type.eq.voice_note,content_type.eq.audio,platform_key.eq.iscraper-voice-note');
   } else if (options.type === 'uploaded') {
-    query = query.neq('content_type', 'note').neq('platform_key', 'iscraper-note').neq('platform_key', 'web');
+    query = query
+      .neq('content_type', 'note')
+      .neq('content_type', 'voice')
+      .neq('content_type', 'voice_note')
+      .neq('content_type', 'audio')
+      .neq('platform_key', 'iscraper-note')
+      .neq('platform_key', 'iscraper-extension-capture')
+      .neq('platform_key', 'iscraper-voice-note')
+      .neq('platform_key', 'web');
   }
 
   if (options.state === 'needs_review') {

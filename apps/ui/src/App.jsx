@@ -151,8 +151,8 @@ const INDEXING_META = {
 const ENRICHED_STAGES = new Set(['visual_indexed', 'deep_indexed']);
 const DASHBOARD_ENRICHED_STAGES = new Set(['text_indexed', 'visual_indexing', 'visual_indexed', 'deep_indexed']);
 const STALE_ENRICHMENT_UI_MS = 15 * 60 * 1000;
-const TYPE_FILTERS = ['all', 'uploaded', 'links', 'notes'];
-const STATE_FILTERS = ['all', 'needs_review', 'searchable', 'enriched', 'failed'];
+const TYPE_FILTERS = ['all', 'uploaded', 'links', 'screenshots', 'voice_notes', 'notes'];
+const STATE_FILTERS = ['all', 'searchable', 'failed'];
 const SORT_OPTIONS = ['newest', 'oldest'];
 const DASHBOARD_TABS = ['library', 'smart', 'care', 'graph', 'upload', 'settings'];
 const SEARCH_MODES = ['saved', 'web'];
@@ -580,18 +580,28 @@ function unique(values) {
 }
 
 function isNoteItem(item) {
-  return item?.contentType === 'note' || item?.platformKey === 'iscraper-note';
+  return !isExtensionCaptureItem(item) && (item?.contentType === 'note' || item?.platformKey === 'iscraper-note');
 }
 
 function isExtensionCaptureItem(item) {
   return item?.platformKey === 'iscraper-extension-capture';
 }
 
+function isLinkItem(item) {
+  return item?.platformKey === 'web' || String(item?.id || '').startsWith('web-');
+}
+
+function isVoiceNoteItem(item) {
+  return ['voice', 'voice_note', 'audio'].includes(item?.contentType) || item?.platformKey === 'iscraper-voice-note';
+}
+
 function itemTypeMatches(item, typeFilter) {
   if (typeFilter === 'all') return true;
   if (typeFilter === 'notes') return isNoteItem(item);
-  if (typeFilter === 'links') return item.platformKey === 'web' || String(item.id || '').startsWith('web-');
-  if (typeFilter === 'uploaded') return !isNoteItem(item) && item.platformKey !== 'web' && !String(item.id || '').startsWith('web-');
+  if (typeFilter === 'links') return isLinkItem(item);
+  if (typeFilter === 'screenshots') return isExtensionCaptureItem(item);
+  if (typeFilter === 'voice_notes') return isVoiceNoteItem(item);
+  if (typeFilter === 'uploaded') return !isNoteItem(item) && !isLinkItem(item) && !isExtensionCaptureItem(item) && !isVoiceNoteItem(item);
   return true;
 }
 
@@ -602,6 +612,22 @@ function itemStateMatches(item, stateFilter) {
   if (stateFilter === 'enriched') return DASHBOARD_ENRICHED_STAGES.has(item.indexingStage);
   if (stateFilter === 'failed') return item.indexingStage === 'index_failed' || item.status === 'failed' || item.status === 'paused';
   return true;
+}
+
+function itemCollections(item) {
+  return unique([...(item.raw?.collections || []), item.collection].filter((value) => value && value !== 'Unsorted'));
+}
+
+function itemMatchesCollection(item, collectionFilter) {
+  return collectionFilter === 'all' || itemCollections(item).includes(collectionFilter);
+}
+
+function platformOptionsForItems(items = []) {
+  return ['all', ...unique(items
+    .filter((item) => !isNoteItem(item))
+    .map((item) => item.platform)
+    .filter((value) => value && !['Example', 'IScraper Notes'].includes(value)))
+    .sort((a, b) => String(a).localeCompare(String(b)))];
 }
 
 function sortedItems(items, sortOrder) {
@@ -725,7 +751,9 @@ function filterLabel(value) {
   const labels = {
     all: 'All',
     uploaded: 'Uploaded',
-    links: 'Links',
+    links: 'All Links',
+    screenshots: 'Screenshots',
+    voice_notes: 'Voice Notes',
     notes: 'My Notes',
     needs_review: 'Needs check',
     searchable: 'In Library',
@@ -4246,19 +4274,26 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const searchActive = searchResults !== null;
   const boardItems = searchActive ? searchResults : libraryItems;
   const collections = useMemo(() => (
-    searchActive ? ['all', ...unique(boardItems.map((item) => item.collection))] : libraryFacets.collections
+    searchActive ? ['all', ...unique(boardItems.flatMap(itemCollections)).sort((a, b) => String(a).localeCompare(String(b)))] : libraryFacets.collections
   ), [boardItems, libraryFacets.collections, searchActive]);
   const platforms = useMemo(() => (
-    searchActive ? ['all', ...unique(boardItems.map((item) => item.platform))] : libraryFacets.platforms
+    searchActive ? platformOptionsForItems(boardItems) : libraryFacets.platforms
   ), [boardItems, libraryFacets.platforms, searchActive]);
   const pendingReviews = useMemo(() => items.filter((item) => item.sourceStatus === 'needs_review'), [items]);
+
+  useEffect(() => {
+    if (!TYPE_FILTERS.includes(typeFilter)) setTypeFilter('all');
+    if (!STATE_FILTERS.includes(stateFilter)) setStateFilter('all');
+    if (!collections.includes(collectionFilter)) setCollectionFilter('all');
+    if (!platforms.includes(platformFilter)) setPlatformFilter('all');
+  }, [collectionFilter, collections, platformFilter, platforms, stateFilter, typeFilter]);
 
   const filtered = useMemo(() => {
     if (!searchActive) return libraryItems;
     return sortedItems(boardItems.filter((item) => {
       if (!itemTypeMatches(item, typeFilter)) return false;
       if (!itemStateMatches(item, stateFilter)) return false;
-      if (collectionFilter !== 'all' && item.collection !== collectionFilter) return false;
+      if (!itemMatchesCollection(item, collectionFilter)) return false;
       if (platformFilter !== 'all' && item.platform !== platformFilter) return false;
       return true;
     }), sortOrder);

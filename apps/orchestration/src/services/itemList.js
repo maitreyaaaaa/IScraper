@@ -26,7 +26,7 @@ function normalizeListOptions(options = {}) {
     limit,
     offset: normalizeCursor(options.cursor),
     sort: ['newest', 'oldest', 'updated', 'title'].includes(options.sort) ? options.sort : 'newest',
-    type: ['all', 'uploaded', 'links', 'notes'].includes(options.type) ? options.type : 'all',
+    type: ['all', 'uploaded', 'links', 'screenshots', 'voice_notes', 'notes'].includes(options.type) ? options.type : 'all',
     state: ['all', 'needs_review', 'searchable', 'enriched', 'failed'].includes(options.state) ? options.state : 'all',
     collection: cleanFilter(options.collection),
     platform: cleanFilter(options.platform),
@@ -42,6 +42,10 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function isExtensionCaptureItem(item) {
+  return item?.platformKey === 'iscraper-extension-capture';
+}
+
 function indexingStageFromStatus(status = 'queued', analysis = null) {
   if (status === 'failed') return 'index_failed';
   if (status === 'done') {
@@ -54,18 +58,24 @@ function indexingStageFromStatus(status = 'queued', analysis = null) {
 }
 
 function isNoteItem(item) {
-  return item?.contentType === 'note' || item?.platformKey === 'iscraper-note';
+  return !isExtensionCaptureItem(item) && (item?.contentType === 'note' || item?.platformKey === 'iscraper-note');
 }
 
 function isLinkItem(item) {
   return item?.platformKey === 'web' || String(item?.id || '').startsWith('web-');
 }
 
+function isVoiceNoteItem(item) {
+  return ['voice', 'voice_note', 'audio'].includes(item?.contentType) || item?.platformKey === 'iscraper-voice-note';
+}
+
 function itemTypeMatches(item, type) {
   if (type === 'all') return true;
   if (type === 'notes') return isNoteItem(item);
   if (type === 'links') return isLinkItem(item);
-  if (type === 'uploaded') return !isNoteItem(item) && !isLinkItem(item);
+  if (type === 'screenshots') return isExtensionCaptureItem(item);
+  if (type === 'voice_notes') return isVoiceNoteItem(item);
+  if (type === 'uploaded') return !isNoteItem(item) && !isLinkItem(item) && !isExtensionCaptureItem(item) && !isVoiceNoteItem(item);
   return true;
 }
 
@@ -96,7 +106,11 @@ function sortedItems(items, sort) {
 function facetsForItems(items = []) {
   return {
     collections: ['all', ...unique(items.flatMap((item) => item.collections || []).filter((value) => value && value !== 'Unsorted')).sort((a, b) => String(a).localeCompare(String(b)))],
-    platforms: ['all', ...unique(items.map((item) => item.platform || 'Instagram')).sort((a, b) => String(a).localeCompare(String(b)))],
+    platforms: ['all', ...unique(items
+      .filter((item) => !isNoteItem(item))
+      .map((item) => item.platform || 'Instagram')
+      .filter((value) => value && !['Example', 'IScraper Notes'].includes(value)))
+      .sort((a, b) => String(a).localeCompare(String(b)))],
   };
 }
 
