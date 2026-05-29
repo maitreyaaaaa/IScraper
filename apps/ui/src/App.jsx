@@ -4357,27 +4357,41 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           const initialUserMessage = createLibraryChatMessage('user', searchText);
           setLibraryChat({
             open: true,
+            mode: 'web',
             query: searchText,
             messages: [initialUserMessage],
             loading: true,
             error: '',
+            progress: webSearchProgress('loading', 'pending'),
           });
-          const chatBody = await askLibraryChat(searchText, [{ role: 'user', content: searchText }]);
+          const savedBody = await searchItems(searchText, {}, { includeAi: false });
+          if (activeSearchRef.current !== searchRun) return;
+          const savedResults = (savedBody.results || []).map(mapItem);
+          setSearchResults(savedResults);
+          setSearchMeta({ eventId: savedBody.searchEventId || '', ai: null, feedback: {} });
+          setLibraryChat((current) => ({
+            ...current,
+            progress: webSearchProgress('done', 'loading'),
+          }));
+          const chatBody = await askLibraryChat(searchText, [{ role: 'user', content: searchText }], { includeWeb: true });
           if (activeSearchRef.current !== searchRun) return;
           const chatResults = (chatBody.results || []).map(mapItem);
+          const nextResults = chatResults.length ? chatResults : savedResults;
           const assistantMessage = createLibraryChatMessage(
             'assistant',
             chatBody.ai?.answer || chatBody.ai?.error || 'I found matching saves. Ask a follow-up and I will answer from your Library.',
-            { ai: chatBody.ai || null, results: chatResults }
+            { ai: chatBody.ai || null, results: nextResults }
           );
-          setSearchResults(chatResults);
+          setSearchResults(nextResults);
           setSearchMeta({ eventId: chatBody.searchEventId || '', ai: chatBody.ai || null, feedback: {} });
           setLibraryChat((current) => ({
             ...current,
+            mode: 'web',
             query: searchText,
             messages: [initialUserMessage, assistantMessage],
             loading: false,
             error: '',
+            progress: webSearchProgress('done', webStepStatusFromAi(chatBody.ai)),
           }));
         } else {
           const body = await searchItems(searchText, {}, { includeAi: true });
@@ -4405,6 +4419,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           ...current,
           loading: false,
           error: err.message,
+          progress: webSearchProgress(
+            current.progress?.find((step) => step.key === 'saved')?.status === 'done' ? 'done' : 'failed',
+            'failed'
+          ),
         }));
       }
     } finally {
@@ -4427,22 +4445,25 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setSearchMode('web');
     setLibraryChat({
       open: true,
+      mode: 'web',
       query: cleanQuery,
       messages,
       loading: false,
       error: '',
+      progress: null,
     });
   }, [items, libraryChat.query, query, searchMeta.ai, searchResults]);
 
   const handleSearchModeChange = useCallback((mode) => {
     if (!SEARCH_MODES.includes(mode)) return;
     setSearchMode(mode);
-    setLibraryChat((current) => ({ ...current, open: false, loading: false, error: '' }));
+    setLibraryChat((current) => ({ ...current, mode, open: false, loading: false, error: '', progress: null }));
   }, []);
 
   const handleLibraryChatSubmit = useCallback(async (question) => {
     const cleanQuestion = String(question || '').trim();
     if (!cleanQuestion || !requireSignIn('ask your library')) return;
+    const includeWeb = libraryChat.mode === 'web' || searchMode === 'web';
 
     const userMessage = createLibraryChatMessage('user', cleanQuestion);
     const requestMessages = [...libraryChat.messages, userMessage]
@@ -4455,10 +4476,21 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       messages: [...current.messages, userMessage],
       loading: true,
       error: '',
+      progress: includeWeb ? webSearchProgress('loading', 'pending') : current.progress,
     }));
 
     try {
-      const body = await askLibraryChat(cleanQuestion, requestMessages);
+      if (includeWeb) {
+        const savedBody = await searchItems(cleanQuestion, {}, { includeAi: false });
+        const savedResults = (savedBody.results || []).map(mapItem);
+        setSearchResults(savedResults);
+        setSearchMeta({ eventId: savedBody.searchEventId || '', ai: null, feedback: {} });
+        setLibraryChat((current) => ({
+          ...current,
+          progress: webSearchProgress('done', 'loading'),
+        }));
+      }
+      const body = await askLibraryChat(cleanQuestion, requestMessages, includeWeb ? { includeWeb: true } : {});
       const mappedResults = (body.results || []).map(mapItem);
       const assistantMessage = createLibraryChatMessage(
         'assistant',
@@ -4471,15 +4503,20 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         messages: [...current.messages, assistantMessage],
         loading: false,
         error: '',
+        progress: includeWeb ? webSearchProgress('done', webStepStatusFromAi(body.ai)) : current.progress,
       }));
     } catch (err) {
       setLibraryChat((current) => ({
         ...current,
         loading: false,
         error: err.message,
+        progress: includeWeb ? webSearchProgress(
+          current.progress?.find((step) => step.key === 'saved')?.status === 'done' ? 'done' : 'failed',
+          'failed'
+        ) : current.progress,
       }));
     }
-  }, [libraryChat.messages, requireSignIn]);
+  }, [libraryChat.messages, libraryChat.mode, requireSignIn, searchMode]);
 
   const handleSearchFeedback = async (itemId, rating) => {
     if (!searchMeta.eventId) return;
@@ -8169,8 +8206,22 @@ function createLibraryChatMessage(role, content, extra = {}) {
   };
 }
 
+function webSearchProgress(savedStatus = 'pending', webStatus = 'pending') {
+  return [
+    { key: 'saved', label: 'Searching your saved', status: savedStatus },
+    { key: 'web', label: 'Searching the web', status: webStatus },
+  ];
+}
+
+function webStepStatusFromAi(ai) {
+  if (ai?.error) return 'failed';
+  if (ai?.answer) return 'done';
+  return 'failed';
+}
+
 function SearchAiPanel({ ai, items, onSelect, onFollowUp, inline = false }) {
   if (!ai) return null;
+  const webCitations = (ai.webCitations || ai.sources || []).filter((citation) => citation.url);
   if (ai.error) {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5 text-sm leading-6 text-muted-foreground">
@@ -8234,6 +8285,51 @@ function SearchAiPanel({ ai, items, onSelect, onFollowUp, inline = false }) {
         })}
       </div>
       )}
+      {webCitations.length > 0 && (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {webCitations.slice(0, 5).map((citation) => (
+            <a
+              key={citation.url}
+              href={citation.url}
+              target="_blank"
+              rel="noreferrer"
+              className="max-w-full rounded-full border border-white/10 px-3 py-1.5 text-left text-xs text-muted-foreground transition hover:border-primary hover:text-foreground"
+              title={citation.snippet || citation.title}
+            >
+              <span className="inline-flex items-center gap-1">
+                <span className="line-clamp-1">{citation.title || citation.url}</span>
+                <ExternalLink className="h-3 w-3 shrink-0" />
+              </span>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatProgressSteps({ steps = [] }) {
+  if (!steps.length) return null;
+  return (
+    <div className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.025] px-4 py-3" role="status" aria-live="polite">
+      {steps.map((step) => {
+        const done = step.status === 'done';
+        const failed = step.status === 'failed';
+        return (
+          <div key={step.key} className="flex items-center gap-3 text-sm text-muted-foreground">
+            <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full border ${
+              done
+                ? 'border-primary bg-primary text-primary-foreground'
+                : failed
+                  ? 'border-destructive/50 bg-destructive/10 text-destructive'
+                  : 'border-white/10 bg-black text-muted-foreground'
+            }`}>
+              {done ? <Check className="h-3.5 w-3.5" /> : failed ? <AlertCircle className="h-3.5 w-3.5" /> : step.status === 'loading' ? <LoadingSpinner className="h-3.5 w-3.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+            </span>
+            <span>{step.label}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -8308,10 +8404,13 @@ function LibraryChatPanel({ chat, items, onAsk, onClose, onSelect }) {
             );
           })}
           {chat.loading && (
-            <div className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.025] px-4 py-3 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin text-primary" /> Searching your Library...
-            </div>
+            chat.progress?.length ? <ChatProgressSteps steps={chat.progress} /> : (
+              <div className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.025] px-4 py-3 text-sm text-muted-foreground">
+                <LoadingSpinner /> Searching your Library...
+              </div>
+            )
           )}
+          {!chat.loading && chat.progress?.length ? <ChatProgressSteps steps={chat.progress} /> : null}
           {chat.error && (
             <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
               {chat.error}

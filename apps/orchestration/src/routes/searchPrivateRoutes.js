@@ -99,11 +99,14 @@ function registerPrivateSearchRoutes(app, deps) {
         question,
         messages: req.body.messages || [],
         results,
+        includeWeb: req.body.includeWeb === true,
       });
       captureWorkflow(req, 'library chat answered', {
         searchEventId: answer.searchEventId,
         resultCount: answer.results.length,
         citationCount: answer.ai?.citations?.length || 0,
+        webCitationCount: answer.ai?.webCitations?.length || 0,
+        includeWeb: req.body.includeWeb === true,
       });
       return res.json(answer);
     } catch (error) {

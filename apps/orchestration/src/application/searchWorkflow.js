@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { createOpenRouterEmbedding } = require('../services/embeddings');
-const { createOpenRouterLibraryChatAnswer, createOpenRouterSearchAnswer } = require('../services/aiSearch');
+const { createOpenAiWebSearchAnswer, createOpenRouterLibraryChatAnswer, createOpenRouterSearchAnswer } = require('../services/aiSearch');
 const { recordRequestTiming } = require('../services/observability');
 const { cleanText, withTimeout } = require('./common');
 
@@ -186,7 +186,7 @@ function createSearchWorkflow({ store, config, http }) {
       : [];
   }
 
-  async function runLibraryChatAnswer({ req, userId, question, messages = [], results }) {
+  async function runLibraryChatAnswer({ req, userId, question, messages = [], results, includeWeb = false }) {
     const cleanQuestion = cleanText(question || '', 240);
     if (!cleanQuestion) {
       const error = new Error('Ask a question before chatting with your library.');
@@ -202,14 +202,14 @@ function createSearchWorkflow({ store, config, http }) {
         userId,
         query: topResults.length === 0 ? cleanQuestion : '',
         queryLength: cleanQuestion.length,
-        filters: { source: 'library-chat', limit: topResults.length },
+        filters: { source: includeWeb ? 'library-chat-web' : 'library-chat', limit: topResults.length },
         resultCount: topResults.length,
         includeAi: true,
         resultIds: topResults.map((item) => item.id),
       });
     }
 
-    if (!topResults.length) {
+    if (!topResults.length && !includeWeb) {
       return {
         searchEventId,
         ai: {
@@ -235,6 +235,50 @@ function createSearchWorkflow({ store, config, http }) {
 
     assertAiSearchUsageAllowed(req, config, clientIp);
     const model = config.aiSearchModel || config.openAiModel || 'gpt-4o';
+    if (includeWeb) {
+      try {
+        const webAi = await withTimeout(
+          createOpenAiWebSearchAnswer({
+            apiKey: config.openAiApiKey,
+            model,
+            question: cleanQuestion,
+            messages: normalizeChatMessages(messages),
+            results: topResults,
+          }),
+          aiTimeoutMs(),
+          'Web search timed out.'
+        );
+        return {
+          searchEventId,
+          ai: webAi ? { ...webAi, model, resultIds: topResults.map((item) => item.id), cached: false } : null,
+          results: topResults,
+          progress: {
+            saved: { status: 'done', count: topResults.length },
+            web: { status: webAi ? 'done' : 'failed' },
+          },
+        };
+      } catch (error) {
+        return {
+          searchEventId,
+          ai: {
+            error: error.statusCode === 429
+              ? 'Web search is rate-limited right now. Your saved matches are still shown, and you can try again after the OpenAI limit resets.'
+              : /timed out/i.test(error.message)
+                ? 'Web search is taking too long right now. Your saved matches are still shown, and you can try again.'
+                : 'Web search is unavailable right now. Showing matching saves instead.',
+            citations: [],
+            webCitations: [],
+            suggestions: ['Try again', 'Ask a shorter question'],
+            mode: 'web',
+          },
+          results: topResults,
+          progress: {
+            saved: { status: 'done', count: topResults.length },
+            web: { status: 'failed' },
+          },
+        };
+      }
+    }
     let ai;
     try {
       ai = await withTimeout(

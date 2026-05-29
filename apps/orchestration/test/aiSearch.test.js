@@ -2,8 +2,10 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  buildOpenAiWebSearchRequest,
   buildOpenRouterLibraryChatRequest,
   buildOpenRouterSearchAnswerRequest,
+  createOpenAiWebSearchAnswer,
   createOpenRouterLibraryChatAnswer,
   createOpenRouterSearchAnswer,
   publicResultSnippet,
@@ -49,6 +51,28 @@ test('buildOpenRouterSearchAnswerRequest asks for grounded JSON only', () => {
   assert.match(request.messages[0].content, /30-50 word answer/);
   assert.match(request.messages[0].content, /best matching saved item/);
   assert.match(request.messages[1].content, /security audit/);
+});
+
+test('buildOpenAiWebSearchRequest includes saved snippets and web search tool', () => {
+  const request = buildOpenAiWebSearchRequest({
+    model: 'gpt-4o',
+    question: 'What is an AI engine?',
+    messages: [{ role: 'user', content: 'Earlier question' }],
+    results: [
+      {
+        id: 'save-1',
+        url: 'https://example.com/ai',
+        analysis: { title: 'Saved AI note', summary: 'AI engine explainer' },
+      },
+    ],
+  });
+
+  assert.equal(request.model, 'gpt-4o');
+  assert.equal(request.tools[0].type, 'web_search_preview');
+  assert.match(request.input[0].content, /Search the web/);
+  const payload = JSON.parse(request.input[1].content);
+  assert.equal(payload.question, 'What is an AI engine?');
+  assert.equal(payload.savedLibrarySnippets[0].id, 'save-1');
 });
 
 test('buildOpenRouterLibraryChatRequest keeps follow-ups grounded in saved snippets', () => {
@@ -182,6 +206,59 @@ test('createOpenRouterLibraryChatAnswer returns citations from retrieved saves o
     },
   ]);
   assert.deepEqual(answer.suggestions, ['show me control evidence']);
+});
+
+test('createOpenAiWebSearchAnswer returns web citations from Responses API annotations', async () => {
+  const answer = await createOpenAiWebSearchAnswer({
+    apiKey: 'test-key',
+    model: 'gpt-4o',
+    question: 'What is an AI engine?',
+    results: [
+      {
+        id: 'save-1',
+        analysis: { title: 'Saved AI note', summary: 'AI engine explainer' },
+      },
+    ],
+    fetchImpl: async (url, options) => {
+      assert.equal(url, 'https://api.openai.com/v1/responses');
+      assert.match(options.headers.Authorization, /Bearer test-key/);
+      const request = JSON.parse(options.body);
+      assert.equal(request.tools[0].type, 'web_search_preview');
+      return {
+        ok: true,
+        json: async () => ({
+          output: [
+            {
+              type: 'message',
+              content: [
+                {
+                  type: 'output_text',
+                  text: 'An AI engine is the runtime and model layer that powers AI features.',
+                  annotations: [
+                    {
+                      type: 'url_citation',
+                      url: 'https://example.com/ai-engine',
+                      title: 'AI Engine overview',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      };
+    },
+  });
+
+  assert.equal(answer.answer, 'An AI engine is the runtime and model layer that powers AI features.');
+  assert.deepEqual(answer.webCitations, [
+    {
+      url: 'https://example.com/ai-engine',
+      title: 'AI Engine overview',
+      snippet: '',
+    },
+  ]);
+  assert.equal(answer.mode, 'web');
 });
 
 test('createOpenRouterSearchAnswer repairs common JSON formatting issues', async () => {

@@ -30,6 +30,7 @@ function publicResultSnippet(item, index) {
 }
 
 const OPENAI_CHAT_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
+const OPENAI_RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o';
 
 function openAiHeaders(apiKey) {
@@ -118,6 +119,42 @@ function buildOpenRouterLibraryChatRequest({
   };
 }
 
+function buildOpenAiWebSearchRequest({
+  model = DEFAULT_OPENAI_MODEL,
+  question,
+  results = [],
+  messages = [],
+  toolType = 'web_search_preview',
+}) {
+  return {
+    model,
+    tools: [{ type: toolType }],
+    tool_choice: 'auto',
+    max_output_tokens: 1200,
+    input: [
+      {
+        role: 'system',
+        content: [
+          'You are IScraper web search.',
+          'Answer using live web search and the provided saved-library snippets.',
+          'Search the web for current or external facts when useful.',
+          'Mention when a useful saved item also relates to the answer.',
+          'Keep the answer direct, practical, and non-technical.',
+          'Do not invent saved items or URLs.',
+        ].join(' '),
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          question: compactText(question, 240),
+          conversation: compactConversation(messages),
+          savedLibrarySnippets: results.map(publicResultSnippet),
+        }),
+      },
+    ],
+  };
+}
+
 function buildPlainTextRetryRequest(request) {
   return {
     ...request,
@@ -141,6 +178,23 @@ async function fetchOpenAiChat({ apiKey, request, fetchImpl }) {
 
   const body = await response.json().catch(() => ({}));
   return { response, body };
+}
+
+async function fetchOpenAiResponses({ apiKey, request, fetchImpl }) {
+  const response = await fetchImpl(OPENAI_RESPONSES_ENDPOINT, {
+    method: 'POST',
+    headers: openAiHeaders(apiKey),
+    body: JSON.stringify(request),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  return { response, body };
+}
+
+function openAiApiError(body, fallback, statusCode = 500) {
+  const error = new Error(body?.error?.message || fallback);
+  error.statusCode = statusCode;
+  return error;
 }
 
 function parseJsonContent(content) {
@@ -182,6 +236,49 @@ function plainTextAiSearchAnswer(content, results = []) {
     citations,
     suggestions: [],
   };
+}
+
+function responseOutputText(body = {}) {
+  if (body.output_text) return compactText(body.output_text, 2400);
+  const messages = Array.isArray(body.output) ? body.output : [];
+  return compactText(messages
+    .flatMap((item) => Array.isArray(item.content) ? item.content : [])
+    .map((content) => content.text || '')
+    .filter(Boolean)
+    .join('\n'), 2400);
+}
+
+function normalizeUrlCitation(annotation = {}) {
+  const url = annotation.url || annotation.uri || '';
+  if (!url) return null;
+  return {
+    url,
+    title: compactText(annotation.title || annotation.url || url, 180),
+    snippet: compactText(annotation.snippet || annotation.text || '', 260),
+  };
+}
+
+function responseWebCitations(body = {}) {
+  const citations = [];
+  const seen = new Set();
+  const addCitation = (entry) => {
+    const normalized = normalizeUrlCitation(entry);
+    if (!normalized || seen.has(normalized.url)) return;
+    seen.add(normalized.url);
+    citations.push(normalized);
+  };
+
+  for (const item of Array.isArray(body.output) ? body.output : []) {
+    if (Array.isArray(item.sources)) {
+      item.sources.forEach(addCitation);
+    }
+    for (const content of Array.isArray(item.content) ? item.content : []) {
+      for (const annotation of Array.isArray(content.annotations) ? content.annotations : []) {
+        if (annotation.type === 'url_citation' || annotation.url || annotation.uri) addCitation(annotation);
+      }
+    }
+  }
+  return citations.slice(0, 8);
 }
 
 function normalizeAiSearchAnswer(parsed = {}, results = []) {
@@ -299,9 +396,50 @@ async function createOpenRouterLibraryChatAnswer({
   }
 }
 
+async function createOpenAiWebSearchAnswer({
+  apiKey,
+  model = DEFAULT_OPENAI_MODEL,
+  question,
+  results = [],
+  messages = [],
+  fetchImpl = fetch,
+}) {
+  if (!apiKey || !compactText(question)) return null;
+
+  const attempt = async (toolType) => {
+    const request = buildOpenAiWebSearchRequest({ model, question, results, messages, toolType });
+    const { response, body } = await fetchOpenAiResponses({ apiKey, request, fetchImpl });
+    if (!response.ok) {
+      throw openAiApiError(body, `OpenAI web search failed with ${response.status}`, response.status);
+    }
+    return body;
+  };
+
+  let body;
+  try {
+    body = await attempt('web_search_preview');
+  } catch (error) {
+    if (error.statusCode && error.statusCode !== 400) throw error;
+    body = await attempt('web_search');
+  }
+
+  const answer = responseOutputText(body);
+  if (!answer) throw new Error('OpenAI returned no web search answer.');
+  return {
+    answer,
+    citations: [],
+    webCitations: responseWebCitations(body),
+    sources: responseWebCitations(body),
+    suggestions: [],
+    mode: 'web',
+  };
+}
+
 module.exports = {
+  buildOpenAiWebSearchRequest,
   buildOpenRouterLibraryChatRequest,
   buildOpenRouterSearchAnswerRequest,
+  createOpenAiWebSearchAnswer,
   createOpenRouterLibraryChatAnswer,
   createOpenRouterSearchAnswer,
   normalizeAiSearchAnswer,
