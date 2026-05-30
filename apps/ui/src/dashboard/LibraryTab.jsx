@@ -187,17 +187,17 @@ function ImportHealthPanel({ health, pendingReviewCount, indexingActivity }) {
   }[health.state] || { icon: FileText, color: 'text-muted-foreground', label: 'Waiting' };
   const Icon = healthMeta.icon;
   const checks = [
-    ['Ready to save', health.title, health.copy, Icon, healthMeta.color],
-    ['Needs your OK', `${formatUsageNumber(pendingReviewCount)} waiting`, pendingReviewCount ? 'Review these saved links before they appear in your library.' : 'Nothing is waiting for you right now.', CheckCircle2, pendingReviewCount ? 'text-muted-foreground' : 'text-primary'],
-    ['Still updating', `${formatUsageNumber(indexingActivity.activeTotal)} active`, indexingActivity.activeTotal ? 'We are adding more details in the background.' : 'Nothing is updating in the background right now.', indexingActivity.activeTotal ? Loader2 : CheckCircle2, indexingActivity.activeTotal ? 'text-muted-foreground' : 'text-primary'],
+    ['Files', health.title, Icon, healthMeta.color],
+    ['Review', `${formatUsageNumber(pendingReviewCount)} waiting`, CheckCircle2, pendingReviewCount ? 'text-muted-foreground' : 'text-primary'],
+    ['Indexing', `${formatUsageNumber(indexingActivity.activeTotal)} active`, indexingActivity.activeTotal ? Loader2 : CheckCircle2, indexingActivity.activeTotal ? 'text-muted-foreground' : 'text-primary'],
   ];
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Before saving</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">We will check the files first</h2>
+          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Status</div>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">File status</h2>
         </div>
         {health.selectedCount > 0 && (
           <span className="rounded-full border border-white/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -206,13 +206,12 @@ function ImportHealthPanel({ health, pendingReviewCount, indexingActivity }) {
         )}
       </div>
       <div className="grid gap-3 md:grid-cols-3">
-        {checks.map(([label, title, copy, CheckIcon, color]) => (
+        {checks.map(([label, title, CheckIcon, color]) => (
           <div key={label} className="rounded-xl border border-white/10 bg-black/40 p-4">
             <div className={`mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] ${color}`}>
               <CheckIcon className={`h-3.5 w-3.5 ${CheckIcon === Loader2 ? 'animate-spin' : ''}`} /> {label}
             </div>
             <div className="text-sm font-semibold">{title}</div>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">{copy}</p>
           </div>
         ))}
       </div>
@@ -221,81 +220,6 @@ function ImportHealthPanel({ health, pendingReviewCount, indexingActivity }) {
           Large uploads may take a little longer. You can keep this page open while we prepare them.
         </p>
       )}
-    </section>
-  );
-}
-
-function ActivationPathCard({ activationState, onTrySearch }) {
-  const steps = [
-    {
-      key: 'add',
-      label: 'Add',
-      title: 'Paste a link',
-      copy: activationState.total
-        ? `${formatUsageNumber(activationState.total)} saved so far`
-        : 'Save one link, note, or export.',
-      icon: ExternalLink,
-    },
-    {
-      key: 'approve',
-      label: 'Organize',
-      title: 'IScraper sorts it',
-      copy: activationState.needsReview
-        ? `${formatUsageNumber(activationState.needsReview)} waiting for cleanup`
-        : 'Parser rules and AI improve details later.',
-      icon: Sparkles,
-    },
-    {
-      key: 'search',
-      label: 'Search',
-      title: 'Find it later',
-      copy: activationState.searchable
-        ? `${formatUsageNumber(activationState.searchable)} searchable`
-        : 'Search starts as soon as it is saved.',
-      icon: Search,
-    },
-  ];
-
-  return (
-    <section className="rounded-2xl border border-primary/25 bg-primary/5 p-5">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Simple save path</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Save now, organize automatically</h2>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">Click Save once. IScraper handles the cleanup in the background.</p>
-        </div>
-        {activationState.searchable > 0 && (
-          <button
-            type="button"
-            onClick={() => onTrySearch(activationState.searchQuery)}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
-          >
-            <Search className="h-4 w-4" /> Search this save
-          </button>
-        )}
-      </div>
-      <div className="mt-5 grid gap-3 md:grid-cols-3">
-        {steps.map(({ key, label, title, copy, icon: Icon }, index) => {
-          const active = activationState.currentStep === key;
-          const complete = key === 'add'
-            ? activationState.total > 0
-            : key === 'approve'
-              ? activationState.searchable > 0
-              : false;
-          return (
-            <div key={key} className={`rounded-xl border p-4 ${active ? 'border-primary bg-black/50' : 'border-white/10 bg-black/30'}`}>
-              <div className={`mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] ${active ? 'text-primary' : complete ? 'text-foreground' : 'text-muted-foreground'}`}>
-                <span className="grid h-7 w-7 place-items-center rounded-full border border-white/10">{complete ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
-                {label}
-              </div>
-              <div className="flex items-center gap-2 font-semibold">
-                <Icon className="h-4 w-4 text-primary" /> {title}
-              </div>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">{copy}</p>
-            </div>
-          );
-        })}
-      </div>
     </section>
   );
 }
@@ -1394,7 +1318,6 @@ const PinCard = memo(function PinCard({ item, index, height = 420, onClick, sear
   );
 });
 export {
-  ActivationPathCard,
   activityFromIndexingSummary,
   buildActivationState,
   createLibraryChatMessage,

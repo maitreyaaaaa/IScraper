@@ -20,7 +20,7 @@ import {
   useState,
   X,
 } from '../AppShared.jsx';
-import { ActivationPathCard, ImportHealthPanel, IndexingProgressCard } from './LibraryTab.jsx';
+import { ImportHealthPanel, IndexingProgressCard } from './LibraryTab.jsx';
 function UploadTab({
   files,
   setFiles,
@@ -75,7 +75,10 @@ function UploadTab({
         <div>
           <h1 className="font-display text-4xl font-bold tracking-tight">Add to your library</h1>
           <p className="mt-2 text-sm text-muted-foreground">Save a note, paste a link, or upload files from Instagram, Pinterest, or X.</p>
-          <p className="mt-3 max-w-3xl rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
+          <details className="mt-3 max-w-3xl rounded-xl border border-white/10 bg-white/[0.025] px-3 py-2 text-xs text-muted-foreground">
+            <summary className="cursor-pointer font-semibold text-foreground">Processing note</summary>
+            <p className="mt-2 leading-5">{AI_PROCESSING_NOTICE}</p>
+          </details>
         </div>
         <button
           type="button"
@@ -85,8 +88,6 @@ function UploadTab({
           <FileText className="h-4 w-4" /> How to Use
         </button>
       </div>
-
-      <ActivationPathCard activationState={activationState} onTrySearch={onTrySearch} />
 
       <div className="grid gap-2 rounded-2xl border border-white/10 bg-white/[0.025] p-2 md:grid-cols-3">
         {addModeOptions.map(({ value, label, icon: Icon }) => (
@@ -122,14 +123,13 @@ function UploadTab({
       >
         <Upload className="mx-auto mb-5 h-10 w-10 text-primary" />
         <h3 className="mb-2 font-display text-xl font-bold">Drop your files here</h3>
-        <p className="mx-auto mb-5 max-w-2xl text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
         <p className="mb-6 font-mono text-xs text-muted-foreground">Instagram ZIP/HTML/JSON · Pinterest ZIP/JSON/CSV · X bookmark ZIP/JS/JSON/CSV/TXT</p>
         <button
           type="button"
           onClick={onOpenHowTo}
           className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-xs text-muted-foreground transition hover:text-foreground"
         >
-          <FileText className="h-3.5 w-3.5" /> Need the export steps?
+          <FileText className="h-3.5 w-3.5" /> Guide
         </button>
         <br />
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
@@ -206,10 +206,6 @@ function UploadTab({
           <div>
             <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Create note</div>
             <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Write a note for your library</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              Notes appear in your Library right away. You can add links and small images.
-            </p>
-            <p className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
           </div>
           <span className="rounded-full border border-white/10 px-3 py-2 text-xs text-muted-foreground">Images: PNG, JPEG, WebP, GIF · 5 MB</span>
         </div>
@@ -293,7 +289,7 @@ function UploadTab({
 
       <IndexingProgressCard activity={indexingActivity} />
 
-      {activeAddMode === 'upload' && (
+      {activeAddMode === 'upload' && (files.length > 0 || pendingReviews.length > 0 || indexingActivity.activeTotal > 0) && (
       <>
         <ImportHealthPanel health={importHealth} pendingReviewCount={pendingReviews.length} indexingActivity={indexingActivity} />
       </>
@@ -304,10 +300,6 @@ function UploadTab({
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Save a link</div>
           <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Paste a link you want to keep</h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            We save it immediately, then improve the title, source, and collections in the background.
-          </p>
-          <p className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
         </div>
         <input
           ref={linkInputRef}
@@ -350,8 +342,6 @@ function UploadTab({
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Advanced cleanup</div>
               <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">{pendingReviews.length} saved links can be cleaned up</h2>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">Update optional title, note, or collection details when you want more control.</p>
-              <p className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
             </div>
             <button
               type="button"
@@ -378,25 +368,6 @@ function UploadTab({
                 onApprove={onApproveReview}
               />
             ))}
-          </div>
-        </section>
-      )}
-
-      {pendingReviews.length === 0 && activationState.searchable > 0 && (
-        <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Step 3 - search</div>
-              <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Now prove you can find it again</h2>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">Search by title, topic, source, or the reason you saved it.</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onTrySearch(activationState.searchQuery)}
-              className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
-            >
-              <Search className="h-4 w-4" /> Search this save
-            </button>
           </div>
         </section>
       )}

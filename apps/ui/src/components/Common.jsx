@@ -83,13 +83,12 @@ function AnimatedFeatureSelect({ value, onChange, options = FEEDBACK_FEATURE_OPT
   );
 }
 
-function AuthRequiredPanel({ title, copy, busy, onSignIn }) {
+function AuthRequiredPanel({ busy, onSignIn }) {
   return (
     <div className="grid min-h-[70vh] place-items-center px-6 py-16">
       <div className="glow-ring w-full max-w-md rounded-2xl border border-white/10 bg-black p-8 text-center">
         <Lock className="mx-auto h-8 w-8 text-primary" />
-        <h1 className="mt-5 font-display text-4xl font-bold tracking-tight">{title}</h1>
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">{copy}</p>
+        <h1 className="mt-5 font-display text-4xl font-bold tracking-tight">Sign in to continue</h1>
         <button
           type="button"
           onClick={onSignIn}
@@ -109,8 +108,7 @@ function ProfileRequiredPanel({ profileForm, setProfileForm, onAvatarFile, onSav
   return (
     <div className="grid min-h-[70vh] place-items-center px-6 py-16">
       <form onSubmit={onSave} className="glow-ring w-full max-w-md rounded-2xl border border-white/10 bg-black p-8">
-        <h1 className="font-display text-4xl font-bold tracking-tight">Choose your username</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Required before importing. Usernames are unique.</p>
+        <h1 className="font-display text-4xl font-bold tracking-tight">Choose username</h1>
         <label className="mt-6 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Username</label>
         <input
           value={profileForm.username}
@@ -188,8 +186,7 @@ function OnboardingPreferencesPanel({ form, setForm, onSave, onSkip, busy }) {
   return (
     <div className="glow-ring rounded-2xl border border-white/10 bg-black p-6">
       <Sparkles className="h-8 w-8 text-primary" />
-      <h2 className="mt-5 font-display text-3xl font-bold tracking-tight">Personalize IScraper</h2>
-      <p className="mt-2 text-sm leading-6 text-muted-foreground">Choose what you plan to save. This only sets better defaults; you can still save anything later.</p>
+      <h2 className="mt-5 font-display text-3xl font-bold tracking-tight">Personalize</h2>
       <div className="mt-6 space-y-5">
         <OnboardingPreferencesFields form={form} setForm={setForm} />
       </div>

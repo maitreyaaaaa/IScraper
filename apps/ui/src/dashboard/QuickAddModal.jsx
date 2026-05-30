@@ -1,5 +1,4 @@
 import {
-  AI_PROCESSING_NOTICE,
   ArrowLeft,
   Database,
   ExternalLink,
@@ -87,9 +86,9 @@ function QuickAddModal({
 
   const selectedExportNames = importCandidateFiles(files, importSourceType).slice(0, 5);
   const choices = [
-    { mode: 'link', title: 'Paste a link', copy: 'Save one post, product, article, or idea.', icon: ExternalLink },
-    { mode: 'note', title: 'Write a note', copy: 'Capture a thought, image, reminder, or useful context.', icon: FileText },
-    { mode: 'upload', title: 'Upload files', copy: 'Add Instagram, Pinterest, or X bookmark exports from your device.', icon: Upload },
+    { mode: 'link', title: 'Paste link', icon: ExternalLink },
+    { mode: 'note', title: 'Write note', icon: FileText },
+    { mode: 'upload', title: 'Upload file', icon: Upload },
   ];
 
   return (
@@ -123,9 +122,7 @@ function QuickAddModal({
 
           {mode === 'choose' && (
             <div className="space-y-3">
-              <p className="text-sm leading-6 text-muted-foreground">Pick what you want to add. Open the full Add Saves page when you need folder upload or more options.</p>
-              <p className="rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
-              {choices.map(({ mode: choiceMode, title, copy, icon: Icon }) => (
+              {choices.map(({ mode: choiceMode, title, icon: Icon }) => (
                 <button
                   key={choiceMode}
                   type="button"
@@ -137,7 +134,6 @@ function QuickAddModal({
                   </span>
                   <span className="min-w-0">
                     <span className="block font-display text-lg font-bold tracking-tight">{title}</span>
-                    <span className="mt-1 block text-sm leading-5 text-muted-foreground">{copy}</span>
                   </span>
                 </button>
               ))}
@@ -156,8 +152,6 @@ function QuickAddModal({
               <div>
                 <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Paste a link</div>
                 <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Save one thing fast</h3>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">Paste a post, product, article, video, or any page you want to find later.</p>
-                <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
               </div>
               <input
                 type="url"
@@ -210,8 +204,6 @@ function QuickAddModal({
               <div>
                 <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Write a note</div>
                 <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Save a quick thought</h3>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">Add the context you want to remember. Images and links are optional.</p>
-                <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
               </div>
               <textarea
                 value={noteForm.body}
@@ -287,8 +279,6 @@ function QuickAddModal({
               <div>
                 <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Upload files</div>
                 <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose export files</h3>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">Use this for Instagram, Pinterest, or X bookmark downloads. For folders, open the full Add Saves page.</p>
-                <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE}</p>
               </div>
               <button
                 type="button"
@@ -372,9 +362,6 @@ function QuickAddModal({
           >
             <Upload className="mx-auto mb-3 h-8 w-8 text-primary" />
             <h3 className="font-display text-xl font-bold">Drop images, ZIPs, folders, or files here</h3>
-            <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Images become note attachments. Instagram, Pinterest, and X bookmark files are detected automatically.
-            </p>
             <div className="mt-5 flex flex-wrap justify-center gap-3">
               <button
                 type="button"
@@ -428,7 +415,6 @@ function QuickAddModal({
               <div>
                 <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Note</div>
                 <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Save a note, image, or useful link</h3>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">Write anything you want to remember. Add images or links when they help.</p>
               </div>
               <input
                 value={noteForm.title}
@@ -531,7 +517,6 @@ function QuickAddModal({
                 <div>
                   <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Instagram, Pinterest, or X</div>
                   <h3 className="mt-2 font-display text-2xl font-bold tracking-tight">Upload a ZIP, folder, or bookmark file</h3>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">Auto-detect is on, so you can upload the file you downloaded.</p>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-black p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">

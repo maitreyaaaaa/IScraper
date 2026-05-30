@@ -53,13 +53,13 @@ function LoginPage({ onBack, onOpenApp }) {
   }, []);
 
   const loadProfile = useCallback(async () => {
-    if (!supabase) return;
+    if (!supabase) return null;
     const { data } = await supabase.auth.getSession();
     setSession(data.session);
     setApiAccessToken(data.session?.access_token);
     if (!data.session) {
       resetPostHogUser();
-      return;
+      return { session: null, profile: null, profileRequired: false, onboarding: null };
     }
     recordSessionSignInActivity(data.session);
     const [profileBody, onboardingBody] = await Promise.all([
@@ -71,6 +71,12 @@ function LoginPage({ onBack, onOpenApp }) {
     setOnboardingForm(onboardingFormFromRecord(onboardingBody.onboarding));
     identifyPostHogUser(data.session, profileBody.profile);
     cleanAuthCallbackUrl();
+    return {
+      session: data.session,
+      profile: profileBody.profile || null,
+      profileRequired: Boolean(profileBody.required),
+      onboarding: onboardingBody.onboarding || null,
+    };
   }, [applyProfileState]);
 
   useEffect(() => {
@@ -131,7 +137,7 @@ function LoginPage({ onBack, onOpenApp }) {
       await sendEmailOtp(email);
       setEmailForm((current) => ({ ...current, email, code: '' }));
       setEmailCodeSent(true);
-      setNotice('Code sent. Check your email and paste the code here.');
+      setNotice('Code sent. Check your email.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -151,8 +157,8 @@ function LoginPage({ onBack, onOpenApp }) {
       const data = await verifyEmailOtp(email, code);
       setSession(data.session || null);
       setApiAccessToken(data.session?.access_token);
-      await loadProfile();
-      setNotice('Signed in.');
+      const profileState = await loadProfile();
+      setNotice(profileState?.profileRequired ? 'Email verified.' : 'Signed in.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -213,12 +219,6 @@ function LoginPage({ onBack, onOpenApp }) {
     }
   };
 
-  const steps = [
-    ['1', 'Sign in', 'Use Google or email code. Use the same login every time.'],
-    ['2', 'Choose a username', 'This keeps your private library tied to your account.'],
-    ['3', 'Personalize', 'Pick what you want to save so IScraper can start with the right defaults.'],
-  ];
-
   return (
     <div className="min-h-screen bg-black text-foreground">
       <div className="grid-bg radial-fade pointer-events-none fixed inset-0 opacity-35" />
@@ -234,29 +234,8 @@ function LoginPage({ onBack, onOpenApp }) {
         </div>
       </header>
 
-      <main className="relative z-10 mx-auto grid min-h-[calc(100vh-5rem)] max-w-7xl items-center gap-10 px-5 py-14 lg:grid-cols-[1fr_0.82fr]">
-        <section>
-          <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">Account access</div>
-          <h1 className="mt-4 max-w-3xl font-display text-5xl font-bold tracking-tighter md:text-7xl">
-            Sign in before you import.
-          </h1>
-          <p className="mt-6 max-w-xl text-lg leading-8 text-muted-foreground">
-            You can visit IScraper without logging in, but your saved library, imports, API keys, graph, and indexing are private account features.
-          </p>
-          <div className="mt-10 grid gap-3">
-            {steps.map(([number, title, copy]) => (
-              <div key={title} className="flex gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary font-display text-lg font-bold text-primary-foreground">{number}</span>
-                <div>
-                  <h2 className="font-display text-xl font-bold tracking-tight">{title}</h2>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{copy}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="glow-ring rounded-[2rem] border border-white/10 bg-black p-6 shadow-2xl shadow-black/50 md:p-8">
+      <main className="relative z-10 mx-auto flex min-h-[calc(100vh-5rem)] max-w-7xl items-center justify-center px-5 py-14">
+        <section className="glow-ring w-full max-w-xl rounded-[2rem] border border-white/10 bg-black p-6 shadow-2xl shadow-black/50 md:p-8">
           {loading ? (
             <div className="grid min-h-80 place-items-center text-muted-foreground">Checking login...</div>
           ) : !supabase ? (
@@ -272,7 +251,6 @@ function LoginPage({ onBack, onOpenApp }) {
             <div>
               <Lock className="h-8 w-8 text-primary" />
               <h2 className="mt-5 font-display text-3xl font-bold tracking-tight">Welcome back.</h2>
-              <p className="mt-3 text-sm leading-6 text-muted-foreground">Sign in to open your private IScraper library.</p>
               <button
                 type="button"
                 onClick={handleGoogleSignIn}
@@ -299,7 +277,7 @@ function LoginPage({ onBack, onOpenApp }) {
                 />
                 {emailCodeSent && (
                   <>
-                    <label className="block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Code</label>
+                    <label className="block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Email code</label>
                     <input
                       inputMode="numeric"
                       autoComplete="one-time-code"
@@ -313,7 +291,7 @@ function LoginPage({ onBack, onOpenApp }) {
                 )}
                 <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 font-semibold text-foreground transition hover:bg-white/5 disabled:opacity-60">
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-                  {emailCodeSent ? 'Verify code' : 'Send code'}
+                  {emailCodeSent ? 'Continue' : 'Send code'}
                 </button>
                 {emailCodeSent && (
                   <button
@@ -330,8 +308,7 @@ function LoginPage({ onBack, onOpenApp }) {
             </div>
           ) : profileRequired ? (
             <form onSubmit={handleProfileSave}>
-              <h2 className="font-display text-3xl font-bold tracking-tight">Choose your username</h2>
-              <p className="mt-2 text-sm text-muted-foreground">One last step before importing. Usernames are unique.</p>
+              <h2 className="font-display text-3xl font-bold tracking-tight">Choose username</h2>
               <label className="mt-6 block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Username</label>
               <input
                 value={profileForm.username}
@@ -350,7 +327,7 @@ function LoginPage({ onBack, onOpenApp }) {
               </div>
               <button disabled={busy} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground disabled:opacity-60">
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Save profile
+                Continue
               </button>
             </form>
           ) : !onboardingIsDone(onboarding) ? (

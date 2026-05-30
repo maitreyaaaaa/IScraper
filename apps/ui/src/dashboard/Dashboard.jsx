@@ -1595,10 +1595,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         )}
         {authEnabled && session && profileRequired && (
           <div
-            title="Choose a username before importing or saving."
+            title="Set username"
             className={`border-b border-white/5 text-xs leading-5 text-muted-foreground ${sidebarVisibleExpanded ? 'px-5 py-3' : 'grid place-items-center px-3 py-3'}`}
           >
-            {sidebarVisibleExpanded ? 'Choose a username before importing or saving.' : <AlertCircle className="h-4 w-4" />}
+            {sidebarVisibleExpanded ? 'Set username' : <AlertCircle className="h-4 w-4" />}
           </div>
         )}
         <nav className={`flex-1 space-y-1 p-3 ${sidebarVisibleExpanded ? '' : 'flex flex-col items-center'}`}>
@@ -1749,8 +1749,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
               <>
                 {authEnabled && !session && tab === 'library' && (
                   <AuthRequiredPanel
-                    title="Your library is private."
-                    copy="You can visit this page, but your saved posts only load after sign-in."
                     busy={busy}
                     onSignIn={onOpenLogin}
                   />
@@ -1826,8 +1824,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 )}
                 {authEnabled && !session && tab === 'smart' && (
                   <AuthRequiredPanel
-                    title="Sign in to view Smart Collections."
-                    copy="Smart Collections are built from your private saved library."
                     busy={busy}
                     onSignIn={onOpenLogin}
                   />
@@ -1858,8 +1854,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 )}
                 {authEnabled && !session && tab === 'care' && (
                   <AuthRequiredPanel
-                    title="Sign in to check your library."
-                    copy="Library checkup works on your private saved links and reminders."
                     busy={busy}
                     onSignIn={onOpenLogin}
                   />
@@ -1886,8 +1880,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 )}
                 {authEnabled && !session && tab === 'graph' && (
                   <AuthRequiredPanel
-                    title="Sign in to view your graph."
-                    copy="The graph is built from your private saved library."
                     busy={busy}
                     onSignIn={onOpenLogin}
                   />
@@ -1916,8 +1908,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 )}
                 {authEnabled && !session && tab === 'upload' && (
                   <AuthRequiredPanel
-                    title="Sign in before importing."
-                    copy="Imports are tied to your private account, so sign-in is required."
                     busy={busy}
                     onSignIn={onOpenLogin}
                   />
@@ -1960,8 +1950,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                 )}
                 {authEnabled && !session && tab === 'settings' && (
                   <AuthRequiredPanel
-                    title="Sign in to manage AI keys."
-                    copy="AI keys belong to your private account."
                     busy={busy}
                     onSignIn={onOpenLogin}
                   />

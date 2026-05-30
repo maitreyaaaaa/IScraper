@@ -1,10 +1,8 @@
 import {
-  AI_PROCESSING_NOTICE,
   Bot,
   CheckCircle2,
   Copy,
   createExtensionToken,
-  ExternalLink,
   FileText,
   KEY_SETUP_OPTIONS,
   KeyRound,
@@ -116,7 +114,7 @@ function SettingsTab({
           <p className="mt-2 text-sm text-muted-foreground">
             Paste a valid key once. IScraper picks the right models for you.
           </p>
-          <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE} {PROVIDER_KEY_PRIVACY_NOTICE}</p>
+          <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{PROVIDER_KEY_PRIVACY_NOTICE}</p>
         </div>
         <button
           type="button"
@@ -127,42 +125,11 @@ function SettingsTab({
         </button>
       </div>
 
-      <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Credit system status</div>
-          <span className="rounded-full bg-white px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-black">
-            Coming soon
-          </span>
-        </div>
-        <p className="mt-2 text-sm text-muted-foreground">
-          AI enrichment can use your saved provider keys. Paid IScraper credits are coming soon for users who do not want to bring their own key.
-        </p>
-        <p className="mt-3 text-xs leading-5 text-muted-foreground">{PROVIDER_KEY_PRIVACY_NOTICE}</p>
-      </div>
-
-      <section className="space-y-4 rounded-2xl border border-white/10 p-5">
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Browser extension</div>
-            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Capture extension</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              The extension connects through your IScraper account and supports Capture URL plus Screen Capture after browser-store release.
-            </p>
-          </div>
-          <span className="inline-flex shrink-0 items-center justify-center rounded-full bg-white/10 px-5 py-3 text-sm font-semibold text-muted-foreground">
-            Coming soon
-          </span>
-        </div>
-      </section>
-
       <section className="space-y-5 rounded-2xl border border-white/10 p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Agent access</div>
-            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Ask your library from Claude, Codex, or Cursor</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              Create a read-only token for tools that support MCP or simple HTTP requests.
-            </p>
+            <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Agent access</h2>
           </div>
           <span className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-4 py-2 text-xs font-semibold text-emerald-200">
             <ShieldCheck className="h-4 w-4" /> Read only
@@ -254,20 +221,9 @@ function SettingsTab({
       <section className="space-y-4 rounded-2xl border border-white/10 p-5">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Fast capture</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Mobile share and Telegram</h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            IScraper can receive shared links from supported mobile browsers. Telegram bot linking uses a private code from this account.
-          </p>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Telegram</h2>
         </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
-            <div className="flex items-center gap-2 font-semibold">
-              <ExternalLink className="h-4 w-4 text-primary" /> Mobile share-sheet
-            </div>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              When IScraper is installed as an app, supported Android browsers can share links into the Add Saves screen.
-            </p>
-          </div>
+        <div className="grid gap-3">
           <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
             <div className="flex items-center gap-2 font-semibold">
               <Bot className="h-4 w-4 text-primary" /> Telegram save bot
@@ -311,11 +267,8 @@ function SettingsTab({
       <form onSubmit={onSave} className="space-y-4 rounded-2xl border border-white/10 p-5">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Add key</div>
-          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Choose where your key is from</h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            For built-in providers, IScraper chooses the model. Advanced OpenAI-compatible services need their base URL and model ID.
-          </p>
-          <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE} {PROVIDER_KEY_PRIVACY_NOTICE}</p>
+          <h2 className="mt-2 font-display text-2xl font-bold tracking-tight">Add key</h2>
+          <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{PROVIDER_KEY_PRIVACY_NOTICE}</p>
         </div>
         <div className="grid gap-2 rounded-xl border border-white/10 p-1">
           {Object.entries(KEY_SETUP_OPTIONS).map(([setup, option]) => (
