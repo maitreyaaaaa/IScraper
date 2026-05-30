@@ -31,6 +31,7 @@ test('user data registry covers known user-owned data tables', () => {
   [
     'users',
     'user_profiles',
+    'user_onboarding_preferences',
     'saved_items',
     'imports',
     'item_assets',
@@ -497,6 +498,13 @@ test('queued data export creates a redacted downloadable zip and enforces owners
     });
     assert.equal(saveResponse.status, 201);
 
+    const onboardingResponse = await fetch(`${base}/onboarding`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ contentTypes: ['instagram', 'notes'], referralSource: 'youtube' }),
+    });
+    assert.equal(onboardingResponse.status, 200);
+
     const mapResponse = await fetch(`${base}/user-data-map`, { headers });
     const mapBody = await mapResponse.json();
     assert.equal(mapResponse.status, 200);
@@ -544,11 +552,14 @@ test('queued data export creates a redacted downloadable zip and enforces owners
 
     const zip = await JSZip.loadAsync(Buffer.from(await downloadResponse.arrayBuffer()));
     const manifest = JSON.parse(await zip.file('manifest.json').async('string'));
+    const accountFile = JSON.parse(await zip.file('account/profile.json').async('string'));
     const extensionTokens = JSON.parse(await zip.file('access/extension-tokens.json').async('string'));
     const zipText = (await Promise.all(Object.values(zip.files).filter((file) => !file.dir).map((file) => file.async('string')))).join('\n');
 
     assert.equal(manifest.format, 'zip');
     assert.equal(manifest.categories.find((category) => category.key === 'access').classification, 'credential');
+    assert.deepEqual(accountFile.onboarding.contentTypes, ['instagram', 'notes']);
+    assert.equal(accountFile.onboarding.referralSource, 'youtube');
     assert.equal(extensionTokens.length, 1);
     assert.equal(extensionTokens[0].tokenHash, undefined);
     assert.equal(zipText.includes(tokenBody.secret), false);
@@ -2536,6 +2547,55 @@ test('profile API enforces unique usernames', async () => {
     assert.equal(first.status, 200);
     assert.equal(duplicate.status, 409);
     assert.match(body.error, /already taken/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('onboarding API saves, updates, skips, and validates preferences', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const headers = { 'Content-Type': 'application/json', 'x-user-id': 'onboarding-user' };
+    const create = await fetch(`http://127.0.0.1:${port}/api/onboarding`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ contentTypes: ['instagram', 'notes', 'instagram'], referralSource: 'whatsapp_friend' }),
+    });
+    const created = await create.json();
+    assert.equal(create.status, 200);
+    assert.deepEqual(created.onboarding.contentTypes, ['instagram', 'notes']);
+    assert.equal(created.onboarding.referralSource, 'whatsapp_friend');
+    assert.ok(created.onboarding.completedAt);
+    assert.equal(created.onboarding.skippedAt, null);
+
+    const invalid = await fetch(`http://127.0.0.1:${port}/api/onboarding`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ contentTypes: ['bad_option'] }),
+    });
+    assert.equal(invalid.status, 400);
+
+    const skip = await fetch(`http://127.0.0.1:${port}/api/onboarding`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ skipped: true }),
+    });
+    const skipped = await skip.json();
+    assert.equal(skip.status, 200);
+    assert.deepEqual(skipped.onboarding.contentTypes, []);
+    assert.equal(skipped.onboarding.completedAt, null);
+    assert.ok(skipped.onboarding.skippedAt);
+
+    const get = await fetch(`http://127.0.0.1:${port}/api/onboarding`, { headers });
+    const current = await get.json();
+    assert.equal(get.status, 200);
+    assert.equal(current.onboarding.skippedAt, skipped.onboarding.skippedAt);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });

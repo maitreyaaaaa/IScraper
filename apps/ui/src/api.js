@@ -326,6 +326,10 @@ export function getProfile() {
   return request('/profile');
 }
 
+export function getOnboarding() {
+  return request('/onboarding');
+}
+
 export function recordSignInActivity() {
   return request('/activity/sign-in', {
     method: 'POST',
@@ -336,6 +340,14 @@ export function recordSignInActivity() {
 
 export function saveProfile(payload) {
   return request('/profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function saveOnboarding(payload) {
+  return request('/onboarding', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

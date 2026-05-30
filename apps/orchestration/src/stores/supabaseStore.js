@@ -11,6 +11,7 @@ const {
 } = require('../services/providers');
 const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
 const { normalizeUsername, publicProfile } = require('../services/profiles');
+const { publicOnboardingPreferences } = require('../services/onboarding');
 const { publicExtensionToken } = require('../services/extensionTokens');
 const { searchItemsWithDetails } = require('../services/analyzer');
 const {
@@ -420,6 +421,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       const retainedPurchases = await retainCompletedCreditPurchases(client, userId);
       const deleted = await deleteUserRowsFromTables(client, userId, [
         'user_profiles',
+        'user_onboarding_preferences',
         'user_admin_states',
         'user_activity_events',
         'analysis_usage_events',
@@ -470,7 +472,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return mapDeletionRequest(data);
     },
     async getPrivacyExport(userId) {
-      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, credentials, legacyAiKeys, extensionTokens, captureConnections, searchEvents, searchFeedback, userActivity, analysisUsage, profile, credits, deletionRequest] = await Promise.all([
+      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, credentials, legacyAiKeys, extensionTokens, captureConnections, searchEvents, searchFeedback, userActivity, analysisUsage, profile, onboarding, credits, deletionRequest] = await Promise.all([
         this.getItems(userId),
         selectAllUserRows(client, 'item_archives', userId, '*', (query) => query.order('updated_at', { ascending: false })),
         selectAllUserRows(client, 'link_health_checks', userId, '*', (query) => query.order('checked_at', { ascending: false })),
@@ -491,6 +493,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         selectAllUserRows(client, 'user_activity_events', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'analysis_usage_events', userId, '*', (query) => query.order('created_at', { ascending: false })),
         this.getProfile(userId),
+        this.getOnboardingPreferences(userId),
         this.getCredits(userId),
         this.getActiveDeletionRequest(userId),
       ]);
@@ -519,6 +522,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         userActivity: userActivity.map(mapUserActivity),
         analysisUsage: analysisUsage.map(mapAnalysisUsage),
         profile,
+        onboarding,
         deletion: deletionRequest,
       };
     },
@@ -583,6 +587,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         searchFeedback: privacy.searchFeedback,
         userActivity: privacy.userActivity,
         analysisUsage: privacy.analysisUsage,
+        onboarding: privacy.onboarding,
         billing: {
           credits: privacy.credits,
           creditTransactions: transactions.map(mapCreditTransaction),
@@ -840,6 +845,36 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       }
       if (error) throw error;
       return mapProfile(data);
+    },
+    async getOnboardingPreferences(userId) {
+      const { data, error } = await client
+        .from('user_onboarding_preferences')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (error?.code === '42P01') return null;
+      if (error) throw error;
+      return data ? mapOnboardingPreferences(data) : null;
+    },
+    async saveOnboardingPreferences(userId, { contentTypes = [], referralSource = '', skipped = false }) {
+      const timestamp = new Date().toISOString();
+      const { data, error } = await client
+        .from('user_onboarding_preferences')
+        .upsert(
+          {
+            user_id: userId,
+            content_types: contentTypes,
+            referral_source: referralSource || null,
+            completed_at: skipped ? null : timestamp,
+            skipped_at: skipped ? timestamp : null,
+            updated_at: timestamp,
+          },
+          { onConflict: 'user_id' },
+        )
+        .select('*')
+        .single();
+      if (error) throw error;
+      return mapOnboardingPreferences(data);
     },
     async createExtensionToken(userId, { tokenHash, name, scopes, expiresAt }) {
       const { data, error } = await client
@@ -3332,6 +3367,18 @@ function mapProfile(row) {
     userId: row.user_id,
     username: row.username,
     avatarUrl: row.avatar_url || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+}
+
+function mapOnboardingPreferences(row) {
+  return publicOnboardingPreferences({
+    userId: row.user_id,
+    contentTypes: row.content_types || [],
+    referralSource: row.referral_source || '',
+    completedAt: row.completed_at,
+    skippedAt: row.skipped_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });

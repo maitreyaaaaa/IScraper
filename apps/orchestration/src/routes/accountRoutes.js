@@ -1,4 +1,5 @@
 const { publicDeletionRequest } = require('../services/accountDeletion');
+const { validateOnboardingInput } = require('../services/onboarding');
 const { recordRequestTiming, traceForRequest } = require('../services/observability');
 const { validateProfileInput } = require('../services/profiles');
 const { recordSecurityAuditForRequest, recordSupportEvent } = require('../services/auditLog');
@@ -80,6 +81,16 @@ function registerAccountRoutes(app, deps) {
     res.json({ profile, required: Boolean(store.requiresAuth && !profile?.username) });
   }));
 
+  app.get('/api/onboarding', asyncRoute(async (req, res) => {
+    const onboarding = typeof store.getOnboardingPreferences === 'function'
+      ? await store.getOnboardingPreferences(req.user.id)
+      : null;
+    res.json({
+      onboarding,
+      required: Boolean(store.requiresAuth && onboarding && !onboarding.completedAt && !onboarding.skippedAt),
+    });
+  }));
+
   app.post('/api/activity/sign-in', asyncRoute(async (req, res) => {
     if (typeof store.recordUserActivity === 'function') {
       await recordSupportEvent(store, {
@@ -100,6 +111,20 @@ function registerAccountRoutes(app, deps) {
     const profile = await store.saveProfile(req.user.id, input);
     captureWorkflow(req, 'profile saved', { hasAvatar: Boolean(profile.avatarUrl) });
     res.json({ profile });
+  }));
+
+  app.post('/api/onboarding', asyncRoute(async (req, res) => {
+    if (typeof store.saveOnboardingPreferences !== 'function') {
+      return res.status(501).json({ error: 'Onboarding preferences are not available.' });
+    }
+    const input = validateOnboardingInput(req.body || {});
+    const onboarding = await store.saveOnboardingPreferences(req.user.id, input);
+    captureWorkflow(req, 'onboarding preferences saved', {
+      contentTypeCount: onboarding.contentTypes.length,
+      hasReferralSource: Boolean(onboarding.referralSource),
+      skipped: Boolean(onboarding.skippedAt),
+    });
+    res.json({ onboarding });
   }));
 }
 

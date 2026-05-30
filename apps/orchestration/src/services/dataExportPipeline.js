@@ -68,6 +68,7 @@ async function buildUserDataExport({ store, userId, requestId, correlationId = '
     'account/profile.json': {
       account,
       profile: privacy.profile || null,
+      onboarding: privacy.onboarding || null,
     },
     'library/saved-items.json': exportData.savedItems || [],
     'library/imports.json': exportData.imports || [],
@@ -205,6 +206,7 @@ function buildPayloadFromPrivacyExport(privacy = {}) {
     captureConnections: privacy.captureConnections || [],
     searchEvents: privacy.searchEvents || [],
     searchFeedback: privacy.searchFeedback || [],
+    onboarding: privacy.onboarding || null,
     billing: { credits: privacy.credits || null },
   };
 }
