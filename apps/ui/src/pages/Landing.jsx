@@ -44,6 +44,7 @@ import {
 } from '../AppShared.jsx';
 import { AnimatedFeatureSelect } from '../components/Common.jsx';
 import { AccountSettingsModal } from '../dashboard/AccountSettingsModal.jsx';
+const LIBRARY_STARTED_KEY = 'iscraper.libraryStarted';
 function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHelp, onOpenSecurity, onOpenDataDeletion, onOpenCookies }) {
   const root = useRef(null);
   const introRef = useRef(null);
@@ -55,12 +56,19 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
   const [feedbackNotice, setFeedbackNotice] = useState('');
   const [landingSession, setLandingSession] = useState(null);
   const [landingProfile, setLandingProfile] = useState(null);
+  const [libraryStarted, setLibraryStarted] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const landingAvatarUrl = avatarUrlForSession(landingSession, landingProfile);
   const landingInitial = initialForSession(landingSession, landingProfile);
+  const libraryCtaLabel = landingSession || libraryStarted ? 'My library' : 'Start my library';
+  const handleLibraryCta = landingSession ? onOpenApp : onOpenLogin;
 
   useEffect(() => {
     resetPageScroll();
+  }, []);
+
+  useEffect(() => {
+    setLibraryStarted(window.localStorage.getItem(LIBRARY_STARTED_KEY) === 'true');
   }, []);
 
   useEffect(() => {
@@ -77,6 +85,8 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
         return;
       }
       recordSessionSignInActivity(session);
+      window.localStorage.setItem(LIBRARY_STARTED_KEY, 'true');
+      setLibraryStarted(true);
       try {
         const body = await getProfile();
         if (!cancelled) {
@@ -348,7 +358,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           >
             <BrandLogo className="h-20 w-64 md:h-[7.5rem] md:w-[24rem]" />
           </button>
-          <nav className="pointer-events-auto hidden justify-self-center rounded-full border border-white/10 bg-black/75 p-1 text-sm font-semibold text-muted-foreground shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl md:flex">
+          <nav className="pointer-events-auto absolute left-1/2 hidden -translate-x-1/2 rounded-full border border-white/10 bg-black/75 p-1 text-sm font-semibold text-muted-foreground shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl md:flex">
             <a href="#features" onClick={(event) => scrollToSection(event, '#features')} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">Features</a>
             <a href="#how-it-works" onClick={(event) => scrollToSection(event, '#how-it-works')} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">How it works</a>
             <a href="#extension" onClick={(event) => scrollToSection(event, '#extension')} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">Extension</a>
@@ -369,22 +379,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
                   <span className="grid h-full w-full place-items-center bg-primary text-primary-foreground">{landingInitial}</span>
                 )}
               </button>
-            ) : (
-              <button
-                type="button"
-                onClick={onOpenLogin}
-                className="inline-flex rounded-full border border-white/15 bg-black/75 px-4 py-2 text-sm font-bold text-foreground shadow-[0_16px_55px_rgba(0,0,0,0.22)] backdrop-blur transition hover:bg-white/10"
-              >
-                Log in
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onOpenApp}
-              className="group hidden items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow-[0_16px_55px_rgba(164,255,18,0.22)] transition hover:scale-[1.03] sm:inline-flex"
-            >
-              Start my library <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
-            </button>
+            ) : null}
           </div>
         </div>
       </header>
@@ -417,12 +412,12 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           >
             {heroWords.map((word) => (
               <span key={word} className="mr-[0.18em] inline-block overflow-visible last:mr-0">
-                <span className={`word inline-block ${word === 'Lose' ? 'relative isolate' : ''} ${word === 'Post' ? 'rounded-[5px] bg-accent px-[0.08em] italic text-accent-foreground' : ''}`}>
+                <span className={`word inline-block ${word === 'Lose' ? 'relative isolate' : ''} ${word === 'Post' ? 'rounded-[5px] bg-accent pl-[0.08em] pr-[0.22em] italic text-accent-foreground' : ''}`}>
                   {word === 'Lose' && (
                     <img
                       src="/hero/lose-circle.png"
                       alt=""
-                      className="pointer-events-none absolute left-1/2 top-1/2 z-0 h-[1.2em] max-w-none -translate-x-1/2 -translate-y-[45%] rotate-[-5deg] opacity-95"
+                      className="pointer-events-none absolute left-1/2 top-1/2 z-0 h-[1.2em] max-w-none -translate-x-1/2 -translate-y-[50%] rotate-[-5deg] opacity-95"
                       draggable="false"
                     />
                   )}
@@ -433,28 +428,18 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
             ))}
           </h1>
 
-          <div className="mt-12 flex flex-col items-start justify-between gap-8 md:flex-row md:items-end">
+          <div className="mt-12 flex flex-col items-start justify-between gap-8 md:flex-row md:items-start">
             <p className="hero-fade max-w-[21rem] text-lg leading-relaxed text-muted-foreground sm:max-w-xl">
               Save posts, links, screenshots, notes, products, and references in one private library. Find them later by what they are about, not just where you saved them.
             </p>
             <div className="hero-fade flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
-              {landingSession ? (
-                <button
-                  type="button"
-                  onClick={onOpenApp}
-                  className="glow-ring group inline-flex items-center justify-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
-                >
-                  Start my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={onOpenLogin}
-                  className="glow-ring group inline-flex items-center justify-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
-                >
-                  Start my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={handleLibraryCta}
+                className="glow-ring group inline-flex items-center justify-center gap-3 rounded-full bg-primary px-7 py-4 text-base font-semibold text-primary-foreground transition hover:scale-[1.03]"
+              >
+                {libraryCtaLabel} <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+              </button>
               <button type="button" onClick={(event) => scrollToSection(event, '#how-it-works')} className="inline-flex items-center justify-center gap-2 rounded-full border border-accent/45 px-6 py-4 text-sm font-semibold text-accent transition hover:bg-accent/10">
                 See how it works
               </button>
@@ -464,7 +449,7 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
             </div>
           </div>
 
-          <div className="hero-fade mt-24 grid grid-cols-2 gap-x-4 gap-y-8 text-sm md:grid-cols-4 md:gap-6">
+          <div className="hero-fade mx-auto mt-24 grid w-full max-w-7xl grid-cols-2 gap-x-4 gap-y-8 text-sm md:grid-cols-4 md:gap-6">
             {[
               ['Saved posts', 'Posts'],
               ['Useful links', 'Links'],
@@ -760,10 +745,10 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           <div data-reveal className="mt-12 flex flex-wrap items-center justify-center gap-4">
             <button
               type="button"
-              onClick={onOpenApp}
+              onClick={handleLibraryCta}
               className="glow-ring group inline-flex items-center gap-3 rounded-full bg-primary px-9 py-5 text-lg font-semibold text-primary-foreground transition hover:scale-[1.03]"
             >
-              Start my library <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
+              {libraryCtaLabel} <ArrowRight className="h-5 w-5 transition group-hover:translate-x-1" />
             </button>
             <button
               type="button"
