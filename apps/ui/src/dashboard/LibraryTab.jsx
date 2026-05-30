@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronDown,
   DASHBOARD_ENRICHED_STAGES,
+  DeferredSkeletonCardGrid,
   ExternalLink,
   Eye,
   FileText,
@@ -23,7 +24,6 @@ import {
   Plus,
   ProgressBar,
   Search,
-  SkeletonCardGrid,
   SORT_OPTIONS,
   Sparkles,
   STALE_ENRICHMENT_UI_MS,
@@ -687,7 +687,7 @@ function LibraryTab({
 
       <div className="mt-10 md:mt-[7dvh]">
         {initialLoading ? (
-          <SkeletonCardGrid count={libraryLayout === 'list' ? 5 : 9} layout={libraryLayout} />
+          <DeferredSkeletonCardGrid count={libraryLayout === 'list' ? 3 : 6} layout={libraryLayout} />
         ) : items.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center md:p-14">
             <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary">

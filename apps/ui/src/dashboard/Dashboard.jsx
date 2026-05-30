@@ -167,6 +167,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [noteForm, setNoteForm] = useState({ title: '', body: '', links: '', images: [] });
   const [credentials, setCredentials] = useState([]);
   const [agentTokens, setAgentTokens] = useState([]);
+  const [controlsLoaded, setControlsLoaded] = useState(false);
   const [agentTokenName, setAgentTokenName] = useState('Codex / Cursor / Claude');
   const [createdAgentAccess, setCreatedAgentAccess] = useState(null);
   const [credentialOptions, setCredentialOptions] = useState(null);
@@ -359,6 +360,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setCredentials(credentialBody.credentials || []);
     setCredentialOptions(credentialBody.options || null);
     setAgentTokens(agentBody.tokens || []);
+    setControlsLoaded(true);
   }, []);
 
   const mergeUpdatedItem = useCallback((updated) => {
@@ -482,7 +484,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           identifyPostHogUser(currentSession, profileBody.profile);
           if (profileBody.required) return;
         }
-        await Promise.all([loadItems(), loadControls()]);
       } catch (err) {
         if (!cancelled) setError(err.message);
       } finally {
@@ -517,7 +518,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setVisualSearch(null);
           setVisualSearchLoading(false);
           setCredentials([]);
+          setCredentialOptions(null);
           setAgentTokens([]);
+          setControlsLoaded(false);
           setCreatedAgentAccess(null);
           setOnboarding(null);
           setOnboardingForm(onboardingFormFromRecord(null));
@@ -546,7 +549,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setVisualSearch(null);
         setVisualSearchLoading(false);
         setCredentials([]);
+        setCredentialOptions(null);
         setAgentTokens([]);
+        setControlsLoaded(false);
         setCreatedAgentAccess(null);
         setProfile(null);
         setProfileRequired(false);
@@ -561,7 +566,67 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       cancelled = true;
       listener.subscription.unsubscribe();
     };
-  }, [authEnabled, loadControls, loadItems]);
+  }, [authEnabled]);
+
+  useEffect(() => {
+    if (loading || !canUsePrivateActions) return undefined;
+    let cancelled = false;
+    let firstFrame;
+    let secondFrame;
+
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        if (cancelled) return;
+        loadItems().catch((err) => {
+          if (!cancelled) setError(err.message);
+        });
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [canUsePrivateActions, loadItems, loading]);
+
+  useEffect(() => {
+    if (loading || !canUsePrivateActions || controlsLoaded) return undefined;
+    let cancelled = false;
+    let firstFrame;
+    let secondFrame;
+    let idleId;
+    let timeoutId;
+
+    const run = () => {
+      if (cancelled) return;
+      loadControls().catch((err) => {
+        if (!cancelled && tab === 'settings') setError(err.message);
+      });
+    };
+
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        if (tab === 'settings') {
+          run();
+          return;
+        }
+        if ('requestIdleCallback' in window) {
+          idleId = window.requestIdleCallback(run, { timeout: 2000 });
+        } else {
+          timeoutId = window.setTimeout(run, 600);
+        }
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      if (idleId) window.cancelIdleCallback?.(idleId);
+      window.clearTimeout(timeoutId);
+    };
+  }, [canUsePrivateActions, controlsLoaded, loadControls, loading, tab]);
 
   useEffect(() => {
     gsap.set([sidebarRef.current, '.dash-panel', '.dash-panel-inner'], { clearProps: 'opacity,transform' });

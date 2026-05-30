@@ -1,4 +1,5 @@
 import { Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 export function LoadingSpinner({ className = 'h-4 w-4', label = 'Loading' }) {
   return (
@@ -80,7 +81,42 @@ export function SkeletonCardGrid({ count = 6, layout = 'grid-3' }) {
   );
 }
 
+function useAfterFirstPaint(delay = 120) {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let firstFrame;
+    let secondFrame;
+    let timeoutId;
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        timeoutId = window.setTimeout(() => setReady(true), delay);
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(timeoutId);
+    };
+  }, [delay]);
+
+  return ready;
+}
+
+export function DeferredSkeletonCardGrid({ count = 6, layout = 'grid-3', delay = 120, minHeight = '22rem' }) {
+  const ready = useAfterFirstPaint(delay);
+
+  if (!ready) {
+    return <div aria-hidden="true" style={{ minHeight }} />;
+  }
+
+  return <SkeletonCardGrid count={count} layout={layout} />;
+}
+
 export function AppShellSkeleton() {
+  const showBelowFold = useAfterFirstPaint(160);
+
   return (
     <div className="min-h-screen bg-black px-4 py-8 text-foreground sm:px-6 md:px-10" aria-label="Loading your saved library" role="status">
       <div className="mx-auto max-w-[1480px]">
@@ -97,7 +133,7 @@ export function AppShellSkeleton() {
           <SkeletonBlock className="h-4 w-48 rounded-full" />
           <SkeletonBlock className="hidden h-10 w-64 rounded-full md:block" />
         </div>
-        <SkeletonCardGrid count={9} />
+        {showBelowFold ? <SkeletonCardGrid count={6} /> : <div aria-hidden="true" className="min-h-80" />}
       </div>
     </div>
   );

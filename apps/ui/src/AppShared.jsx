@@ -122,6 +122,7 @@ import SmartCollectionsView from './components/SmartCollectionsView';
 import VirtualLibraryGrid from './components/VirtualLibraryGrid';
 import {
   AppShellSkeleton,
+  DeferredSkeletonCardGrid,
   LoadingSpinner,
   ProgressBar,
   SkeletonBlock,
@@ -1444,6 +1445,7 @@ export {
   DASHBOARD_TABS,
   dashboardTabFromLocation,
   Database,
+  DeferredSkeletonCardGrid,
   deleteProviderCredential,
   deletionStatusCopy,
   deletionStatusLabel,
