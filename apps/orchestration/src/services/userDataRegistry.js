@@ -2,8 +2,8 @@ const USER_DATA_CATEGORIES = [
   {
     key: 'account',
     label: 'Account',
-    description: 'Login identity, profile, account state, and support reference.',
-    purpose: 'Run the account, identify the right signed-in user, and give support a safe account reference.',
+    description: 'Login identity, profile, onboarding preferences, account state, and support reference.',
+    purpose: 'Run the account, identify the right signed-in user, personalize first-run setup, and give support a safe account reference.',
     classification: 'account',
     sensitivity: 'account',
     exportPath: 'account/profile.json',
@@ -12,7 +12,7 @@ const USER_DATA_CATEGORIES = [
     retentionDays: null,
     minimization: 'Auth provider records stay outside exports; IScraper stores only profile/support fields it needs.',
     deletion: 'Profile and account rows are deleted during approved account deletion.',
-    tables: ['users', 'user_profiles', 'user_admin_states'],
+    tables: ['users', 'user_profiles', 'user_onboarding_preferences', 'user_admin_states'],
     redaction: 'Exports do not include auth sessions, passwords, or internal admin credentials.',
   },
   {
@@ -123,6 +123,7 @@ const EXCLUDED_USER_DATA_TABLES = [
 const TABLE_DATA_CLASSIFICATIONS = {
   users: 'account',
   user_profiles: 'account',
+  user_onboarding_preferences: 'account',
   user_admin_states: 'account',
   saved_items: 'private_content',
   imports: 'private_content',

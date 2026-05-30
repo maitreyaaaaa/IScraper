@@ -26,6 +26,7 @@ const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require(
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
 const { ACTIVE_DELETION_STATUSES, hashDeletionValue } = require('../services/accountDeletion');
+const { publicOnboardingPreferences } = require('../services/onboarding');
 const { publicNoteAsset } = require('../services/notes');
 const { listItemsPageFromItems } = require('../services/itemList');
 const {
@@ -79,6 +80,7 @@ function seedFromLegacyIndex(dataPath) {
     userAdminStates: [],
     userActivityEvents: [],
     profiles: [],
+    onboardingPreferences: [],
     extensionTokens: [],
     captureConnections: [],
     lensSearchEvents: [],
@@ -148,6 +150,7 @@ function emptyState() {
     searchEvents: [],
     searchFeedback: [],
     profiles: [],
+    onboardingPreferences: [],
     extensionTokens: [],
     captureConnections: [],
     lensSearchEvents: [],
@@ -185,6 +188,7 @@ function normalizeState(state) {
     userActivityEvents: state.userActivityEvents || [],
     jobs: (state.jobs || []).map(normalizeJob),
     profiles: state.profiles || [],
+    onboardingPreferences: state.onboardingPreferences || [],
     extensionTokens: state.extensionTokens || [],
     captureConnections: state.captureConnections || [],
     lensSearchEvents: state.lensSearchEvents || [],
@@ -695,6 +699,7 @@ function createLocalStore({ dataPath }) {
       const exportRequestIds = new Set(state.dataExportRequests.filter((entry) => entry.userId === userId).map((entry) => entry.id));
       const deleted = {
         profiles: deleteFromArrayByUser('profiles', userId),
+        onboardingPreferences: deleteFromArrayByUser('onboardingPreferences', userId),
         userAdminStates: deleteFromArrayByUser('userAdminStates', userId),
         userActivityEvents: deleteFromArrayByUser('userActivityEvents', userId),
         analysisUsageEvents: deleteFromArrayByUser('analysisUsageEvents', userId),
@@ -775,6 +780,7 @@ function createLocalStore({ dataPath }) {
         userActivity: state.userActivityEvents.filter((entry) => entry.userId === userId),
         analysisUsage: state.analysisUsageEvents.filter((entry) => entry.userId === userId),
         profile: this.getProfile(userId),
+        onboarding: this.getOnboardingPreferences(userId),
         deletion: mapDeletionRequest(activeDeletionRequestForUser(userId)),
       };
     },
@@ -824,6 +830,7 @@ function createLocalStore({ dataPath }) {
         searchFeedback: privacy.searchFeedback,
         userActivity: privacy.userActivity,
         analysisUsage: privacy.analysisUsage,
+        onboarding: privacy.onboarding,
         billing: {
           credits: privacy.credits,
           creditTransactions: state.creditTransactions.filter((entry) => entry.userId === userId),
@@ -1054,6 +1061,36 @@ function createLocalStore({ dataPath }) {
       state.profiles.push(profile);
       save();
       return publicProfile(profile);
+    },
+
+    getOnboardingPreferences(userId) {
+      return publicOnboardingPreferences(state.onboardingPreferences.find((entry) => entry.userId === userId) || null);
+    },
+
+    saveOnboardingPreferences(userId, { contentTypes = [], referralSource = '', skipped = false }) {
+      const existing = state.onboardingPreferences.find((entry) => entry.userId === userId);
+      const timestamp = now();
+      if (existing) {
+        existing.contentTypes = contentTypes;
+        existing.referralSource = referralSource;
+        existing.completedAt = skipped ? null : timestamp;
+        existing.skippedAt = skipped ? timestamp : null;
+        existing.updatedAt = timestamp;
+        save();
+        return publicOnboardingPreferences(existing);
+      }
+      const onboarding = {
+        userId,
+        contentTypes,
+        referralSource,
+        completedAt: skipped ? null : timestamp,
+        skippedAt: skipped ? timestamp : null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      state.onboardingPreferences.push(onboarding);
+      save();
+      return publicOnboardingPreferences(onboarding);
     },
 
     createExtensionToken(userId, { tokenHash, name, scopes, expiresAt }) {
