@@ -96,6 +96,9 @@ async function verifyMigration({ accessToken, projectRef, migrationName }) {
   if (migrationName === '202605270005_request_correlation_ai_notice') {
     return verifyRequestCorrelationMigration({ accessToken, projectRef });
   }
+  if (migrationName === '202605300001_user_onboarding_preferences') {
+    return verifyOnboardingPreferencesMigration({ accessToken, projectRef });
+  }
   const query = `
 select
   exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'users' and column_name = 'public_ref') as users_public_ref,
@@ -132,6 +135,51 @@ select
     publicRefIndex: Boolean(row.public_ref_index),
     requestPolicies: Boolean(row.request_policies),
     stepPolicies: Boolean(row.step_policies),
+  };
+  return { ok: Object.values(checks).every(Boolean), checks };
+}
+
+async function verifyOnboardingPreferencesMigration({ accessToken, projectRef }) {
+  const query = `
+select
+  to_regclass('public.user_onboarding_preferences') is not null as onboarding_table,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_onboarding_preferences' and column_name = 'user_id') as user_id_column,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_onboarding_preferences' and column_name = 'content_types') as content_types_column,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_onboarding_preferences' and column_name = 'referral_source') as referral_source_column,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_onboarding_preferences' and column_name = 'completed_at') as completed_at_column,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_onboarding_preferences' and column_name = 'skipped_at') as skipped_at_column,
+  exists(select 1 from pg_constraint where conname = 'user_onboarding_preferences_content_types_allowed') as content_types_constraint,
+  exists(select 1 from pg_constraint where conname = 'user_onboarding_preferences_referral_source_allowed') as referral_source_constraint,
+  exists(select 1 from pg_policies where schemaname = 'public' and tablename = 'user_onboarding_preferences' and policyname = 'Users can read own onboarding preferences') as read_policy,
+  exists(select 1 from pg_policies where schemaname = 'public' and tablename = 'user_onboarding_preferences' and policyname = 'Users can create own onboarding preferences') as insert_policy,
+  exists(select 1 from pg_policies where schemaname = 'public' and tablename = 'user_onboarding_preferences' and policyname = 'Users can update own onboarding preferences') as update_policy;
+`;
+  const response = await fetch(`${MANAGEMENT_API}/projects/${projectRef}/database/query/read-only`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Supabase verification query failed with ${response.status}: ${safeApiMessage(body)}`);
+  }
+  const body = await response.json().catch(() => ({}));
+  const row = Array.isArray(body) ? body[0] : body.result?.[0] || body.data?.[0] || body;
+  const checks = {
+    onboardingTable: Boolean(row.onboarding_table),
+    userIdColumn: Boolean(row.user_id_column),
+    contentTypesColumn: Boolean(row.content_types_column),
+    referralSourceColumn: Boolean(row.referral_source_column),
+    completedAtColumn: Boolean(row.completed_at_column),
+    skippedAtColumn: Boolean(row.skipped_at_column),
+    contentTypesConstraint: Boolean(row.content_types_constraint),
+    referralSourceConstraint: Boolean(row.referral_source_constraint),
+    readPolicy: Boolean(row.read_policy),
+    insertPolicy: Boolean(row.insert_policy),
+    updatePolicy: Boolean(row.update_policy),
   };
   return { ok: Object.values(checks).every(Boolean), checks };
 }
