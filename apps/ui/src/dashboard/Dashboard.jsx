@@ -202,7 +202,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const activeSearchRef = useRef(0);
   const authEnabled = Boolean(supabase);
   const signedIn = !authEnabled || Boolean(session);
-  const canUsePrivateActions = signedIn && (!authEnabled || !profileRequired);
+  const onboardingRequired = authEnabled && Boolean(session) && !profileRequired && !onboardingIsDone(onboarding);
+  const canUsePrivateActions = signedIn && (!authEnabled || (!profileRequired && !onboardingRequired));
   const dashboardAvatarUrl = avatarUrlForSession(session, profile);
   const dashboardInitial = initialForSession(session, profile);
   const updateCredentialForm = useCallback((updater) => {
@@ -1698,7 +1699,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     busy={busy}
                   />
                 )}
-                {authEnabled && session && !profileRequired && !onboardingIsDone(onboarding) && (
+                {onboardingRequired && (
                   <div className="mx-auto max-w-4xl px-6 py-6 md:px-12">
                     <OnboardingPreferencesPanel
                       form={onboardingForm}

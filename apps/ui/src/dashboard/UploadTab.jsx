@@ -106,7 +106,6 @@ function UploadTab({
       </div>
       {activeAddMode === 'upload' && (
       <>
-      
 
       <div
         onDragOver={(event) => {
