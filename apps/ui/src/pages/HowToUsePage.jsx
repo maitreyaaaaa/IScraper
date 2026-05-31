@@ -53,6 +53,52 @@ const HOW_TO_STEPS = [
     title: 'Confirm it is you',
     copy: 'Instagram may ask for your password. Enter it in Instagram, then wait for the download notification.',
   },
+  {
+    image: '/how-to/instagram-09-processing.jpg',
+    title: 'Wait while Instagram prepares it',
+    copy: 'After you confirm, Instagram shows that your information is being prepared. Leave it processing and watch your email.',
+  },
+  {
+    image: '/how-to/instagram-10-email-progress.png',
+    title: 'Check the first email',
+    copy: 'Instagram may email you that the Meta download request is in progress. This means the export is not ready yet.',
+    wide: true,
+  },
+  {
+    image: '/how-to/instagram-11-email-ready.png',
+    title: 'Open the ready email',
+    copy: 'When Instagram sends the email saying your Meta information download is ready, open that email.',
+    wide: true,
+  },
+  {
+    image: '/how-to/instagram-12-email-download-link.png',
+    title: 'Use the export link',
+    copy: 'In the email, click export your information. Instagram only keeps the download available for a few days.',
+    wide: true,
+  },
+  {
+    image: '/how-to/instagram-13-available-download.jpg',
+    title: 'Download the export',
+    copy: 'Back on Instagram, find Available downloads and tap Download. Save the file somewhere easy to find.',
+  },
+  {
+    image: '/how-to/instagram-14-zip-saved.png',
+    title: 'Keep the ZIP file',
+    copy: 'Your computer or phone will save a compressed Instagram export ZIP. Do not unzip it unless you need to inspect it.',
+    wide: true,
+  },
+  {
+    image: '/how-to/instagram-15-add-saves.png',
+    title: 'Open Add saves',
+    copy: 'Come back to IScraper, open Add saves, and switch from Paste link to Upload files.',
+    wide: true,
+  },
+  {
+    image: '/how-to/instagram-16-upload-files.png',
+    title: 'Upload the Instagram ZIP',
+    copy: 'Drop the ZIP into IScraper or click Choose export files. IScraper will import your saved Instagram posts from that file.',
+    wide: true,
+  },
 ];
 
 const OPENROUTER_STEPS = [
@@ -501,8 +547,10 @@ function HowToUsePage({ onBack, onOpenApp }) {
                   className="howto-step grid min-h-[calc(100vh-5rem)] items-center gap-8 py-10 md:grid-cols-2 md:gap-14 md:py-16"
                 >
                   <div className={`howto-shot ${index % 2 === 1 ? 'md:order-2' : ''}`}>
-                    <div className="mx-auto max-w-[18rem] overflow-hidden rounded-[1.75rem] shadow-2xl shadow-black/50 md:max-w-[21rem]">
-                      <img src={step.image} alt={`Step ${index + 1}: ${step.title}`} className="max-h-[68vh] w-full object-contain" loading={index < 2 ? 'eager' : 'lazy'} />
+                    <div className={`mx-auto overflow-hidden rounded-[1.75rem] shadow-2xl shadow-black/50 ${
+                      step.wide ? 'max-w-[28rem] md:max-w-[58rem]' : 'max-w-[18rem] md:max-w-[21rem]'
+                    }`}>
+                      <img src={step.image} alt={`Step ${index + 1}: ${step.title}`} className={`${step.wide ? 'max-h-[42vh]' : 'max-h-[68vh]'} w-full object-contain`} loading={index < 2 ? 'eager' : 'lazy'} />
                     </div>
                   </div>
                   <div className={`howto-copy flex flex-col justify-center p-2 md:p-10 ${index % 2 === 1 ? 'md:order-1' : ''}`}>
@@ -522,7 +570,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
               </div>
               <h2 className="font-display text-4xl font-bold tracking-tight">After Instagram sends the file</h2>
               <p className="mt-3 max-w-2xl text-base leading-7">
-                Download the export from Instagram, come back to IScraper, open your library, and upload the saved HTML files.
+                Download the export from Instagram, come back to IScraper, open Add saves, and upload the Instagram ZIP file.
               </p>
               <button type="button" onClick={onOpenApp} className="mt-6 inline-flex items-center gap-3 rounded-full bg-black px-6 py-4 font-semibold text-white transition hover:scale-[1.02]">
                 Open my library <ArrowRight className="h-5 w-5" />

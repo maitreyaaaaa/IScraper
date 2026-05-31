@@ -204,7 +204,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const authEnabled = Boolean(supabase);
   const signedIn = !authEnabled || Boolean(session);
   const shouldShowOnboardingPrompt = authEnabled && Boolean(session) && !profileRequired && !onboardingIsDone(onboarding);
-  const canUsePrivateActions = signedIn && (!authEnabled || !profileRequired);
+  const canUsePrivateActions = signedIn && (!authEnabled || (!profileRequired && !shouldShowOnboardingPrompt));
   const dashboardAvatarUrl = avatarUrlForSession(session, profile);
   const dashboardInitial = initialForSession(session, profile);
   const updateCredentialForm = useCallback((updater) => {
@@ -233,6 +233,17 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       // Layout preference is cosmetic; ignore private-mode storage failures.
     }
   }, [libraryLayout]);
+
+  useEffect(() => {
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      document.body.style.overflow = previousBodyOverflow;
+    };
+  }, []);
 
   const loadItems = useCallback(async () => {
     const body = await getItems();
@@ -811,10 +822,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       });
       setOnboarding(body.onboarding || null);
       setOnboardingForm(onboardingFormFromRecord(body.onboarding));
+      selectTab('library');
       setNotice(skipped ? 'Personalization skipped. You can update it later in account settings.' : 'Personalization saved.');
     } catch (err) {
       setError(err.message);
-      setNotice('You can keep using IScraper and update personalization later.');
     } finally {
       setBusy(false);
     }
@@ -1427,6 +1438,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const sidebarVisibleExpanded = sidebarExpanded || sidebarHoverExpanded;
   const advancedMenuOpen = sidebarVisibleExpanded && advancedOpen;
 
+  useEffect(() => {
+    if (!sidebarVisibleExpanded) setAdvancedOpen(false);
+  }, [sidebarVisibleExpanded]);
+
   const selectTab = useCallback((nextTab, options = {}) => {
     if (!DASHBOARD_TABS.includes(nextTab)) return;
     if (nextTab === 'upload') setUploadInitialMode(options.initialAddMode || 'link');
@@ -1653,26 +1668,23 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             >
               <Settings className="h-4 w-4" />
             </button>
-            <button
-              type="button"
-              onClick={() => setAdvancedOpen((current) => !current)}
-              title={sidebarVisibleExpanded ? undefined : 'Advanced Options'}
-              aria-label="Advanced Options"
-              aria-expanded={advancedMenuOpen}
-              className={`flex min-h-11 items-center rounded-lg text-sm transition ${
-                advancedActive ? 'text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
-              } ${
-                sidebarVisibleExpanded ? 'min-w-0 flex-1 justify-between gap-2 px-3 py-2.5' : 'h-11 w-11 justify-center'
-              }`}
-            >
-              <span className={`flex min-w-0 items-center ${sidebarVisibleExpanded ? 'gap-3' : ''}`}>
-                <SlidersHorizontal className="h-4 w-4 shrink-0" />
-                {sidebarVisibleExpanded && <span className="truncate">Advanced Options</span>}
-              </span>
-              {sidebarVisibleExpanded && (
+            {sidebarVisibleExpanded && (
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((current) => !current)}
+                aria-label="Advanced Options"
+                aria-expanded={advancedMenuOpen}
+                className={`flex min-h-11 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm transition ${
+                  advancedActive ? 'text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                }`}
+              >
+                <span className="flex min-w-0 items-center gap-3">
+                  <SlidersHorizontal className="h-4 w-4 shrink-0" />
+                  <span className="truncate">Advanced Options</span>
+                </span>
                 <ChevronDown className={`h-4 w-4 shrink-0 transition ${advancedMenuOpen ? 'rotate-90' : '-rotate-90'}`} />
-              )}
-            </button>
+              </button>
+            )}
           </div>
           {advancedMenuOpen && (
             <div
@@ -1714,7 +1726,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         </div>
       </aside>
 
-      <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
+      <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
         {canUsePrivateActions && (
           <button
             type="button"
@@ -1726,7 +1738,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             <Plus className="h-7 w-7" />
           </button>
         )}
-        <div ref={dashPanelRef} className="dash-panel h-screen overflow-y-auto overflow-x-hidden">
+        <div ref={dashPanelRef} className="dash-panel h-full overflow-y-auto overflow-x-hidden">
           <div className="dash-panel-inner">
             <MobileTopbar
               onBack={onBack}
@@ -1761,17 +1773,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     onSave={handleProfileSave}
                     busy={busy}
                   />
-                )}
-                {shouldShowOnboardingPrompt && (
-                  <div className="mx-auto max-w-4xl px-6 py-6 md:px-12">
-                    <OnboardingPreferencesPanel
-                      form={onboardingForm}
-                      setForm={setOnboardingForm}
-                      onSave={() => handleOnboardingSave()}
-                      onSkip={() => handleOnboardingSave({ skipped: true })}
-                      busy={busy}
-                    />
-                  </div>
                 )}
                 {canUsePrivateActions && tab === 'library' && (
                   <LibraryTab
@@ -2009,6 +2010,19 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             )}
           </div>
         </div>
+        {!loading && shouldShowOnboardingPrompt && (
+          <div className="fixed inset-0 z-[70] grid place-items-center overflow-y-auto bg-black/80 px-5 py-8 backdrop-blur-md">
+            <div className="w-full max-w-5xl">
+              <OnboardingPreferencesPanel
+                form={onboardingForm}
+                setForm={setOnboardingForm}
+                onSave={() => handleOnboardingSave()}
+                onSkip={() => handleOnboardingSave({ skipped: true })}
+                busy={busy}
+              />
+            </div>
+          </div>
+        )}
       </main>
 
       <LibraryChatPanel
