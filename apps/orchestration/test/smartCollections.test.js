@@ -60,6 +60,76 @@ test('smart collection generation recognizes fashion and shopping saves', () => 
   assert.ok(candidates.find((collection) => collection.slug === 'products'));
 });
 
+test('smart collection generation keeps interest folders personalized to the user data', () => {
+  const aiCandidates = generateSmartCollectionCandidates([
+    savedItem('ai-1', {
+      status: 'done',
+      analysis: { tags: ['AI agents'], topics: ['AI agents'], toolsMentioned: ['Claude'] },
+    }),
+    savedItem('ai-2', {
+      status: 'done',
+      analysis: { tags: ['AI agents'], topics: ['AI agents'], toolsMentioned: ['Gemini'] },
+    }),
+  ]);
+  assert.ok(aiCandidates.find((collection) => collection.slug === 'topic-ai-agents'));
+  assert.equal(aiCandidates.find((collection) => collection.slug === 'tool-claude'), undefined);
+  assert.equal(aiCandidates.find((collection) => collection.slug === 'tool-gemini'), undefined);
+
+  const recipeCandidates = generateSmartCollectionCandidates([
+    savedItem('recipe-1', { status: 'done', sourceTitle: 'Pasta dinner recipe with tomato sauce' }),
+    savedItem('recipe-2', { status: 'done', caption: 'Lunch meal prep cooking guide' }),
+  ]);
+  assert.ok(recipeCandidates.find((collection) => collection.slug === 'recipes'));
+  assert.equal(recipeCandidates.find((collection) => collection.slug === 'topic-ai-agents'), undefined);
+  assert.equal(recipeCandidates.find((collection) => collection.slug === 'tool-claude'), undefined);
+});
+
+test('smart collection generation adds source and capture folders only when matching saves exist', () => {
+  const candidates = generateSmartCollectionCandidates([
+    savedItem('insta-1', { status: 'done', platform: 'Instagram', platformKey: 'instagram' }),
+    savedItem('insta-2', { status: 'done', platform: 'Instagram', platformKey: 'instagram' }),
+    savedItem('shot-1', { status: 'done', platform: 'Browser capture', platformKey: 'iscraper-extension-capture' }),
+    savedItem('shot-2', { status: 'done', platform: 'Browser capture', platformKey: 'iscraper-extension-capture' }),
+  ]);
+
+  const instagram = candidates.find((collection) => collection.slug === 'platform-instagram');
+  const screenshots = candidates.find((collection) => collection.slug === 'capture-screenshots');
+  assert.equal(instagram?.generationMetadata.folderGroup.name, 'Sources');
+  assert.equal(screenshots?.generationMetadata.folderGroup.name, 'Captures');
+  assert.deepEqual(screenshots?.generationMetadata.matchSignals, ['Screenshots']);
+  assert.equal(candidates.find((collection) => collection.slug === 'capture-voice-notes'), undefined);
+});
+
+test('public smart collections expose folder groups and match signals', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'iscraper-smart-public-'));
+  const store = createLocalStore({ dataPath: dir });
+
+  try {
+    store.ensureUser('public-user', 'public@example.com');
+    store.upsertImportData({
+      userId: 'public-user',
+      importId: 'import-public',
+      parsed: {
+        collections: [],
+        items: [
+          savedItem('gemini-1', { status: 'done' }),
+          savedItem('gemini-2', { status: 'done' }),
+        ],
+      },
+      initialStatus: 'done',
+    });
+    store.saveAnalysis('public-user', 'gemini-1', { topics: ['AI agents'], tags: ['AI agents'], toolsMentioned: ['Gemini'] });
+    store.saveAnalysis('public-user', 'gemini-2', { topics: ['AI agents'], tags: ['AI agents'], toolsMentioned: ['Gemini'] });
+
+    const collections = store.refreshSmartCollections('public-user');
+    const gemini = collections.find((collection) => collection.slug === 'tool-gemini');
+    assert.equal(gemini.folderGroup.name, 'Tools');
+    assert.ok(gemini.matchSignals.includes('Gemini'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 
 test('local smart collections persist edits and manual excludes across refresh', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'iscraper-smart-'));

@@ -2,42 +2,61 @@ const MIN_AUTO_COLLECTION_ITEMS = 2;
 const MAX_GENERATED_COLLECTIONS = 30;
 const DEFAULT_VISIBLE_COLLECTIONS_LIMIT = 12;
 
+const FOLDER_GROUPS = {
+  source: { key: 'source', name: 'Sources', rank: 10 },
+  capture: { key: 'capture', name: 'Captures', rank: 20 },
+  topic: { key: 'topic', name: 'Topics', rank: 30 },
+  product: { key: 'product', name: 'Products', rank: 35 },
+  tool: { key: 'tool', name: 'Tools', rank: 40 },
+  brand: { key: 'brand', name: 'Brands', rank: 45 },
+  person: { key: 'person', name: 'People', rank: 50 },
+  repo: { key: 'repo', name: 'Repositories', rank: 55 },
+  collection: { key: 'collection', name: 'Saved folders', rank: 60 },
+  other: { key: 'other', name: 'Smart folders', rank: 90 },
+};
+
 const CATEGORY_RULES = [
   {
     slug: 'fashion-clothes',
     name: 'Fashion / clothes',
     description: 'Outfits, clothing, accessories, style references, and wardrobe ideas.',
     terms: ['fashion', 'clothes', 'clothing', 'outfit', 'wardrobe', 'style', 'dress', 'shirt', 'jacket', 'jeans', 'sneakers', 'shoes', 'accessory', 'accessories', 'bag', 'watch', 'jewelry'],
+    folderGroup: FOLDER_GROUPS.topic,
   },
   {
     slug: 'products',
     name: 'Products',
     description: 'Products, shopping research, comparisons, and things you may want to buy later.',
     terms: ['product', 'products', 'shop', 'shopping', 'buy', 'price', 'deal', 'review', 'comparison', 'amazon', 'etsy', 'store', 'cart', 'gadget', 'gear'],
+    folderGroup: FOLDER_GROUPS.product,
   },
   {
     slug: 'ui-inspiration',
     name: 'UI inspiration',
     description: 'Screens, layouts, components, and interface ideas you saved.',
     terms: ['ui', 'ux', 'interface', 'dashboard', 'landing page', 'component', 'design system', 'web design', 'app design', 'layout', 'figma', 'tailwind', 'react'],
+    folderGroup: FOLDER_GROUPS.topic,
   },
   {
     slug: 'recipes',
     name: 'Recipes',
     description: 'Food ideas, recipes, restaurants, and cooking references.',
     terms: ['recipe', 'food', 'cooking', 'meal', 'restaurant', 'dinner', 'lunch', 'breakfast', 'pasta', 'ramen', 'kitchen', 'bake'],
+    folderGroup: FOLDER_GROUPS.topic,
   },
   {
     slug: 'product-ideas',
     name: 'Product ideas',
     description: 'Product concepts, market examples, and business ideas.',
     terms: ['product', 'startup', 'saas', 'business', 'pricing', 'growth', 'market', 'customer', 'launch', 'mvp', 'founder'],
+    folderGroup: FOLDER_GROUPS.topic,
   },
   {
     slug: 'design-tools',
     name: 'Design tools',
     description: 'Design, editing, creative, and workflow tools.',
     terms: ['tool', 'tools', 'figma', 'canva', 'photoshop', 'illustrator', 'framer', 'webflow', 'plugin', 'template'],
+    folderGroup: FOLDER_GROUPS.tool,
   },
   {
     slug: 'video-research',
@@ -45,6 +64,7 @@ const CATEGORY_RULES = [
     description: 'Videos, clips, transcripts, and watch-later research.',
     terms: ['youtube', 'tiktok', 'video', 'reel', 'shorts', 'transcript', 'clip', 'podcast', 'watch'],
     platformKeys: ['youtube', 'tiktok'],
+    folderGroup: FOLDER_GROUPS.topic,
   },
   {
     slug: 'social-inspiration',
@@ -52,12 +72,45 @@ const CATEGORY_RULES = [
     description: 'Posts and creators saved from social platforms.',
     terms: ['instagram', 'pinterest', 'twitter', 'x', 'linkedin', 'reddit', 'creator', 'post', 'thread'],
     platformKeys: ['instagram', 'pinterest', 'twitter', 'x', 'linkedin', 'reddit'],
+    folderGroup: FOLDER_GROUPS.topic,
   },
   {
     slug: 'research-notes',
     name: 'Research notes',
     description: 'Articles, notes, references, and material worth revisiting.',
     terms: ['research', 'article', 'reference', 'notes', 'paper', 'study', 'guide', 'tutorial', 'docs', 'documentation'],
+    folderGroup: FOLDER_GROUPS.topic,
+  },
+];
+
+const CAPTURE_RULES = [
+  {
+    slug: 'capture-screenshots',
+    name: 'Screenshots',
+    description: 'Screenshots and visual captures you saved.',
+    matches: (item) => item?.platformKey === 'iscraper-extension-capture',
+    signal: 'Screenshots',
+  },
+  {
+    slug: 'capture-voice-notes',
+    name: 'Voice notes',
+    description: 'Audio and voice notes from your private library.',
+    matches: (item) => ['voice', 'voice_note', 'audio'].includes(item?.contentType) || item?.platformKey === 'iscraper-voice-note',
+    signal: 'Voice notes',
+  },
+  {
+    slug: 'capture-notes',
+    name: 'Notes',
+    description: 'Notes you created directly in IScraper.',
+    matches: (item) => item?.contentType === 'note' || item?.platformKey === 'iscraper-note',
+    signal: 'Notes',
+  },
+  {
+    slug: 'capture-links',
+    name: 'Links',
+    description: 'Web links and pages you saved manually.',
+    matches: (item) => item?.platformKey === 'web' || String(item?.id || '').startsWith('web-'),
+    signal: 'Links',
   },
 ];
 
@@ -79,6 +132,24 @@ function slugify(value) {
 
 function unique(values = []) {
   return [...new Set(values.map((value) => cleanText(value, 80)).filter(Boolean))];
+}
+
+function normalizeFolderGroup(group = FOLDER_GROUPS.other) {
+  return {
+    key: cleanText(group.key || FOLDER_GROUPS.other.key, 40),
+    name: cleanText(group.name || FOLDER_GROUPS.other.name, 80),
+    rank: Number.isFinite(Number(group.rank)) ? Number(group.rank) : FOLDER_GROUPS.other.rank,
+  };
+}
+
+function mergeGenerationMetadata(current = {}, input = {}) {
+  const folderGroup = normalizeFolderGroup(input.folderGroup || current.folderGroup || FOLDER_GROUPS.other);
+  return {
+    ...current,
+    ...input,
+    folderGroup,
+    matchSignals: unique([...(current.matchSignals || []), ...(input.matchSignals || [])]).slice(0, 8),
+  };
 }
 
 function itemSearchText(item) {
@@ -117,9 +188,10 @@ function addCandidate(candidates, slug, input) {
     name: cleanText(input.name || slug, 80),
     description: cleanText(input.description || '', 220),
     sourceType: input.sourceType || 'auto',
-    generationMetadata: input.generationMetadata || {},
+    generationMetadata: mergeGenerationMetadata({}, input.generationMetadata || {}),
     items: new Map(),
   };
+  existing.generationMetadata = mergeGenerationMetadata(existing.generationMetadata, input.generationMetadata || {});
   const current = existing.items.get(input.item.id);
   if (!current || input.confidence > current.confidence) {
     existing.items.set(input.item.id, {
@@ -147,7 +219,30 @@ function buildRuleCandidates(candidates, item) {
       reason: platformMatch
         ? `Saved from ${item.platform || 'a matching platform'}.`
         : `Matched ${termMatches.slice(0, 3).join(', ')}.`,
-      generationMetadata: { rule: rule.slug },
+      generationMetadata: {
+        rule: rule.slug,
+        folderGroup: rule.folderGroup || FOLDER_GROUPS.topic,
+        matchSignals: termMatches.length ? termMatches.slice(0, 4) : [item.platform || rule.name],
+      },
+    });
+  }
+}
+
+function buildCaptureCandidates(candidates, item) {
+  for (const rule of CAPTURE_RULES) {
+    if (!rule.matches(item)) continue;
+    addCandidate(candidates, rule.slug, {
+      item,
+      name: rule.name,
+      description: rule.description,
+      sourceType: 'capture',
+      confidence: 0.66,
+      reason: `Saved as ${rule.signal.toLowerCase()}.`,
+      generationMetadata: {
+        captureType: rule.slug.replace(/^capture-/, ''),
+        folderGroup: FOLDER_GROUPS.capture,
+        matchSignals: [rule.signal],
+      },
     });
   }
 }
@@ -155,13 +250,14 @@ function buildRuleCandidates(candidates, item) {
 function buildEntityCandidates(candidates, item) {
   const analysis = item.analysis || {};
   const entityGroups = [
-    ['topic', analysis.topics || []],
-    ['tag', analysis.tags || []],
-    ['brand', analysis.brandsMentioned || []],
-    ['tool', analysis.toolsMentioned || []],
-    ['person', analysis.peopleMentioned || []],
+    ['topic', analysis.topics || [], FOLDER_GROUPS.topic],
+    ['tag', analysis.tags || [], FOLDER_GROUPS.topic],
+    ['brand', analysis.brandsMentioned || [], FOLDER_GROUPS.brand],
+    ['tool', analysis.toolsMentioned || [], FOLDER_GROUPS.tool],
+    ['person', analysis.peopleMentioned || [], FOLDER_GROUPS.person],
+    ['repo', analysis.reposMentioned || [], FOLDER_GROUPS.repo],
   ];
-  for (const [sourceType, values] of entityGroups) {
+  for (const [sourceType, values, folderGroup] of entityGroups) {
     for (const value of unique(values).slice(0, 8)) {
       const slug = `${sourceType}-${slugify(value)}`;
       addCandidate(candidates, slug, {
@@ -171,7 +267,12 @@ function buildEntityCandidates(candidates, item) {
         sourceType,
         confidence: sourceType === 'topic' || sourceType === 'tag' ? 0.74 : 0.68,
         reason: `AI analysis found ${value}.`,
-        generationMetadata: { sourceType, value },
+        generationMetadata: {
+          sourceType,
+          value,
+          folderGroup,
+          matchSignals: [value],
+        },
       });
     }
   }
@@ -187,7 +288,11 @@ function buildManualCollectionCandidates(candidates, item) {
       sourceType: 'saved_collection',
       confidence: 0.62,
       reason: `Originally saved in ${value}.`,
-      generationMetadata: { collection: value },
+      generationMetadata: {
+        collection: value,
+        folderGroup: FOLDER_GROUPS.collection,
+        matchSignals: [value],
+      },
     });
   }
 }
@@ -202,7 +307,11 @@ function buildPlatformCandidates(candidates, item) {
     sourceType: 'platform',
     confidence: 0.55,
     reason: `Saved from ${platform}.`,
-    generationMetadata: { platform },
+    generationMetadata: {
+      platform,
+      folderGroup: FOLDER_GROUPS.source,
+      matchSignals: [platform],
+    },
   });
 }
 
@@ -210,6 +319,7 @@ function generateSmartCollectionCandidates(items = []) {
   const candidates = new Map();
   for (const item of eligibleItems(items)) {
     buildRuleCandidates(candidates, item);
+    buildCaptureCandidates(candidates, item);
     buildEntityCandidates(candidates, item);
     buildManualCollectionCandidates(candidates, item);
     buildPlatformCandidates(candidates, item);
@@ -237,6 +347,8 @@ function publicSmartCollection(collection, memberships = [], itemById = new Map(
   const items = activeMemberships
     .map((entry) => itemById.get(entry.itemId))
     .filter(Boolean);
+  const generationMetadata = collection.generationMetadata || {};
+  const membershipSignals = activeMemberships.map((entry) => entry.reason).filter(Boolean);
   return {
     id: collection.id,
     userId: collection.userId,
@@ -246,7 +358,9 @@ function publicSmartCollection(collection, memberships = [], itemById = new Map(
     sourceType: collection.sourceType || 'auto',
     pinned: Boolean(collection.pinned),
     hidden: Boolean(collection.hidden),
-    generationMetadata: collection.generationMetadata || {},
+    generationMetadata,
+    folderGroup: normalizeFolderGroup(generationMetadata.folderGroup),
+    matchSignals: unique([...(generationMetadata.matchSignals || []), ...membershipSignals]).slice(0, 6),
     itemCount: activeMemberships.length,
     previewItems: items.slice(0, 3),
     updatedAt: collection.updatedAt,
