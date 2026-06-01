@@ -10,7 +10,6 @@ import {
   Brain,
   BrandLogo,
   checkLibraryLinks,
-  ChevronDown,
   cleanAuthCallbackUrl,
   clearAppQueryParams,
   createAgentAccessToken,
@@ -89,7 +88,6 @@ import {
   ShieldCheck,
   shouldEnrichItem,
   shouldUseStorageUpload,
-  SlidersHorizontal,
   SmartCollectionsView,
   sortedItems,
   STATE_FILTERS,
@@ -185,14 +183,13 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [profileForm, setProfileForm] = useState({ username: '', avatarUrl: '' });
   const [onboarding, setOnboarding] = useState(null);
   const [onboardingForm, setOnboardingForm] = useState(onboardingFormFromRecord(null));
-  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [onboardingPromptEligible, setOnboardingPromptEligible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const sidebarRef = useRef(null);
   const sidebarHoverTimerRef = useRef(null);
@@ -203,7 +200,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const activeSearchRef = useRef(0);
   const authEnabled = Boolean(supabase);
   const signedIn = !authEnabled || Boolean(session);
-  const shouldShowOnboardingPrompt = authEnabled && Boolean(session) && !profileRequired && !onboardingIsDone(onboarding);
+  const shouldShowOnboardingPrompt = authEnabled && Boolean(session) && !profileRequired && onboardingPromptEligible && !onboardingIsDone(onboarding);
   const canUsePrivateActions = signedIn && (!authEnabled || (!profileRequired && !shouldShowOnboardingPrompt));
   const dashboardAvatarUrl = avatarUrlForSession(session, profile);
   const dashboardInitial = initialForSession(session, profile);
@@ -490,6 +487,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             getOnboarding().catch(() => ({ onboarding: null })),
           ]);
           applyProfileState(profileBody.profile, profileBody.required);
+          setOnboardingPromptEligible(Boolean(profileBody.required));
           setOnboarding(onboardingBody.onboarding || null);
           setOnboardingForm(onboardingFormFromRecord(onboardingBody.onboarding));
           identifyPostHogUser(currentSession, profileBody.profile);
@@ -535,6 +533,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setCreatedAgentAccess(null);
           setOnboarding(null);
           setOnboardingForm(onboardingFormFromRecord(null));
+          setOnboardingPromptEligible(false);
           setLoading(false);
         resetPostHogUser();
       }
@@ -568,6 +567,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setProfileRequired(false);
         setOnboarding(null);
         setOnboardingForm(onboardingFormFromRecord(null));
+        setOnboardingPromptEligible(false);
         setLoading(false);
         resetPostHogUser();
       }
@@ -801,6 +801,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     try {
       const body = await saveProfile(profileForm);
       applyProfileState(body.profile, false);
+      setOnboardingPromptEligible(true);
       identifyPostHogUser(session, body.profile);
       await Promise.all([loadItems(), loadControls(), loadLibraryPage({ reset: true })]);
       setNotice('Profile saved. Your private library is ready.');
@@ -822,6 +823,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       });
       setOnboarding(body.onboarding || null);
       setOnboardingForm(onboardingFormFromRecord(body.onboarding));
+      setOnboardingPromptEligible(false);
       selectTab('library');
       setNotice(skipped ? 'Personalization skipped. You can update it later in account settings.' : 'Personalization saved.');
     } catch (err) {
@@ -1428,19 +1430,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     ['smart', 'Smart Collections', Folder],
     ['upload', 'Add saves', Upload],
   ];
-  const advancedNavItems = [
-    ['care', 'Library checkup', ShieldCheck],
-    ['graph', 'Graph view', GitBranch],
-    ['settings', 'AI keys', KeyRound],
-  ];
   const SidebarToggleIcon = sidebarExpanded ? PanelLeftClose : PanelLeftOpen;
-  const advancedActive = advancedNavItems.some(([key]) => key === tab);
   const sidebarVisibleExpanded = sidebarExpanded || sidebarHoverExpanded;
-  const advancedMenuOpen = sidebarVisibleExpanded && advancedOpen;
-
-  useEffect(() => {
-    if (!sidebarVisibleExpanded) setAdvancedOpen(false);
-  }, [sidebarVisibleExpanded]);
 
   const selectTab = useCallback((nextTab, options = {}) => {
     if (!DASHBOARD_TABS.includes(nextTab)) return;
@@ -1450,7 +1441,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       sidebarHoverTimerRef.current = null;
     }
     setSidebarHoverExpanded(false);
-    setAdvancedOpen(false);
     setTab(nextTab);
     replaceAppTabUrl(nextTab);
     resetPageScroll();
@@ -1504,6 +1494,15 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     handleSearch({ preventDefault: () => {}, searchQuery: nextQuery, searchMode: 'saved' });
   }, [handleSearch, selectTab]);
 
+  const handleSettingsExtraTabChange = useCallback((activeSettingsTab) => {
+    if (activeSettingsTab === 'aiKeys' && !controlsLoaded) {
+      loadControls().catch((err) => setError(err.message));
+    }
+    if (activeSettingsTab === 'care') {
+      loadLibraryCare();
+    }
+  }, [controlsLoaded, loadControls, loadLibraryCare]);
+
   useLayoutEffect(() => {
     resetPageScroll();
     const frame = window.requestAnimationFrame(resetPageScroll);
@@ -1530,7 +1529,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     if (sidebarExpanded) return;
     if (sidebarHoverTimerRef.current) window.clearTimeout(sidebarHoverTimerRef.current);
     sidebarHoverTimerRef.current = window.setTimeout(() => {
-      setAdvancedOpen(false);
       setSidebarHoverExpanded(false);
       sidebarHoverTimerRef.current = null;
     }, 280);
@@ -1573,7 +1571,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         {profile?.username && (
           <button
             type="button"
-            onClick={() => setAccountSettingsOpen(true)}
+            onClick={() => selectTab('settings')}
             title={`Signed in as @${profile.username}`}
             aria-label={`Open account settings for @${profile.username}`}
             className={`flex w-full items-center border-b border-white/5 text-left text-xs text-muted-foreground transition hover:bg-white/5 hover:text-foreground ${
@@ -1660,7 +1658,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                   selectTab('settings');
                   return;
                 }
-                setAccountSettingsOpen(true);
+                selectTab('settings');
               }}
               title="Settings"
               aria-label="Open settings"
@@ -1671,50 +1669,24 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             {sidebarVisibleExpanded && (
               <button
                 type="button"
-                onClick={() => setAdvancedOpen((current) => !current)}
-                aria-label="Advanced Options"
-                aria-expanded={advancedMenuOpen}
-                className={`flex min-h-11 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm transition ${
-                  advancedActive ? 'text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                onClick={() => {
+                  if (authEnabled && !session) {
+                    onOpenLogin();
+                    return;
+                  }
+                  selectTab('settings');
+                }}
+                aria-label="Open settings"
+                aria-current={tab === 'settings' ? 'page' : undefined}
+                className={`flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition ${
+                  tab === 'settings' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
                 }`}
               >
-                <span className="flex min-w-0 items-center gap-3">
-                  <SlidersHorizontal className="h-4 w-4 shrink-0" />
-                  <span className="truncate">Advanced Options</span>
-                </span>
-                <ChevronDown className={`h-4 w-4 shrink-0 transition ${advancedMenuOpen ? 'rotate-90' : '-rotate-90'}`} />
+                <Settings className="h-4 w-4 shrink-0" />
+                <span className="truncate">Settings</span>
               </button>
             )}
           </div>
-          {advancedMenuOpen && (
-            <div
-              className="fixed bottom-16 z-[80] w-60 rounded-2xl border border-white/10 bg-black/95 p-2 shadow-2xl shadow-black/70 backdrop-blur"
-              style={{ left: sidebarVisibleExpanded ? '15.75rem' : '5.25rem' }}
-            >
-              <div className="mb-1 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-primary">
-                Advanced Options
-              </div>
-              {advancedNavItems.map(([key, title, Icon]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => {
-                    selectTab(key);
-                    setAdvancedOpen(false);
-                  }}
-                  title={sidebarVisibleExpanded ? undefined : title}
-                  aria-label={title}
-                  aria-current={tab === key ? 'page' : undefined}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition ${
-                    tab === key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
-                  }`}
-                >
-                  <Icon className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{title}</span>
-                </button>
-              ))}
-            </div>
-          )}
         </div>
         <div
           title={`${stats.total} saved items`}
@@ -1747,7 +1719,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
               onOpenHowTo={onOpenHowTo}
               session={session}
               profile={profile}
-              onOpenAccount={() => setAccountSettingsOpen(true)}
+              onOpenAccount={() => selectTab('settings')}
             />
             {(error || notice) && (
               <div className="mx-auto max-w-6xl px-6 pt-6 md:px-12">
@@ -1965,45 +1937,102 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                   />
                 )}
                 {canUsePrivateActions && tab === 'settings' && (
-                  <SettingsTab
-                    credentials={credentials}
-                    agentTokens={agentTokens}
-                    agentTokenName={agentTokenName}
-                    setAgentTokenName={setAgentTokenName}
-                    createdAgentAccess={createdAgentAccess}
-                    onCreateAgentAccess={handleCreateAgentAccess}
-                    onRevokeAgentAccess={handleRevokeAgentAccess}
-                    credentialForm={credentialForm}
-                    setCredentialForm={updateCredentialForm}
-                    credentialSaveSuccess={credentialSaveSuccess}
-                    onSave={saveCredential}
-                    onDelete={async (id) => {
-                      setBusy(true);
-                      try {
-                        await deleteProviderCredential(id);
-                        await loadControls();
-                      } catch (err) {
-                        setError(err.message);
-                      } finally {
-                        setBusy(false);
-                      }
+                  <AccountSettingsModal
+                    open
+                    mode="page"
+                    session={session}
+                    profile={profile}
+                    onboarding={onboarding}
+                    onProfileSaved={(nextProfile) => {
+                      applyProfileState(nextProfile, false);
+                      setNotice('Profile saved.');
                     }}
-                    onTest={async (id) => {
-                      setBusy(true);
-                      try {
-                        await testProviderCredential(id);
-                        setNotice('Provider key works.');
-                      } catch (err) {
-                        setError(err.message);
-                      } finally {
-                        setBusy(false);
-                      }
+                    onOnboardingSaved={(nextOnboarding) => {
+                      setOnboarding(nextOnboarding || null);
+                      setOnboardingForm(onboardingFormFromRecord(nextOnboarding));
+                      setNotice('Personalization saved.');
                     }}
-                    busy={busy}
-                    authEnabled={authEnabled}
-                    onOpenHowTo={onOpenHowTo}
-                    onNotice={setNotice}
-                    onError={setError}
+                    extraTabs={[
+                      ['aiKeys', KeyRound, 'AI keys'],
+                      ['care', ShieldCheck, 'Library checkup'],
+                      ['graph', GitBranch, 'Graph view'],
+                    ]}
+                    onExtraTabChange={handleSettingsExtraTabChange}
+                    renderExtraTab={(activeSettingsTab) => {
+                      if (activeSettingsTab === 'aiKeys') {
+                        return (
+                          <SettingsTab
+                            credentials={credentials}
+                            agentTokens={agentTokens}
+                            agentTokenName={agentTokenName}
+                            setAgentTokenName={setAgentTokenName}
+                            createdAgentAccess={createdAgentAccess}
+                            onCreateAgentAccess={handleCreateAgentAccess}
+                            onRevokeAgentAccess={handleRevokeAgentAccess}
+                            credentialForm={credentialForm}
+                            setCredentialForm={updateCredentialForm}
+                            credentialSaveSuccess={credentialSaveSuccess}
+                            onSave={saveCredential}
+                            onDelete={async (id) => {
+                              setBusy(true);
+                              try {
+                                await deleteProviderCredential(id);
+                                await loadControls();
+                              } catch (err) {
+                                setError(err.message);
+                              } finally {
+                                setBusy(false);
+                              }
+                            }}
+                            onTest={async (id) => {
+                              setBusy(true);
+                              try {
+                                await testProviderCredential(id);
+                                setNotice('Provider key works.');
+                              } catch (err) {
+                                setError(err.message);
+                              } finally {
+                                setBusy(false);
+                              }
+                            }}
+                            busy={busy}
+                            authEnabled={authEnabled}
+                            onOpenHowTo={onOpenHowTo}
+                            onNotice={setNotice}
+                            onError={setError}
+                          />
+                        );
+                      }
+                      if (activeSettingsTab === 'care') {
+                        return (
+                          <LibraryCheckupTab
+                            care={libraryCare}
+                            loading={libraryCareLoading}
+                            busy={busy}
+                            onCheckLinks={handleCheckLibraryLinks}
+                            onOpenItem={openDetail}
+                            onRemind={handleCreateReminder}
+                            onUpdateReminder={handleUpdateReminder}
+                          />
+                        );
+                      }
+                      if (activeSettingsTab === 'graph') {
+                        return (
+                          <GraphTab
+                            onSelectItem={async (itemId) => {
+                              setError('');
+                              try {
+                                const body = await getItem(itemId);
+                                setSelected(mapItem(body.item));
+                              } catch (err) {
+                                setError(err.message);
+                              }
+                            }}
+                          />
+                        );
+                      }
+                      return null;
+                    }}
                   />
                 )}
               </>
@@ -2068,24 +2097,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           busy={busy}
         />
       )}
-      {accountSettingsOpen && (
-        <AccountSettingsModal
-          open
-          onClose={() => setAccountSettingsOpen(false)}
-          session={session}
-          profile={profile}
-          onboarding={onboarding}
-          onProfileSaved={(nextProfile) => {
-            applyProfileState(nextProfile, false);
-            setNotice('Profile saved.');
-          }}
-          onOnboardingSaved={(nextOnboarding) => {
-            setOnboarding(nextOnboarding || null);
-            setOnboardingForm(onboardingFormFromRecord(nextOnboarding));
-            setNotice('Personalization saved.');
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -2093,8 +2104,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
 function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOpenAccount }) {
   const avatarUrl = avatarUrlForSession(session, profile);
   const initial = initialForSession(session, profile);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const advancedActive = tab === 'care' || tab === 'graph' || tab === 'settings';
   return (
     <div className="sticky top-0 z-30 border-b border-white/10 bg-black/90 p-3 backdrop-blur md:hidden">
       <div className="mb-3 flex items-center justify-between">
@@ -2113,11 +2122,12 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
           </button>
         )}
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {[
           ['library', 'Library'],
           ['smart', 'Smart'],
           ['upload', 'Add'],
+          ['settings', 'Settings'],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -2128,39 +2138,6 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
             {label}
           </button>
         ))}
-      </div>
-      <div className="mt-2 rounded-lg border border-white/10">
-        <button
-          type="button"
-          onClick={() => setAdvancedOpen((current) => !current)}
-          aria-expanded={advancedOpen || advancedActive}
-          className={`flex w-full items-center justify-between px-3 py-2 text-xs ${
-            advancedActive ? 'text-primary' : 'text-muted-foreground'
-          }`}
-        >
-          <span className="inline-flex items-center gap-2">
-            <Settings className="h-3.5 w-3.5" />
-            Advanced Options
-          </span>
-          <ChevronDown className={`h-3.5 w-3.5 transition ${advancedOpen || advancedActive ? 'rotate-180' : ''}`} />
-        </button>
-        {(advancedOpen || advancedActive) && (
-          <div className="grid grid-cols-2 gap-2 border-t border-white/10 p-2">
-            {[
-              ['care', 'Checkup'],
-              ['graph', 'Graph view'],
-              ['settings', 'AI keys'],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setTab(key)}
-                className={`rounded-lg px-3 py-2 text-xs ${tab === key ? 'bg-primary text-primary-foreground' : 'border border-white/10 text-muted-foreground'}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
       <button
         type="button"

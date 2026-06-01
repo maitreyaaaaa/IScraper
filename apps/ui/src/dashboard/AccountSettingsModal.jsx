@@ -63,7 +63,20 @@ import {
   Zap,
 } from '../AppShared.jsx';
 import { Banner, OnboardingPreferencesFields } from '../components/Common.jsx';
-function AccountSettingsModal({ open, onClose, session, profile, onboarding: initialOnboarding = null, onProfileSaved, onOnboardingSaved }) {
+function AccountSettingsModal({
+  open,
+  onClose,
+  session,
+  profile,
+  onboarding: initialOnboarding = null,
+  onProfileSaved,
+  onOnboardingSaved,
+  mode = 'modal',
+  extraTabs = [],
+  renderExtraTab = null,
+  onExtraTabChange = null,
+}) {
+  const isModal = mode !== 'page';
   const [activeTab, setActiveTab] = useState('account');
   const [profileForm, setProfileForm] = useState({
     username: profile?.username || '',
@@ -95,11 +108,12 @@ function AccountSettingsModal({ open, onClose, session, profile, onboarding: ini
   const groupedCredentials = Object.values(groupProviderCredentials(credentials));
   const email = session?.user?.email || 'Not available';
   const dataUsage = useMemo(() => buildDataUsage(usageItems, credits), [credits, usageItems]);
+  const extraTabKeys = useMemo(() => extraTabs.map(([key]) => key).join('|'), [extraTabs]);
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open || !isModal) return undefined;
     const closeOnEscape = (event) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onClose?.();
     };
     document.addEventListener('keydown', closeOnEscape);
     const previousOverflow = document.body.style.overflow;
@@ -108,7 +122,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onboarding: ini
       document.removeEventListener('keydown', closeOnEscape);
       document.body.style.overflow = previousOverflow;
     };
-  }, [onClose, open]);
+  }, [isModal, onClose, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -126,6 +140,11 @@ function AccountSettingsModal({ open, onClose, session, profile, onboarding: ini
       cancelled = true;
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !extraTabKeys.split('|').includes(activeTab)) return;
+    onExtraTabChange?.(activeTab);
+  }, [activeTab, extraTabKeys, onExtraTabChange, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -404,7 +423,7 @@ function AccountSettingsModal({ open, onClose, session, profile, onboarding: ini
     setError('');
     try {
       await supabase.auth.signOut();
-      onClose();
+      onClose?.();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -420,16 +439,25 @@ function AccountSettingsModal({ open, onClose, session, profile, onboarding: ini
   const visualCoverage = dataUsage.searchable
     ? Math.round((dataUsage.visualReady / dataUsage.searchable) * 100)
     : 0;
+  const tabs = [
+    ['account', User, 'Account'],
+    ['usage', ShieldCheck, 'Privacy'],
+    ['profile', Settings, 'Profile'],
+    ['personalization', Sparkles, 'Personalization'],
+    ['api', KeyRound, 'API Health'],
+    ['requests', AlertCircle, 'Requests'],
+    ...extraTabs,
+  ];
 
   return (
     <div
-      className="fixed inset-0 z-[220] grid place-items-center bg-black/75 px-3 py-5 backdrop-blur-md"
+      className={isModal ? 'fixed inset-0 z-[220] grid place-items-center bg-black/75 px-3 py-5 backdrop-blur-md' : 'min-h-full bg-black'}
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (isModal && event.target === event.currentTarget) onClose?.();
       }}
     >
-      <section className="flex h-[90vh] w-[94vw] max-w-6xl flex-col overflow-hidden rounded-[1.75rem] border border-white/10 bg-black text-foreground shadow-[0_30px_120px_rgba(0,0,0,0.75)] md:h-[70vh] md:w-[70vw]">
-        <header className="flex items-center justify-between gap-4 border-b border-white/10 p-4 md:p-5">
+      <section className={isModal ? 'flex h-[90vh] w-[94vw] max-w-6xl flex-col overflow-hidden rounded-[1.75rem] border border-white/10 bg-black text-foreground shadow-[0_30px_120px_rgba(0,0,0,0.75)] md:h-[70vh] md:w-[70vw]' : 'mx-auto flex min-h-full w-full max-w-7xl flex-col bg-black text-foreground'}>
+        <header className={`${isModal ? 'p-4 md:p-5' : 'px-6 py-6 md:px-10 md:py-8'} flex items-center justify-between gap-4 border-b border-white/10`}>
           <div className="flex min-w-0 items-center gap-3">
             <span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-primary font-display text-lg font-bold text-primary-foreground">
               {avatarUrl ? <img src={avatarUrl} alt="" className="h-full w-full object-cover" /> : initial}
@@ -439,21 +467,16 @@ function AccountSettingsModal({ open, onClose, session, profile, onboarding: ini
               <p className="truncate text-xs text-muted-foreground">{email}</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground" aria-label="Close settings">
-            <X className="h-5 w-5" />
-          </button>
+          {isModal && (
+            <button type="button" onClick={onClose} className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 text-muted-foreground transition hover:bg-white/10 hover:text-foreground" aria-label="Close settings">
+              <X className="h-5 w-5" />
+            </button>
+          )}
         </header>
 
-        <div className="grid min-h-0 flex-1 md:grid-cols-[13rem_1fr]">
+        <div className="grid min-h-0 flex-1 md:grid-cols-[14rem_1fr]">
           <nav className="flex gap-2 overflow-x-auto border-b border-white/10 p-3 md:block md:space-y-2 md:overflow-visible md:border-b-0 md:border-r">
-            {[
-              ['account', User, 'Account'],
-              ['usage', ShieldCheck, 'Privacy'],
-              ['profile', Settings, 'Profile'],
-              ['personalization', Sparkles, 'Personalization'],
-              ['api', KeyRound, 'API Health'],
-              ['requests', AlertCircle, 'Requests'],
-            ].map(([key, Icon, label]) => (
+            {tabs.map(([key, Icon, label]) => (
               <button
                 key={key}
                 type="button"
@@ -467,13 +490,15 @@ function AccountSettingsModal({ open, onClose, session, profile, onboarding: ini
             ))}
           </nav>
 
-          <div className="min-h-0 overflow-y-auto p-4 md:p-6">
+          <div className={`${isModal ? 'p-4 md:p-6' : 'px-6 py-6 md:px-10 md:py-8'} min-h-0 overflow-y-auto`}>
             {(error || message) && (
               <div className="mb-4">
                 {error ? <Banner type="error">{error}</Banner> : <Banner>{message}</Banner>}
               </div>
             )}
 
+            {renderExtraTab && extraTabs.some(([key]) => key === activeTab) ? renderExtraTab(activeTab) : (
+              <>
             {activeTab === 'account' && (
               <div className="space-y-5">
                 <div>
@@ -1053,6 +1078,8 @@ function AccountSettingsModal({ open, onClose, session, profile, onboarding: ini
                   </form>
                 )}
               </div>
+            )}
+              </>
             )}
           </div>
         </div>

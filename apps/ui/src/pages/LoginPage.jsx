@@ -34,6 +34,7 @@ function LoginPage({ onBack, onOpenApp }) {
   const [profileForm, setProfileForm] = useState({ username: '', avatarUrl: '' });
   const [onboarding, setOnboarding] = useState(null);
   const [onboardingForm, setOnboardingForm] = useState(onboardingFormFromRecord(null));
+  const [onboardingPromptEligible, setOnboardingPromptEligible] = useState(false);
   const [emailForm, setEmailForm] = useState({ email: '', code: '' });
   const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [notice, setNotice] = useState('');
@@ -67,6 +68,7 @@ function LoginPage({ onBack, onOpenApp }) {
       getOnboarding().catch(() => ({ onboarding: null })),
     ]);
     applyProfileState(profileBody.profile, profileBody.required);
+    setOnboardingPromptEligible(Boolean(profileBody.required));
     setOnboarding(onboardingBody.onboarding || null);
     setOnboardingForm(onboardingFormFromRecord(onboardingBody.onboarding));
     identifyPostHogUser(data.session, profileBody.profile);
@@ -104,6 +106,7 @@ function LoginPage({ onBack, onOpenApp }) {
         setProfileRequired(false);
         setOnboarding(null);
         setOnboardingForm(onboardingFormFromRecord(null));
+        setOnboardingPromptEligible(false);
         resetPostHogUser();
       }
     });
@@ -191,6 +194,7 @@ function LoginPage({ onBack, onOpenApp }) {
     try {
       const body = await saveProfile(profileForm);
       applyProfileState(body.profile, false);
+      setOnboardingPromptEligible(true);
       identifyPostHogUser(session, body.profile);
     } catch (err) {
       setError(err.message);
@@ -210,6 +214,7 @@ function LoginPage({ onBack, onOpenApp }) {
       });
       setOnboarding(body.onboarding || null);
       setOnboardingForm(onboardingFormFromRecord(body.onboarding));
+      setOnboardingPromptEligible(false);
       onOpenApp();
     } catch (err) {
       setError(err.message);
@@ -330,7 +335,7 @@ function LoginPage({ onBack, onOpenApp }) {
                 Continue
               </button>
             </form>
-          ) : !onboardingIsDone(onboarding) ? (
+          ) : onboardingPromptEligible && !onboardingIsDone(onboarding) ? (
             <OnboardingPreferencesPanel
               form={onboardingForm}
               setForm={setOnboardingForm}
