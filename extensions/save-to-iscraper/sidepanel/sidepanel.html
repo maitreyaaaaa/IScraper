@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IScraper Research Dock</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <main>
+      <header class="dock-header">
+        <img src="../icons/logo.png" alt="IScraper" />
+        <button id="refresh" type="button" title="Refresh">Refresh</button>
+      </header>
+
+      <section id="signed-out" class="panel" hidden>
+        <h1>Research dock</h1>
+        <p class="muted">Sign in to search your library and save links while browsing.</p>
+        <button id="connect" type="button">Sign in to IScraper</button>
+      </section>
+
+      <section id="dock" hidden>
+        <form id="search-form" class="search-row">
+          <input id="search" type="search" placeholder="Search your library" autocomplete="off" />
+          <button type="submit">Search</button>
+        </form>
+
+        <section class="panel save-panel">
+          <h2>Save a link</h2>
+          <div id="drop-zone" class="drop-zone">
+            <span>Drop a link here</span>
+          </div>
+          <label for="save-url">URL</label>
+          <input id="save-url" type="url" autocomplete="off" placeholder="https://example.com" />
+          <label for="save-note">Note</label>
+          <textarea id="save-note" rows="2" maxlength="500" placeholder="Optional note or #tags"></textarea>
+          <button id="save-link" type="button">Save Link</button>
+        </section>
+
+        <section class="panel">
+          <div class="section-title">
+            <h2 id="results-title">Recent saves</h2>
+            <span id="count" class="muted"></span>
+          </div>
+          <div id="results" class="results"></div>
+        </section>
+      </section>
+
+      <p id="status" class="muted" role="status"></p>
+    </main>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
