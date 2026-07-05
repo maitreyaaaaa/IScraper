@@ -2,17 +2,39 @@
   if (window.__iscraperCaptureLoaded) return;
   window.__iscraperCaptureLoaded = true;
 
+  const DEFAULT_APP_URL = 'https://iscraper.vercel.app';
+  const DEFAULT_SETTINGS = {
+    defaultCollection: 'Browser captures',
+    alwaysShowCaptureIcon: true,
+    includeSourceUrl: true,
+    includePageTitle: true,
+  };
+
   let session = null;
   let root = null;
+  let quickRoot = null;
+  let quickSession = null;
+  let quickTarget = null;
+  let quickTimer = null;
+  let quickMode = '';
+  let quickListenersAttached = false;
+  let passiveEnabled = false;
   let startPoint = null;
   let box = null;
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === 'ISCRAPER_START_SELECTION_CAPTURE') {
+      startSelectionCapture(message);
+      sendResponse({ ok: true });
+      return false;
+    }
     if (message?.type !== 'ISCRAPER_START_SCREEN_CAPTURE') return false;
     startCapture(message);
     sendResponse({ ok: true });
     return false;
   });
+
+  initPersistentCapture();
 
   function startCapture(message) {
     session = {
@@ -28,12 +50,86 @@
     createCropOverlay();
   }
 
+  function startSelectionCapture(message) {
+    stopSelectionCapture({ restartPassive: false });
+    quickMode = 'manual';
+    quickSession = {
+      appUrl: message.appUrl,
+      token: message.token,
+      page: message.page || {},
+      settings: {
+        defaultCollection: String(message.settings?.defaultCollection || 'Browser captures').trim().slice(0, 80) || 'Browser captures',
+      },
+    };
+    ensureQuickRoot();
+    showQuickPanel();
+    attachQuickListeners();
+    if (quickTimer) window.clearTimeout(quickTimer);
+    quickTimer = window.setTimeout(stopSelectionCapture, 120000);
+  }
+
+  async function initPersistentCapture() {
+    await refreshPersistentCaptureState();
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (!['sync', 'local'].includes(area)) return;
+      if (
+        changes.alwaysShowCaptureIcon
+        || changes.defaultCollection
+        || changes.appUrl
+        || changes.extensionToken
+        || changes.extensionUserEmail
+      ) {
+        refreshPersistentCaptureState();
+      }
+    });
+  }
+
+  async function refreshPersistentCaptureState() {
+    const settings = await getStoredSettings();
+    const hasSession = Boolean(await getStoredSession());
+    passiveEnabled = settings.alwaysShowCaptureIcon !== false && hasSession && /^https?:\/\//i.test(window.location.href);
+    if (passiveEnabled) {
+      if (quickMode !== 'manual') await startPersistentCapture();
+      checkSavedPageStatus();
+    } else if (quickMode === 'passive') {
+      stopSelectionCapture({ restartPassive: false });
+    } else {
+      checkSavedPageStatus();
+    }
+  }
+
+  async function startPersistentCapture() {
+    stopSelectionCapture({ restartPassive: false });
+    quickMode = 'passive';
+    quickSession = await buildStoredQuickSession();
+    if (!quickSession) return;
+    ensureQuickRoot();
+    attachQuickListeners();
+  }
+
+  function attachQuickListeners() {
+    if (quickListenersAttached) return;
+    document.addEventListener('mouseup', handleSelectionMouseup, true);
+    document.addEventListener('keyup', handleSelectionMouseup, true);
+    document.addEventListener('mouseover', handleMediaHover, true);
+    document.addEventListener('scroll', removeQuickButton, true);
+    quickListenersAttached = true;
+  }
+
   function ensureRoot() {
     if (root) root.remove();
     root = document.createElement('div');
     root.id = 'iscraper-capture-root';
     document.documentElement.appendChild(root);
     return root;
+  }
+
+  function ensureQuickRoot() {
+    if (quickRoot) quickRoot.remove();
+    quickRoot = document.createElement('div');
+    quickRoot.id = 'iscraper-quick-capture-root';
+    document.documentElement.appendChild(quickRoot);
+    return quickRoot;
   }
 
   function createCropOverlay() {
@@ -102,6 +198,115 @@
       showStatusToast(error.message || 'Could not save screenshot.');
     }
   }
+
+  function showQuickPanel() {
+    const container = quickRoot || ensureQuickRoot();
+    const panel = document.createElement('section');
+    panel.className = 'iscraper-quick-panel';
+    const text = document.createElement('p');
+    text.textContent = 'Select text or hover an image/video.';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Done';
+    close.addEventListener('click', stopSelectionCapture);
+    panel.append(text, close);
+    container.appendChild(panel);
+  }
+
+  function handleSelectionMouseup() {
+    window.setTimeout(() => {
+      const selection = window.getSelection();
+      const selectedText = String(selection?.toString() || '').replace(/\s+/g, ' ').trim();
+      if (!selectedText || selectedText.length < 3 || !selection.rangeCount) return;
+      const rect = selection.getRangeAt(0).getBoundingClientRect();
+      if (!rect.width && !rect.height) return;
+      quickTarget = {
+        kind: 'text',
+        text: selectedText.slice(0, 1800),
+      };
+      showQuickButton({
+        left: Math.min(window.innerWidth - 46, Math.max(8, rect.right + 8)),
+        top: Math.min(window.innerHeight - 46, Math.max(8, rect.bottom + 8)),
+        label: 'Save selected text',
+      });
+    }, 0);
+  }
+
+  function handleMediaHover(event) {
+    const media = event.target?.closest?.('img, video');
+    if (!media || quickRoot?.contains(media)) return;
+    const rect = media.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 40) return;
+    const mediaUrl = media.currentSrc || media.src || media.poster || '';
+    if (!mediaUrl) return;
+    quickTarget = {
+      kind: media.tagName.toLowerCase() === 'video' ? 'video' : 'image',
+      mediaUrl,
+      mediaAlt: media.alt || media.getAttribute('aria-label') || '',
+    };
+    showQuickButton({
+      left: Math.min(window.innerWidth - 44, Math.max(8, rect.right - 22)),
+      top: Math.min(window.innerHeight - 44, Math.max(8, rect.top - 22)),
+      label: `Save ${quickTarget.kind}`,
+    });
+  }
+
+  function showQuickButton({ left, top, label }) {
+    const container = quickRoot || ensureQuickRoot();
+    removeQuickButton();
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'iscraper-quick-button';
+    button.style.left = `${left}px`;
+    button.style.top = `${top}px`;
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.textContent = '+';
+    button.addEventListener('click', saveQuickTarget);
+    container.appendChild(button);
+  }
+
+  function removeQuickButton() {
+    quickRoot?.querySelector('.iscraper-quick-button')?.remove();
+  }
+
+  async function saveQuickTarget() {
+    if (!quickTarget) return;
+    if (!quickSession) quickSession = await buildStoredQuickSession();
+    if (!quickSession) {
+      showStatusToast('Sign in to IScraper before saving from this page.');
+      return;
+    }
+    const target = { ...quickTarget };
+    removeQuickButton();
+    try {
+      const response = await sendRuntimeMessage({
+        type: 'ISCRAPER_SAVE_SELECTION',
+        payload: {
+          appUrl: quickSession.appUrl,
+          token: quickSession.token,
+          kind: target.kind,
+          text: target.text || '',
+          mediaUrl: target.mediaUrl || '',
+          mediaAlt: target.mediaAlt || '',
+          sourceTitle: quickSession.page.title || document.title || '',
+          sourceUrl: quickSession.page.url || window.location.href,
+          note: quickSession.page.note || '',
+          collection: quickSession.settings.defaultCollection,
+          requestId: createRequestId(),
+        },
+      });
+      if (!response?.ok) throw new Error(response?.error || 'Could not save this selection.');
+      showUndoToast({
+        itemId: response.body?.item?.id || '',
+        captureSession: quickSession,
+        message: target.kind === 'text' ? 'Text saved to library.' : 'Media reference saved to library.',
+      });
+    } catch (error) {
+      showStatusToast(error.message || 'Could not save this selection.');
+    }
+  }
+
 
   function updateBox(x, y) {
     const rect = normalizeRect(startPoint.x, startPoint.y, x, y);
@@ -192,7 +397,7 @@
     container.appendChild(panel);
   }
 
-  function showUndoToast({ itemId, captureSession }) {
+  function showUndoToast({ itemId, captureSession, message = 'Image saved to library.' }) {
     document.getElementById('iscraper-capture-toast-root')?.remove();
     const toastRoot = document.createElement('div');
     toastRoot.id = 'iscraper-capture-toast-root';
@@ -200,7 +405,7 @@
     toast.className = 'iscraper-capture-toast';
 
     const text = document.createElement('p');
-    text.textContent = 'Image saved to library.';
+    text.textContent = message;
 
     const undo = document.createElement('button');
     undo.type = 'button';
@@ -260,6 +465,95 @@
     root = null;
     startPoint = null;
     box = null;
+  }
+
+  function stopSelectionCapture({ restartPassive = true } = {}) {
+    if (quickListenersAttached) {
+      document.removeEventListener('mouseup', handleSelectionMouseup, true);
+      document.removeEventListener('keyup', handleSelectionMouseup, true);
+      document.removeEventListener('mouseover', handleMediaHover, true);
+      document.removeEventListener('scroll', removeQuickButton, true);
+      quickListenersAttached = false;
+    }
+    if (quickTimer) window.clearTimeout(quickTimer);
+    quickTimer = null;
+    quickTarget = null;
+    quickSession = null;
+    quickRoot?.remove();
+    quickRoot = null;
+    const stoppedMode = quickMode;
+    quickMode = '';
+    if (restartPassive && passiveEnabled && stoppedMode === 'manual') {
+      startPersistentCapture();
+    }
+  }
+
+  async function checkSavedPageStatus() {
+    if (!/^https?:\/\//i.test(window.location.href)) return;
+    const response = await sendRuntimeMessage({
+      type: 'ISCRAPER_CHECK_SAVED_PAGE',
+      payload: { url: window.location.href },
+    }).catch(() => null);
+    if (response?.saved) showSavedPill(response.item);
+  }
+
+  function showSavedPill(item) {
+    document.getElementById('iscraper-saved-page-pill')?.remove();
+    const pill = document.createElement('button');
+    pill.id = 'iscraper-saved-page-pill';
+    pill.type = 'button';
+    pill.textContent = 'Saved in IScraper';
+    pill.title = item?.title || 'Saved in IScraper';
+    pill.addEventListener('click', () => pill.remove());
+    document.documentElement.appendChild(pill);
+    window.setTimeout(() => pill.remove(), 3200);
+  }
+
+  async function buildStoredQuickSession() {
+    const [settings, sessionState] = await Promise.all([getStoredSettings(), getStoredSession()]);
+    if (!sessionState?.token) return null;
+    return {
+      appUrl: settings.appUrl,
+      token: sessionState.token,
+      page: {
+        url: settings.includeSourceUrl === false ? '' : window.location.href,
+        title: settings.includePageTitle === false ? '' : document.title,
+        note: '',
+      },
+      settings: {
+        defaultCollection: settings.defaultCollection,
+      },
+    };
+  }
+
+  async function getStoredSettings() {
+    const stored = await chrome.storage.sync.get({
+      appUrl: DEFAULT_APP_URL,
+      ...DEFAULT_SETTINGS,
+    });
+    const appUrl = String(stored.appUrl || DEFAULT_APP_URL).replace(/\/$/, '');
+    return {
+      ...DEFAULT_SETTINGS,
+      ...stored,
+      appUrl: /^https:\/\//i.test(appUrl) ? appUrl : DEFAULT_APP_URL,
+      defaultCollection: String(stored.defaultCollection || DEFAULT_SETTINGS.defaultCollection).trim().slice(0, 80) || DEFAULT_SETTINGS.defaultCollection,
+      alwaysShowCaptureIcon: stored.alwaysShowCaptureIcon !== false,
+      includeSourceUrl: stored.includeSourceUrl !== false,
+      includePageTitle: stored.includePageTitle !== false,
+    };
+  }
+
+  async function getStoredSession() {
+    const stored = await chrome.storage.local.get({
+      extensionToken: '',
+      extensionUserEmail: '',
+    });
+    const token = String(stored.extensionToken || '').trim();
+    if (!token) return null;
+    return {
+      token,
+      email: String(stored.extensionUserEmail || ''),
+    };
   }
 
   function createRequestId() {

@@ -7,6 +7,7 @@ const DEFAULT_SETTINGS = {
   autoAnalyzeScreenshots: true,
   includeSourceUrl: true,
   includePageTitle: true,
+  alwaysShowCaptureIcon: true,
 };
 
 const titleEl = document.getElementById('tab-title');
@@ -14,11 +15,15 @@ const signedOutEl = document.getElementById('signed-out');
 const actionsEl = document.getElementById('actions');
 const captureUrlEl = document.getElementById('capture-url');
 const screenCaptureEl = document.getElementById('screen-capture');
+const selectionCaptureEl = document.getElementById('selection-capture');
+const researchDockEl = document.getElementById('research-dock');
 const connectEl = document.getElementById('connect');
 const settingsEl = document.getElementById('settings');
 const statusEl = document.getElementById('status');
 const accountEl = document.getElementById('account');
 const undoUrlEl = document.getElementById('undo-url');
+const captureCollectionEl = document.getElementById('capture-collection');
+const captureNoteEl = document.getElementById('capture-note');
 
 let activeTab = null;
 let pageMeta = {};
@@ -66,6 +71,7 @@ async function getSettings() {
     autoAnalyzeScreenshots: stored.autoAnalyzeScreenshots !== false,
     includeSourceUrl: stored.includeSourceUrl !== false,
     includePageTitle: stored.includePageTitle !== false,
+    alwaysShowCaptureIcon: stored.alwaysShowCaptureIcon !== false,
   };
 }
 
@@ -96,6 +102,7 @@ async function readPageMeta(tabId) {
 }
 
 function captureBody() {
+  const details = captureDetails();
   return {
     url: activeTab.url || '',
     title: pageMeta.title || activeTab.title || '',
@@ -104,9 +111,19 @@ function captureBody() {
     author: pageMeta.author || '',
     platform: detectPlatform(activeTab.url || ''),
     source: 'extension',
-    collection: settings.defaultCollection,
+    collection: details.collection,
+    note: details.note,
     clientActionId: createRequestId(),
   };
+}
+
+function captureDetails() {
+  const collection = String(captureCollectionEl.value || settings.defaultCollection || DEFAULT_SETTINGS.defaultCollection)
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 80) || DEFAULT_SETTINGS.defaultCollection;
+  const note = String(captureNoteEl.value || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+  return { collection, note };
 }
 
 async function captureUrl() {
@@ -201,6 +218,7 @@ async function startScreenCapture() {
     return;
   }
   const appUrl = await getAppUrl();
+  const details = captureDetails();
   const pageTitle = settings.includePageTitle ? (pageMeta.title || activeTab.title || '') : '';
   const pageUrl = settings.includeSourceUrl ? (activeTab.url || '') : '';
   const message = {
@@ -209,7 +227,7 @@ async function startScreenCapture() {
     token: extensionSession.token,
     settings: {
       screenshotQuality: settings.screenshotQuality,
-      defaultCollection: settings.defaultCollection,
+      defaultCollection: details.collection,
       autoAnalyzeScreenshots: settings.autoAnalyzeScreenshots,
       includeSourceUrl: settings.includeSourceUrl,
       includePageTitle: settings.includePageTitle,
@@ -234,6 +252,62 @@ async function startScreenCapture() {
   }
 }
 
+async function startSelectionCapture() {
+  if (!extensionSession?.token) {
+    statusEl.textContent = 'Sign in before capturing.';
+    return;
+  }
+  if (!activeTab?.id || !/^https?:\/\//i.test(activeTab.url || '')) {
+    statusEl.textContent = 'Selection capture works on normal web pages only.';
+    return;
+  }
+  const appUrl = await getAppUrl();
+  const details = captureDetails();
+  const message = {
+    type: 'ISCRAPER_START_SELECTION_CAPTURE',
+    appUrl,
+    token: extensionSession.token,
+    settings: {
+      defaultCollection: details.collection,
+    },
+    page: {
+      url: settings.includeSourceUrl ? (activeTab.url || '') : '',
+      title: settings.includePageTitle ? (pageMeta.title || activeTab.title || '') : '',
+      note: details.note,
+    },
+  };
+  setBusy(selectionCaptureEl, true, 'Starting...');
+  try {
+    await sendTabMessage(activeTab.id, message);
+    statusEl.textContent = 'Select text or hover an image/video, then click the small save icon.';
+    if (settings.autoClosePopup) window.close();
+  } catch (_error) {
+    try {
+      await chrome.scripting.insertCSS({ target: { tabId: activeTab.id }, files: ['content/content.css'] });
+      await chrome.scripting.executeScript({ target: { tabId: activeTab.id }, files: ['content/content.js'] });
+      await sendTabMessage(activeTab.id, message);
+      if (settings.autoClosePopup) window.close();
+    } catch {
+      statusEl.textContent = 'Selection capture cannot run on this browser page.';
+    }
+  } finally {
+    setBusy(selectionCaptureEl, false, 'Select Text or Media');
+  }
+}
+
+async function openResearchDock() {
+  if (!extensionSession?.token) {
+    statusEl.textContent = 'Sign in before opening the research dock.';
+    return;
+  }
+  try {
+    await chrome.sidePanel.open({ windowId: activeTab?.windowId });
+    window.close();
+  } catch (_error) {
+    statusEl.textContent = 'Open the IScraper side panel from Chrome, then try again.';
+  }
+}
+
 async function openConnect() {
   const appUrl = await getAppUrl();
   const url = `${appUrl}/app?connectExtension=1&extensionId=${encodeURIComponent(chrome.runtime.id)}`;
@@ -254,6 +328,7 @@ async function init() {
   signedOutEl.hidden = Boolean(extensionSession?.token);
   actionsEl.hidden = !extensionSession?.token;
   accountEl.textContent = extensionSession?.email ? `Signed in as ${extensionSession.email}` : '';
+  captureCollectionEl.value = settings.defaultCollection;
 
   if (extensionSession?.token && !defaultActionStarted && settings.defaultAction !== 'menu') {
     defaultActionStarted = true;
@@ -300,6 +375,8 @@ function sendTabMessage(tabId, message) {
 
 captureUrlEl.addEventListener('click', captureUrl);
 screenCaptureEl.addEventListener('click', startScreenCapture);
+selectionCaptureEl.addEventListener('click', startSelectionCapture);
+researchDockEl.addEventListener('click', openResearchDock);
 connectEl.addEventListener('click', openConnect);
 undoUrlEl.addEventListener('click', undoUrlCapture);
 settingsEl.addEventListener('click', () => {

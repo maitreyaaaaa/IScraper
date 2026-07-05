@@ -7,6 +7,7 @@ const DEFAULT_SETTINGS = {
   autoAnalyzeScreenshots: true,
   includeSourceUrl: true,
   includePageTitle: true,
+  alwaysShowCaptureIcon: true,
 };
 
 const appUrlEl = document.getElementById('app-url');
@@ -14,6 +15,7 @@ const accountEl = document.getElementById('account');
 const defaultActionEl = document.getElementById('default-action');
 const screenshotQualityEl = document.getElementById('screenshot-quality');
 const autoClosePopupEl = document.getElementById('auto-close-popup');
+const alwaysShowCaptureIconEl = document.getElementById('always-show-capture-icon');
 const defaultCollectionEl = document.getElementById('default-collection');
 const autoAnalyzeScreenshotsEl = document.getElementById('auto-analyze-screenshots');
 const includeSourceUrlEl = document.getElementById('include-source-url');
@@ -65,6 +67,7 @@ async function saveSettings() {
     defaultAction: validChoice(defaultActionEl.value, ['menu', 'capture-url', 'screen-capture'], DEFAULT_SETTINGS.defaultAction),
     screenshotQuality: validChoice(screenshotQualityEl.value, ['balanced', 'high'], DEFAULT_SETTINGS.screenshotQuality),
     autoClosePopup: autoClosePopupEl.checked,
+    alwaysShowCaptureIcon: alwaysShowCaptureIconEl.checked,
     defaultCollection,
     autoAnalyzeScreenshots: autoAnalyzeScreenshotsEl.checked,
     includeSourceUrl: includeSourceUrlEl.checked,
@@ -107,6 +110,7 @@ async function renderSettings() {
   defaultActionEl.value = validChoice(settings.defaultAction, ['menu', 'capture-url', 'screen-capture'], DEFAULT_SETTINGS.defaultAction);
   screenshotQualityEl.value = validChoice(settings.screenshotQuality, ['balanced', 'high'], DEFAULT_SETTINGS.screenshotQuality);
   autoClosePopupEl.checked = settings.autoClosePopup !== false;
+  alwaysShowCaptureIconEl.checked = settings.alwaysShowCaptureIcon !== false;
   defaultCollectionEl.value = String(settings.defaultCollection || DEFAULT_SETTINGS.defaultCollection);
   autoAnalyzeScreenshotsEl.checked = settings.autoAnalyzeScreenshots !== false;
   includeSourceUrlEl.checked = settings.includeSourceUrl !== false;

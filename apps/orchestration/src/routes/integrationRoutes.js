@@ -8,6 +8,7 @@ const {
   buildNoteItem,
   noteInputFromBody,
 } = require('../services/notes');
+const { normalizeSavedUrl } = require('../services/linkSaver');
 const {
   assertTelegramWebhookSecret,
   parseTelegramCommand,
@@ -30,6 +31,34 @@ function registerPublicIntegrationRoutes(app, deps) {
   const { refreshSmartCollectionsForUser } = workflows.library;
   const { persistNoteImages, removeNoteAssetObjects } = workflows.notes;
   const { analyzeExtensionScreenshot } = workflows.screenshots;
+
+  function publicExtensionLibraryItem(item = {}) {
+    const analysis = item.analysis || {};
+    const firstLine = String(item.caption || '').split('\n').find(Boolean) || '';
+    return {
+      id: item.id,
+      url: item.url || '',
+      title: item.sourceTitle || analysis.title || firstLine || 'Saved item',
+      description: item.sourceDescription || analysis.summary || firstLine || '',
+      platform: item.platform || item.ownerName || 'Web',
+      collection: (item.collections || [])[0] || '',
+      collections: item.collections || [],
+      thumbnailUrl: item.thumbnailUrl || '',
+      status: item.status || '',
+      savedAt: item.savedAt || item.createdAt || '',
+      updatedAt: item.updatedAt || '',
+      matchReason: item.searchMatch?.reason || item.searchMatch?.matchedField || '',
+      tags: analysis.tags || item.hashtags || [],
+    };
+  }
+
+  function normalizedComparableUrl(value) {
+    try {
+      return normalizeSavedUrl(value);
+    } catch {
+      return '';
+    }
+  }
 
   async function getExtensionRequestUser(req, scope) {
     const user = await getExtensionUser(req, store, scope);
@@ -229,11 +258,66 @@ function registerPublicIntegrationRoutes(app, deps) {
     return res.status(201).json({ item });
   }));
 
+  app.post('/api/extension/captures/selection', asyncRoute(async (req, res) => {
+    const user = await getExtensionRequestUser(req, 'captures:create');
+    if (typeof store.createNoteItem !== 'function' || typeof store.updateSavedItem !== 'function') {
+      return res.status(501).json({ error: 'Selection captures are not available.' });
+    }
+
+    const kind = ['text', 'image', 'video'].includes(req.body?.kind) ? req.body.kind : 'text';
+    const sourceUrl = cleanText(req.body?.sourceUrl || '', 1000);
+    const sourceTitle = cleanText(req.body?.sourceTitle || '', 160);
+    const collection = cleanText(req.body?.collection || 'Browser captures', 80) || 'Browser captures';
+    const note = cleanText(req.body?.note || '', 500);
+    const text = cleanText(req.body?.text || '', 1800);
+    const mediaUrl = cleanText(req.body?.mediaUrl || '', 1000);
+    const mediaAlt = cleanText(req.body?.mediaAlt || '', 300);
+
+    if (kind === 'text' && !text) return res.status(400).json({ error: 'Select text before saving.' });
+    if ((kind === 'image' || kind === 'video') && !mediaUrl) return res.status(400).json({ error: 'Choose media before saving.' });
+
+    const title = kind === 'text'
+      ? `Saved text - ${sourceTitle || 'browser page'}`
+      : `Saved ${kind} - ${sourceTitle || 'browser page'}`;
+    const body = [
+      kind === 'text' ? `Quote:\n${text}` : `${kind === 'image' ? 'Image' : 'Video'} reference: ${mediaUrl}`,
+      mediaAlt ? `Description: ${mediaAlt}` : '',
+      note ? `Note: ${note}` : '',
+      sourceTitle ? `Page: ${sourceTitle}` : '',
+      sourceUrl ? `URL: ${sourceUrl}` : '',
+    ].filter(Boolean).join('\n\n');
+    const input = noteInputFromBody({
+      title,
+      body,
+      links: [sourceUrl, mediaUrl].filter(Boolean),
+    });
+    let item = await store.createNoteItem(user.id, buildNoteItem({ userId: user.id, input }));
+    item = await store.updateSavedItem(user.id, item.id, {
+      collections: [collection],
+      platform: 'IScraper Extension',
+      platformKey: 'iscraper-extension-selection',
+      sourceAuthor: 'Chrome extension',
+      sourceTitle: sourceTitle || title,
+      sourceDescription: kind === 'text' ? text : mediaAlt || mediaUrl,
+      status: 'done',
+      error: null,
+    }) || await store.getItem(user.id, item.id);
+
+    captureWorkflow(req, 'extension selection saved', {
+      userId: user.id,
+      itemId: item.id,
+      kind,
+      hasNote: Boolean(note),
+    });
+    await refreshSmartCollectionsForUser(user.id);
+    return res.status(201).json({ item });
+  }));
+
   app.delete('/api/extension/captures/:id', asyncRoute(async (req, res) => {
     const user = await getExtensionRequestUser(req, 'captures:delete');
     if (typeof store.deleteSavedItem !== 'function') return res.status(501).json({ error: 'Screenshot undo is not available.' });
     const existing = await store.getItem(user.id, req.params.id);
-    if (!existing || existing.platformKey !== 'iscraper-extension-capture') {
+    if (!existing || !['iscraper-extension-capture', 'iscraper-extension-selection'].includes(existing.platformKey)) {
       return res.status(404).json({ error: 'Extension capture not found.' });
     }
     const assets = typeof store.listItemAssets === 'function' ? await store.listItemAssets(user.id, existing.id) : existing.assets || [];
@@ -246,6 +330,38 @@ function registerPublicIntegrationRoutes(app, deps) {
     });
     await refreshSmartCollectionsForUser(user.id);
     return res.json({ deleted: Boolean(deleted), itemId: existing.id });
+  }));
+
+  app.get('/api/extension/library/recent', asyncRoute(async (req, res) => {
+    const user = await getExtensionRequestUser(req, 'lens:search');
+    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 8, 20));
+    const page = typeof store.listItemsPage === 'function'
+      ? await store.listItemsPage(user.id, { limit, sort: 'updated', state: 'all' })
+      : { items: (await store.getItems(user.id)).slice(0, limit) };
+    return res.json({ items: (page.items || []).map(publicExtensionLibraryItem) });
+  }));
+
+  app.get('/api/extension/library/search', searchRateLimit, asyncRoute(async (req, res) => {
+    const user = await getExtensionRequestUser(req, 'lens:search');
+    const query = cleanText(req.query?.q || '', 160);
+    if (!query) return res.json({ items: [] });
+    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 8, 20));
+    const results = await runSearch({
+      req,
+      userId: user.id,
+      query,
+      filters: { limit, source: 'extension-side-panel' },
+    });
+    return res.json({ items: results.slice(0, limit).map(publicExtensionLibraryItem) });
+  }));
+
+  app.get('/api/extension/library/status', asyncRoute(async (req, res) => {
+    const user = await getExtensionRequestUser(req, 'lens:search');
+    const targetUrl = normalizedComparableUrl(req.query?.url || '');
+    if (!targetUrl) return res.json({ saved: false, item: null });
+    const items = await store.getItems(user.id);
+    const item = items.find((entry) => normalizedComparableUrl(entry.url) === targetUrl);
+    return res.json({ saved: Boolean(item), item: item ? publicExtensionLibraryItem(item) : null });
   }));
 
   app.post('/api/agent-access/query', searchRateLimit, asyncRoute(async (req, res) => {

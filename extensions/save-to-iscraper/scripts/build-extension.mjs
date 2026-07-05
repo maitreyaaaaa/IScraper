@@ -9,6 +9,7 @@ const entries = [
   "manifest.json",
   "background",
   "content",
+  "sidepanel",
   "options",
   "popup",
   "PRIVACY.md",

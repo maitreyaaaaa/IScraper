@@ -73,7 +73,7 @@ assert(Boolean(manifest.action?.default_popup), "extension must define an action
 assert(Boolean(manifest.background?.service_worker), "extension must define an MV3 service worker.");
 assert(!manifest.content_security_policy || !/https?:\/\//i.test(JSON.stringify(manifest.content_security_policy)), "content_security_policy must not allow remote code.");
 
-const allowedPermissions = new Set(["activeTab", "scripting", "storage"]);
+const allowedPermissions = new Set(["activeTab", "scripting", "sidePanel", "storage"]);
 for (const permission of manifest.permissions ?? []) {
   assert(allowedPermissions.has(permission), `unexpected permission: ${permission}`);
   assert(!forbiddenPermissions.has(permission), `forbidden permission: ${permission}`);
@@ -84,10 +84,18 @@ for (const host of manifest.host_permissions ?? []) {
   assert(host.startsWith("https://iscraper.vercel.app/"), `unexpected host permission: ${host}`);
 }
 
+const contentScripts = manifest.content_scripts ?? [];
+assert(contentScripts.some((entry) => (
+  (entry.matches || []).includes("https://*/*")
+  && (entry.matches || []).includes("http://*/*")
+  && (entry.js || []).includes("content/content.js")
+)), "extension should register content/content.js for normal web pages.");
+
 const requiredFiles = [
   manifest.action.default_popup,
   manifest.background.service_worker,
   manifest.options_page,
+  manifest.side_panel?.default_path,
   "content/content.js",
   "content/content.css",
   "popup/popup.js",

@@ -2413,6 +2413,112 @@ test('extension session can save screenshot capture and undo it', async () => {
   }
 });
 
+test('extension session can save selected text capture and undo it', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const tokenResponse = await fetch(`http://127.0.0.1:${port}/api/extension-tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Chrome extension' }),
+    });
+    const tokenBody = await tokenResponse.json();
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/extension/captures/selection`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+      body: JSON.stringify({
+        kind: 'text',
+        text: 'Red Bull partners with Microsoft and AMD for founder tools.',
+        sourceTitle: 'Startup news',
+        sourceUrl: 'https://example.com/startup-news',
+        collection: 'Pitch research',
+        note: 'Useful partnership angle #ai',
+      }),
+    });
+    const body = await response.json();
+    const itemId = body.item?.id;
+
+    const undo = await fetch(`http://127.0.0.1:${port}/api/extension/captures/${itemId}`, {
+      method: 'DELETE',
+      headers: {
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+    });
+    const undoBody = await undo.json();
+    const items = store.getItems('local-dev-user');
+
+    assert.equal(response.status, 201);
+    assert.equal(body.item.platformKey, 'iscraper-extension-selection');
+    assert.equal(body.item.collections[0], 'Pitch research');
+    assert.match(body.item.caption, /Red Bull partners/);
+    assert.match(body.item.caption, /#ai/);
+    assert.equal(undo.status, 200);
+    assert.equal(undoBody.itemId, itemId);
+    assert.equal(items.find((item) => item.id === itemId), undefined);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('extension session can query recent saves, search library, and check saved page status', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const tokenResponse = await fetch(`http://127.0.0.1:${port}/api/extension-tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Chrome extension' }),
+    });
+    const tokenBody = await tokenResponse.json();
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-IScraper-Extension-Token': tokenBody.secret,
+    };
+
+    await fetch(`http://127.0.0.1:${port}/api/extension/saves/link`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        url: 'https://example.com/research-dock-save?utm_source=test',
+        title: 'Research dock save',
+        description: 'Side panel searchable item',
+        collection: 'Dock tests',
+      }),
+    });
+
+    const recent = await fetch(`http://127.0.0.1:${port}/api/extension/library/recent?limit=5`, { headers });
+    const recentBody = await recent.json();
+    const search = await fetch(`http://127.0.0.1:${port}/api/extension/library/search?q=${encodeURIComponent('dock searchable')}`, { headers });
+    const searchBody = await search.json();
+    const status = await fetch(`http://127.0.0.1:${port}/api/extension/library/status?url=${encodeURIComponent('https://example.com/research-dock-save')}`, { headers });
+    const statusBody = await status.json();
+
+    assert.equal(recent.status, 200);
+    assert.equal(recentBody.items.some((item) => item.title === 'Research dock save'), true);
+    assert.equal(search.status, 200);
+    assert.equal(searchBody.items.some((item) => item.title === 'Research dock save'), true);
+    assert.equal(status.status, 200);
+    assert.equal(statusBody.saved, true);
+    assert.equal(statusBody.item.title, 'Research dock save');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Lens image search rejects invalid crop payloads', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

@@ -20,8 +20,17 @@
       </section>
 
       <section id="actions" hidden>
+        <details class="save-details">
+          <summary>Save details</summary>
+          <label for="capture-collection">Collection</label>
+          <input id="capture-collection" type="text" maxlength="80" autocomplete="off" />
+          <label for="capture-note">Note or tags</label>
+          <textarea id="capture-note" maxlength="500" rows="3" placeholder="Optional. Add why this matters or #tags."></textarea>
+        </details>
         <button id="capture-url" type="button">Capture URL</button>
         <button id="screen-capture" type="button" class="secondary">Screen Capture</button>
+        <button id="selection-capture" type="button" class="secondary">Select Text or Media</button>
+        <button id="research-dock" type="button" class="secondary">Research Dock</button>
       </section>
 
       <footer>

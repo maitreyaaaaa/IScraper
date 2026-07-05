@@ -8,6 +8,7 @@ chrome.runtime.onInstalled.addListener(() => {
     autoAnalyzeScreenshots: true,
     includeSourceUrl: true,
     includePageTitle: true,
+    alwaysShowCaptureIcon: true,
   }, (stored) => {
     const defaults = {};
     if (!stored.appUrl) {
@@ -20,6 +21,7 @@ chrome.runtime.onInstalled.addListener(() => {
     if (typeof stored.autoAnalyzeScreenshots !== 'boolean') defaults.autoAnalyzeScreenshots = true;
     if (typeof stored.includeSourceUrl !== 'boolean') defaults.includeSourceUrl = true;
     if (typeof stored.includePageTitle !== 'boolean') defaults.includePageTitle = true;
+    if (typeof stored.alwaysShowCaptureIcon !== 'boolean') defaults.alwaysShowCaptureIcon = true;
     if (Object.keys(defaults).length) chrome.storage.sync.set(defaults);
   });
 });
@@ -64,6 +66,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     saveScreenshot(message.payload)
       .then(sendResponse)
       .catch((error) => sendResponse({ ok: false, error: error.message || 'Could not save this screenshot.', requestId: error.requestId || message.payload?.requestId || '' }));
+    return true;
+  }
+
+  if (message?.type === 'ISCRAPER_SAVE_SELECTION') {
+    saveSelection(message.payload)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, error: error.message || 'Could not save this selection.', requestId: error.requestId || message.payload?.requestId || '' }));
+    return true;
+  }
+
+  if (message?.type === 'ISCRAPER_CHECK_SAVED_PAGE') {
+    checkSavedPage(message.payload, sender)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, saved: false, error: error.message || 'Could not check this page.' }));
     return true;
   }
 
@@ -141,6 +157,28 @@ async function saveScreenshot(payload = {}) {
   return responseBody(response, requestId);
 }
 
+async function saveSelection(payload = {}) {
+  const appUrl = appBase(payload.appUrl);
+  const token = extensionToken(payload.token);
+  const requestId = payload.requestId || createRequestId();
+
+  const response = await fetch(`${appUrl}/api/extension/captures/selection`, {
+    method: 'POST',
+    headers: extensionHeaders({ token, requestId, contentType: 'application/json', action: 'extension:selection_capture' }),
+    body: JSON.stringify({
+      kind: payload.kind,
+      text: payload.text,
+      mediaUrl: payload.mediaUrl,
+      mediaAlt: payload.mediaAlt,
+      sourceUrl: payload.sourceUrl,
+      sourceTitle: payload.sourceTitle,
+      note: payload.note,
+      collection: payload.collection,
+    }),
+  });
+  return responseBody(response, requestId);
+}
+
 async function deleteUrlCapture(payload = {}) {
   const appUrl = appBase(payload.appUrl);
   const token = extensionToken(payload.token);
@@ -169,6 +207,37 @@ async function deleteCapture(payload = {}) {
   return responseBody(response, requestId);
 }
 
+async function checkSavedPage(payload = {}, sender = {}) {
+  const url = safeHttpUrl(payload.url);
+  const tabId = sender.tab?.id;
+  if (!url) {
+    if (tabId) await setSavedBadge(tabId, false);
+    return { ok: true, saved: false };
+  }
+  const session = await storedExtensionSession();
+  if (!session?.token) {
+    if (tabId) await setSavedBadge(tabId, false);
+    return { ok: true, saved: false };
+  }
+  const appUrl = await storedAppUrl();
+  const requestId = createRequestId();
+  const response = await fetch(`${appUrl}/api/extension/library/status?url=${encodeURIComponent(url)}`, {
+    headers: extensionHeaders({ token: session.token, requestId, action: 'extension:page_status' }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `IScraper request failed: ${response.status}`);
+  if (tabId) await setSavedBadge(tabId, Boolean(body.saved));
+  return { ok: true, saved: Boolean(body.saved), item: body.item || null };
+}
+
+async function setSavedBadge(tabId, saved) {
+  await chrome.action.setBadgeText({ tabId, text: saved ? 'SAVED' : '' });
+  if (saved) {
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: '#9cff2e' });
+    await chrome.action.setBadgeTextColor?.({ tabId, color: '#000000' });
+  }
+}
+
 function extensionHeaders({ token, requestId, contentType, action }) {
   const headers = {
     'X-Request-ID': requestId,
@@ -177,6 +246,27 @@ function extensionHeaders({ token, requestId, contentType, action }) {
   };
   if (contentType) headers['Content-Type'] = contentType;
   return headers;
+}
+
+async function storedAppUrl() {
+  const stored = await chrome.storage.sync.get({ appUrl: 'https://iscraper.vercel.app' });
+  const value = String(stored.appUrl || 'https://iscraper.vercel.app').replace(/\/$/, '');
+  return safeHttpUrl(value) ? value : 'https://iscraper.vercel.app';
+}
+
+async function storedExtensionSession() {
+  const stored = await chrome.storage.local.get({
+    extensionToken: '',
+    extensionTokenId: '',
+    extensionUserEmail: '',
+  });
+  const token = String(stored.extensionToken || '').trim();
+  if (!token) return null;
+  return {
+    token,
+    tokenId: String(stored.extensionTokenId || ''),
+    email: String(stored.extensionUserEmail || ''),
+  };
 }
 
 async function responseBody(response, requestId) {
@@ -195,7 +285,7 @@ async function responseBody(response, requestId) {
   }
   await recordLastRequest({
     ok: true,
-    action: response.url.includes('/captures/') ? 'screenshot capture' : response.url.includes('/saves/') ? 'URL capture' : 'request',
+    action: response.url.includes('/captures/selection') ? 'selection capture' : response.url.includes('/captures/') ? 'screenshot capture' : response.url.includes('/saves/') ? 'URL capture' : 'request',
     requestId: responseRequestId,
   });
   return { ok: true, body, requestId: responseRequestId };
