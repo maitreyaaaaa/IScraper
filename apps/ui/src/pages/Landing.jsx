@@ -766,18 +766,18 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
           <BrandLogo className="h-10 w-32" />
           <div className="flex flex-col items-start gap-4 md:items-end">
             <a
-              href="https://www.producthunt.com/products/iscraper/launches/iscraper?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-iscraper"
+              href="https://postyourstartup.co/startup/iscraper?ref=badge"
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="IScraper on Product Hunt"
+              aria-label="Featured on PostYourStartup"
               className="transition hover:opacity-90"
             >
               <img
-                alt="IScraper - Turn saved posts into searchable knowledge. | Product Hunt"
-                width="203"
-                height="44"
-                src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1149202&theme=light&t=1783261481088"
-                className="h-11 w-auto max-w-full"
+                alt="Featured on PostYourStartup"
+                width="212"
+                height="55"
+                src="https://postyourstartup.co/api/badge/iscraper?theme=dark"
+                className="h-[55px] w-auto max-w-full"
               />
             </a>
             <div className="flex flex-wrap gap-4">
