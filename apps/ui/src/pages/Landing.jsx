@@ -764,14 +764,31 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
       <footer className="border-t border-white/10 px-6 py-8">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between">
           <BrandLogo className="h-10 w-32" />
-          <div className="flex flex-wrap gap-4">
-            <button type="button" onClick={onOpenHowTo} className="transition hover:text-primary">How to Use</button>
-            <button type="button" onClick={onOpenHelp} className="transition hover:text-primary">Help Center</button>
-            <button type="button" onClick={onOpenTerms} className="transition hover:text-primary">Terms of Service</button>
-            <button type="button" onClick={onOpenPrivacy} className="transition hover:text-primary">Privacy Policy</button>
-            <button type="button" onClick={onOpenSecurity} className="transition hover:text-primary">Security</button>
-            <button type="button" onClick={onOpenDataDeletion} className="transition hover:text-primary">Data Deletion</button>
-            <button type="button" onClick={onOpenCookies} className="transition hover:text-primary">Cookies</button>
+          <div className="flex flex-col items-start gap-4 md:items-end">
+            <a
+              href="https://www.producthunt.com/products/iscraper/launches/iscraper?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-iscraper"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="IScraper on Product Hunt"
+              className="transition hover:opacity-90"
+            >
+              <img
+                alt="IScraper - Turn saved posts into searchable knowledge. | Product Hunt"
+                width="203"
+                height="44"
+                src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1149202&theme=light&t=1783261481088"
+                className="h-11 w-auto max-w-full"
+              />
+            </a>
+            <div className="flex flex-wrap gap-4">
+              <button type="button" onClick={onOpenHowTo} className="transition hover:text-primary">How to Use</button>
+              <button type="button" onClick={onOpenHelp} className="transition hover:text-primary">Help Center</button>
+              <button type="button" onClick={onOpenTerms} className="transition hover:text-primary">Terms of Service</button>
+              <button type="button" onClick={onOpenPrivacy} className="transition hover:text-primary">Privacy Policy</button>
+              <button type="button" onClick={onOpenSecurity} className="transition hover:text-primary">Security</button>
+              <button type="button" onClick={onOpenDataDeletion} className="transition hover:text-primary">Data Deletion</button>
+              <button type="button" onClick={onOpenCookies} className="transition hover:text-primary">Cookies</button>
+            </div>
           </div>
         </div>
       </footer>
