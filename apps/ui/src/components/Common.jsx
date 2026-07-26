@@ -6,9 +6,6 @@ import {
   FEEDBACK_FEATURE_OPTIONS,
   Loader2,
   Lock,
-  ONBOARDING_CONTENT_OPTIONS,
-  ONBOARDING_REFERRAL_OPTIONS,
-  Sparkles,
   useEffect,
   useRef,
   useState,
@@ -134,73 +131,6 @@ function ProfileRequiredPanel({ profileForm, setProfileForm, onAvatarFile, onSav
   );
 }
 
-function OnboardingPreferencesFields({ form, setForm }) {
-  const selectedTypes = new Set(form.contentTypes || []);
-  const toggleContentType = (value) => {
-    setForm((current) => {
-      const next = new Set(current.contentTypes || []);
-      if (next.has(value)) next.delete(value);
-      else next.add(value);
-      return { ...current, contentTypes: Array.from(next) };
-    });
-  };
-
-  return (
-    <>
-      <div>
-        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">What will you save?</div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {ONBOARDING_CONTENT_OPTIONS.map(([value, label]) => {
-            const selected = selectedTypes.has(value);
-            return (
-              <button
-                key={value}
-                type="button"
-                onClick={() => toggleContentType(value)}
-                className={[
-                  'inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition',
-                  selected ? 'border-primary bg-primary text-primary-foreground' : 'border-white/10 text-muted-foreground hover:border-primary/70 hover:text-foreground',
-                ].join(' ')}
-              >
-                {selected && <Check className="h-3.5 w-3.5" />}
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      <label className="block font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">How did you hear about us?</label>
-      <select
-        value={form.referralSource || ''}
-        onChange={(event) => setForm((current) => ({ ...current, referralSource: event.target.value }))}
-        className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm outline-none focus:border-primary"
-      >
-        <option value="">Choose one</option>
-        {ONBOARDING_REFERRAL_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-      </select>
-    </>
-  );
-}
-
-function OnboardingPreferencesPanel({ form, setForm, onSave, onSkip, busy }) {
-  return (
-    <div className="glow-ring rounded-2xl border border-white/10 bg-black p-6">
-      <Sparkles className="h-8 w-8 text-primary" />
-      <h2 className="mt-5 font-display text-3xl font-bold tracking-tight">Personalize</h2>
-      <div className="mt-6 space-y-5">
-        <OnboardingPreferencesFields form={form} setForm={setForm} />
-      </div>
-      <div className="mt-6 grid gap-3 sm:grid-cols-2">
-        <button type="button" onClick={onSave} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground disabled:opacity-60">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-          Continue
-        </button>
-        <button type="button" onClick={onSkip} disabled={busy} className="rounded-xl border border-white/10 px-4 py-3 font-semibold text-muted-foreground transition hover:bg-white/5 hover:text-foreground disabled:opacity-60">Skip for now</button>
-      </div>
-    </div>
-  );
-}
-
 function Banner({ children, type = 'notice' }) {
   const isError = type === 'error';
   return (
@@ -212,4 +142,4 @@ function Banner({ children, type = 'notice' }) {
     </div>
   );
 }
-export { AnimatedFeatureSelect, AuthRequiredPanel, Banner, OnboardingPreferencesFields, OnboardingPreferencesPanel, ProfileRequiredPanel };
+export { AnimatedFeatureSelect, AuthRequiredPanel, Banner, ProfileRequiredPanel };

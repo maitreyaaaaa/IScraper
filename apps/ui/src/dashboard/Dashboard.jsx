@@ -12,7 +12,6 @@ import {
   checkLibraryLinks,
   cleanAuthCallbackUrl,
   clearAppQueryParams,
-  createAgentAccessToken,
   createExtensionToken,
   createItemReminder,
   createNote,
@@ -20,21 +19,17 @@ import {
   DASHBOARD_TABS,
   dashboardTabFromLocation,
   Database,
-  deleteProviderCredential,
   enrichIntentBatch,
   enrichItem,
   FileText,
   Folder,
   forgetPendingExtensionConnect,
-  getAgentAccessTokens,
   getIndexingSummary,
   getItem,
   getItems,
   getItemsPage,
   getLibraryCare,
-  getOnboarding,
   getProfile,
-  getProviderCredentials,
   getSmartCollectionItems,
   getSmartCollections,
   GitBranch,
@@ -43,6 +38,7 @@ import {
   imageFileToVisualSearchDataUrl,
   IMPORT_PROGRESS_STAGES,
   importCandidateFiles,
+  extractInstagramSavedPostFiles,
   importInstagramExport,
   INDEXING_META,
   initialForSession,
@@ -51,17 +47,12 @@ import {
   itemMatchesCollection,
   itemStateMatches,
   itemTypeMatches,
-  KEY_SETUP_OPTIONS,
-  KeyRound,
-  keyValidationMessage,
   LIBRARY_LAYOUT_STORAGE_KEY,
   libraryLayoutFromLocation,
   Loader2,
   Lock,
   mapItem,
   normalizeLibraryLayout,
-  onboardingFormFromRecord,
-  onboardingIsDone,
   PanelLeftClose,
   PanelLeftOpen,
   pendingExtensionConnectFromStorage,
@@ -73,11 +64,8 @@ import {
   replaceAppTabUrl,
   resetPageScroll,
   resetPostHogUser,
-  revokeAgentAccessToken,
   saveLink,
-  saveOnboarding,
   saveProfile,
-  saveProviderCredential,
   SEARCH_MODES,
   searchItems,
   searchVisuals,
@@ -93,7 +81,6 @@ import {
   STATE_FILTERS,
   submitSearchFeedback,
   supabase,
-  testProviderCredential,
   TYPE_FILTERS,
   unique,
   updateItemReminder,
@@ -110,7 +97,7 @@ import {
   validateExportFiles,
   visualSearchImageError,
 } from '../AppShared.jsx';
-import { AuthRequiredPanel, Banner, OnboardingPreferencesPanel, ProfileRequiredPanel } from '../components/Common.jsx';
+import { AuthRequiredPanel, Banner, ProfileRequiredPanel } from '../components/Common.jsx';
 import LibraryTab, {
   activityFromIndexingSummary,
   buildActivationState,
@@ -121,7 +108,6 @@ import LibraryTab, {
 } from './LibraryTab.jsx';
 import { LibraryCheckupTab } from './LibraryCheckupTab.jsx';
 import { UploadTab } from './UploadTab.jsx';
-import { SettingsTab } from './SettingsTab.jsx';
 import { GraphTab } from './GraphTab.jsx';
 import { DetailDrawer } from './DetailDrawer.jsx';
 import { QuickAddModal } from './QuickAddModal.jsx';
@@ -163,27 +149,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [linkForm, setLinkForm] = useState({ url: '', title: '', description: '', note: '' });
   const [uploadInitialMode, setUploadInitialMode] = useState('link');
   const [noteForm, setNoteForm] = useState({ title: '', body: '', links: '', images: [] });
-  const [credentials, setCredentials] = useState([]);
-  const [agentTokens, setAgentTokens] = useState([]);
-  const [controlsLoaded, setControlsLoaded] = useState(false);
-  const [agentTokenName, setAgentTokenName] = useState('Codex / Cursor / Claude');
-  const [createdAgentAccess, setCreatedAgentAccess] = useState(null);
-  const [credentialOptions, setCredentialOptions] = useState(null);
-  const [credentialForm, setCredentialForm] = useState({
-    setup: 'openrouter_all',
-    apiKey: '',
-    displayName: '',
-    baseUrl: '',
-    model: '',
-  });
-  const [credentialSaveSuccess, setCredentialSaveSuccess] = useState(false);
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [profileRequired, setProfileRequired] = useState(false);
   const [profileForm, setProfileForm] = useState({ username: '', avatarUrl: '' });
-  const [onboarding, setOnboarding] = useState(null);
-  const [onboardingForm, setOnboardingForm] = useState(onboardingFormFromRecord(null));
-  const [onboardingPromptEligible, setOnboardingPromptEligible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -200,15 +169,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const activeSearchRef = useRef(0);
   const authEnabled = Boolean(supabase);
   const signedIn = !authEnabled || Boolean(session);
-  const shouldShowOnboardingPrompt = authEnabled && Boolean(session) && !profileRequired && onboardingPromptEligible && !onboardingIsDone(onboarding);
-  const canUsePrivateActions = signedIn && (!authEnabled || (!profileRequired && !shouldShowOnboardingPrompt));
+  const canUsePrivateActions = signedIn && (!authEnabled || !profileRequired);
   const dashboardAvatarUrl = avatarUrlForSession(session, profile);
   const dashboardInitial = initialForSession(session, profile);
-  const updateCredentialForm = useCallback((updater) => {
-    setCredentialSaveSuccess(false);
-    setCredentialForm(updater);
-  }, []);
-
   const requireSignIn = useCallback((action = 'do this') => {
     if (!authEnabled || session) return true;
     setError(`Sign in to ${action}.`);
@@ -360,17 +323,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setQuery('');
   }, []);
 
-  const loadControls = useCallback(async () => {
-    const [credentialBody, agentBody] = await Promise.all([
-      getProviderCredentials(),
-      getAgentAccessTokens(),
-    ]);
-    setCredentials(credentialBody.credentials || []);
-    setCredentialOptions(credentialBody.options || null);
-    setAgentTokens(agentBody.tokens || []);
-    setControlsLoaded(true);
-  }, []);
-
   const mergeUpdatedItem = useCallback((updated) => {
     const nextItem = mapItem(updated);
     setItems((current) => current.map((entry) => (entry.id === nextItem.id ? nextItem : entry)));
@@ -482,14 +434,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       try {
         if (authEnabled) {
           recordSessionSignInActivity(currentSession);
-          const [profileBody, onboardingBody] = await Promise.all([
-            getProfile(),
-            getOnboarding().catch(() => ({ onboarding: null })),
-          ]);
+          const profileBody = await getProfile();
           applyProfileState(profileBody.profile, profileBody.required);
-          setOnboardingPromptEligible(Boolean(profileBody.required));
-          setOnboarding(onboardingBody.onboarding || null);
-          setOnboardingForm(onboardingFormFromRecord(onboardingBody.onboarding));
           identifyPostHogUser(currentSession, profileBody.profile);
           if (profileBody.required) return;
         }
@@ -526,14 +472,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
           setVisualSearch(null);
           setVisualSearchLoading(false);
-          setCredentials([]);
-          setCredentialOptions(null);
-          setAgentTokens([]);
-          setControlsLoaded(false);
-          setCreatedAgentAccess(null);
-          setOnboarding(null);
-          setOnboardingForm(onboardingFormFromRecord(null));
-          setOnboardingPromptEligible(false);
           setLoading(false);
         resetPostHogUser();
       }
@@ -558,16 +496,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         setLibraryChat({ open: false, query: '', messages: [], loading: false, error: '' });
         setVisualSearch(null);
         setVisualSearchLoading(false);
-        setCredentials([]);
-        setCredentialOptions(null);
-        setAgentTokens([]);
-        setControlsLoaded(false);
-        setCreatedAgentAccess(null);
         setProfile(null);
         setProfileRequired(false);
-        setOnboarding(null);
-        setOnboardingForm(onboardingFormFromRecord(null));
-        setOnboardingPromptEligible(false);
         setLoading(false);
         resetPostHogUser();
       }
@@ -600,44 +530,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       window.cancelAnimationFrame(secondFrame);
     };
   }, [canUsePrivateActions, loadItems, loading]);
-
-  useEffect(() => {
-    if (loading || !canUsePrivateActions || controlsLoaded) return undefined;
-    let cancelled = false;
-    let firstFrame;
-    let secondFrame;
-    let idleId;
-    let timeoutId;
-
-    const run = () => {
-      if (cancelled) return;
-      loadControls().catch((err) => {
-        if (!cancelled && tab === 'settings') setError(err.message);
-      });
-    };
-
-    firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => {
-        if (tab === 'settings') {
-          run();
-          return;
-        }
-        if ('requestIdleCallback' in window) {
-          idleId = window.requestIdleCallback(run, { timeout: 2000 });
-        } else {
-          timeoutId = window.setTimeout(run, 600);
-        }
-      });
-    });
-
-    return () => {
-      cancelled = true;
-      window.cancelAnimationFrame(firstFrame);
-      window.cancelAnimationFrame(secondFrame);
-      if (idleId) window.cancelIdleCallback?.(idleId);
-      window.clearTimeout(timeoutId);
-    };
-  }, [canUsePrivateActions, controlsLoaded, loadControls, loading, tab]);
 
   useEffect(() => {
     gsap.set([sidebarRef.current, '.dash-panel', '.dash-panel-inner'], { clearProps: 'opacity,transform' });
@@ -801,31 +693,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     try {
       const body = await saveProfile(profileForm);
       applyProfileState(body.profile, false);
-      setOnboardingPromptEligible(true);
       identifyPostHogUser(session, body.profile);
-      await Promise.all([loadItems(), loadControls(), loadLibraryPage({ reset: true })]);
+      await Promise.all([loadItems(), loadLibraryPage({ reset: true })]);
       setNotice('Profile saved. Your private library is ready.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleOnboardingSave = async ({ skipped = false } = {}) => {
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      const body = await saveOnboarding({
-        ...onboardingForm,
-        skipped,
-      });
-      setOnboarding(body.onboarding || null);
-      setOnboardingForm(onboardingFormFromRecord(body.onboarding));
-      setOnboardingPromptEligible(false);
-      selectTab('library');
-      setNotice(skipped ? 'Personalization skipped. You can update it later in account settings.' : 'Personalization saved.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1191,11 +1061,13 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     setNotice('');
     try {
       setImportStage('checking', `${files.length} selected`);
-      const selectedFiles = importCandidateFiles(files, importSourceType);
+      let selectedFiles = importCandidateFiles(files, importSourceType);
       validateExportFiles(selectedFiles, importSourceType);
       if (selectedFiles.length > 20) {
         throw new Error('Upload at most 20 export files at once. For full exports, upload the original ZIP instead of every folder file.');
       }
+      selectedFiles = await extractInstagramSavedPostFiles(selectedFiles, importSourceType);
+      validateExportFiles(selectedFiles, importSourceType);
       setImportStage('uploading', `${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'}`);
       const storageFiles = shouldUseStorageUpload(selectedFiles)
         ? await uploadImportFilesToStorage({ files: selectedFiles, session })
@@ -1288,79 +1160,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       }
     } catch (err) {
       setError(err.message);
-    }
-  };
-
-  const saveCredential = async (event) => {
-    event.preventDefault();
-    if (!requireSignIn('save API keys')) return;
-    if (!requireProfile('save API keys')) return;
-    const selectedSetup = KEY_SETUP_OPTIONS[credentialForm.setup] || KEY_SETUP_OPTIONS.openrouter_all;
-    const plannedCredentials = selectedSetup.credentials(credentialOptions, credentialForm);
-    const validationMessage = keyValidationMessage(credentialForm.setup, credentialForm.apiKey, credentialForm);
-    if (validationMessage) {
-      setCredentialSaveSuccess(false);
-      setError(validationMessage);
-      return;
-    }
-    setBusy(true);
-    setCredentialSaveSuccess(false);
-    setError('');
-    setNotice('');
-    const savedCredentials = [];
-    try {
-      for (const entry of plannedCredentials) {
-        const saved = await saveProviderCredential({
-          ...entry,
-          apiKey: credentialForm.apiKey,
-        });
-        savedCredentials.push(saved.credential);
-      }
-      await loadControls();
-      setCredentialForm((current) => ({ ...current, apiKey: '' }));
-      setCredentialSaveSuccess(true);
-      setNotice(`${selectedSetup.shortLabel} key saved. IScraper will use it when it can.`);
-    } catch (err) {
-      setCredentialSaveSuccess(false);
-      setError(savedCredentials.length ? `Some key settings were saved, but one failed: ${err.message}` : err.message);
-      await loadControls().catch(() => {});
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleCreateAgentAccess = async (event) => {
-    event.preventDefault();
-    if (!requireSignIn('connect agent access')) return;
-    if (!requireProfile('connect agent access')) return;
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      const body = await createAgentAccessToken(agentTokenName);
-      setCreatedAgentAccess(body);
-      await loadControls();
-      setNotice('Agent access token created. Copy it now; IScraper only shows it once.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleRevokeAgentAccess = async (id) => {
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      await revokeAgentAccessToken(id);
-      setCreatedAgentAccess((current) => (current?.token?.id === id ? null : current));
-      await loadControls();
-      setNotice('Agent access revoked.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -1495,13 +1294,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   }, [handleSearch, selectTab]);
 
   const handleSettingsExtraTabChange = useCallback((activeSettingsTab) => {
-    if (activeSettingsTab === 'aiKeys' && !controlsLoaded) {
-      loadControls().catch((err) => setError(err.message));
-    }
     if (activeSettingsTab === 'care') {
       loadLibraryCare();
     }
-  }, [controlsLoaded, loadControls, loadLibraryCare]);
+  }, [loadLibraryCare]);
 
   useLayoutEffect(() => {
     resetPageScroll();
@@ -1647,26 +1443,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
         </nav>
         <div className={`border-t border-white/5 p-3 ${sidebarVisibleExpanded ? '' : 'flex flex-col items-center'}`}>
           <div className={`flex ${sidebarVisibleExpanded ? 'items-center gap-2' : 'flex-col items-center gap-2'}`}>
-            <button
-              type="button"
-              onClick={() => {
-                if (authEnabled && !session) {
-                  onOpenLogin();
-                  return;
-                }
-                if (!session) {
-                  selectTab('settings');
-                  return;
-                }
-                selectTab('settings');
-              }}
-              title="Settings"
-              aria-label="Open settings"
-              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-muted-foreground transition hover:bg-white/5 hover:text-primary"
-            >
-              <Settings className="h-4 w-4" />
-            </button>
-            {sidebarVisibleExpanded && (
+            {sidebarVisibleExpanded ? (
               <button
                 type="button"
                 onClick={() => {
@@ -1684,6 +1461,25 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
               >
                 <Settings className="h-4 w-4 shrink-0" />
                 <span className="truncate">Settings</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  if (authEnabled && !session) {
+                    onOpenLogin();
+                    return;
+                  }
+                  selectTab('settings');
+                }}
+                title="Settings"
+                aria-label="Open settings"
+                aria-current={tab === 'settings' ? 'page' : undefined}
+                className={`grid h-11 w-11 shrink-0 place-items-center rounded-lg transition ${
+                  tab === 'settings' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-primary'
+                }`}
+              >
+                <Settings className="h-4 w-4" />
               </button>
             )}
           </div>
@@ -1942,67 +1738,16 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     mode="page"
                     session={session}
                     profile={profile}
-                    onboarding={onboarding}
                     onProfileSaved={(nextProfile) => {
                       applyProfileState(nextProfile, false);
                       setNotice('Profile saved.');
                     }}
-                    onOnboardingSaved={(nextOnboarding) => {
-                      setOnboarding(nextOnboarding || null);
-                      setOnboardingForm(onboardingFormFromRecord(nextOnboarding));
-                      setNotice('Personalization saved.');
-                    }}
                     extraTabs={[
-                      ['aiKeys', KeyRound, 'AI keys'],
                       ['care', ShieldCheck, 'Library checkup'],
                       ['graph', GitBranch, 'Graph view'],
                     ]}
                     onExtraTabChange={handleSettingsExtraTabChange}
                     renderExtraTab={(activeSettingsTab) => {
-                      if (activeSettingsTab === 'aiKeys') {
-                        return (
-                          <SettingsTab
-                            credentials={credentials}
-                            agentTokens={agentTokens}
-                            agentTokenName={agentTokenName}
-                            setAgentTokenName={setAgentTokenName}
-                            createdAgentAccess={createdAgentAccess}
-                            onCreateAgentAccess={handleCreateAgentAccess}
-                            onRevokeAgentAccess={handleRevokeAgentAccess}
-                            credentialForm={credentialForm}
-                            setCredentialForm={updateCredentialForm}
-                            credentialSaveSuccess={credentialSaveSuccess}
-                            onSave={saveCredential}
-                            onDelete={async (id) => {
-                              setBusy(true);
-                              try {
-                                await deleteProviderCredential(id);
-                                await loadControls();
-                              } catch (err) {
-                                setError(err.message);
-                              } finally {
-                                setBusy(false);
-                              }
-                            }}
-                            onTest={async (id) => {
-                              setBusy(true);
-                              try {
-                                await testProviderCredential(id);
-                                setNotice('Provider key works.');
-                              } catch (err) {
-                                setError(err.message);
-                              } finally {
-                                setBusy(false);
-                              }
-                            }}
-                            busy={busy}
-                            authEnabled={authEnabled}
-                            onOpenHowTo={onOpenHowTo}
-                            onNotice={setNotice}
-                            onError={setError}
-                          />
-                        );
-                      }
                       if (activeSettingsTab === 'care') {
                         return (
                           <LibraryCheckupTab
@@ -2039,19 +1784,6 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             )}
           </div>
         </div>
-        {!loading && shouldShowOnboardingPrompt && (
-          <div className="fixed inset-0 z-[70] grid place-items-center overflow-y-auto bg-black/80 px-5 py-8 backdrop-blur-md">
-            <div className="w-full max-w-5xl">
-              <OnboardingPreferencesPanel
-                form={onboardingForm}
-                setForm={setOnboardingForm}
-                onSave={() => handleOnboardingSave()}
-                onSkip={() => handleOnboardingSave({ skipped: true })}
-                busy={busy}
-              />
-            </div>
-          </div>
-        )}
       </main>
 
       <LibraryChatPanel

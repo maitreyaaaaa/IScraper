@@ -56,7 +56,7 @@ async function buildUserDataExport({ store, userId, requestId, correlationId = '
       redaction,
     })),
     redactionNotes: [
-      'Raw access tokens, token hashes, auth sessions, encrypted API keys, service role data, and internal deletion hashes are not included.',
+      'Raw access tokens, token hashes, auth sessions, service role data, and internal deletion hashes are not included.',
       includeFiles
         ? 'Only user-owned uploaded files referenced by exported records are included; over-limit or unavailable files are listed in media-manifest.json.'
         : 'Raw uploaded media files are not included by default; asset metadata is included when available.',
@@ -87,8 +87,6 @@ async function buildUserDataExport({ store, userId, requestId, correlationId = '
     'activity/search-feedback.json': exportData.searchFeedback || [],
     'activity/user-activity.json': exportData.userActivity || [],
     'ai/analysis-usage.json': exportData.analysisUsage || [],
-    'access/provider-credentials.json': exportData.providerCredentials || [],
-    'access/legacy-ai-keys.json': exportData.legacyAiKeys || [],
     'access/extension-tokens.json': exportData.extensionTokens || [],
     'access/capture-connections.json': exportData.captureConnections || [],
     'billing/credits.json': exportData.billing || { credits: privacy.credits || null },
@@ -200,8 +198,6 @@ function buildPayloadFromPrivacyExport(privacy = {}) {
     itemArchives: privacy.itemArchives || [],
     linkHealthChecks: privacy.linkHealthChecks || [],
     itemReminders: privacy.itemReminders || [],
-    providerCredentials: privacy.providerCredentials || [],
-    legacyAiKeys: privacy.legacyAiKeys || [],
     extensionTokens: privacy.extensionTokens || [],
     captureConnections: privacy.captureConnections || [],
     searchEvents: privacy.searchEvents || [],

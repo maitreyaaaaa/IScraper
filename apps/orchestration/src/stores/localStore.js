@@ -13,15 +13,6 @@ const {
   summarizeJobQueue,
 } = require('../services/queue');
 const { searchItemsWithDetails } = require('../services/analyzer');
-const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
-const {
-  OPENAI_COMPATIBLE_PROVIDER,
-  assertMediaModelAllowed,
-  assertOpenAICompatibleConfig,
-  assertProviderPurpose,
-  normalizeOpenAICompatibleBaseUrl,
-  normalizeOpenAICompatibleDisplayName,
-} = require('../services/providers');
 const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicExtensionToken } = require('../services/extensionTokens');
@@ -771,8 +762,6 @@ function createLocalStore({ dataPath }) {
         smartCollections: state.smartCollections.filter((entry) => entry.userId === userId),
         smartCollectionItems: state.smartCollectionItems.filter((entry) => entry.userId === userId),
         credits: this.getCredits(userId),
-        providerCredentials: this.listProviderCredentials(userId),
-        legacyAiKeys: [],
         extensionTokens: state.extensionTokens.filter((entry) => entry.userId === userId).map(publicExtensionToken),
         captureConnections: this.listCaptureConnections(userId),
         searchEvents: state.searchEvents.filter((entry) => entry.userId === userId),
@@ -800,7 +789,6 @@ function createLocalStore({ dataPath }) {
         counts: {
           imports: state.imports.filter((entry) => entry.userId === userId).length,
           saves: state.items.filter((entry) => entry.userId === userId).length,
-          providerCredentials: state.providerCredentials.filter((entry) => entry.userId === userId).length,
           extensionTokens: state.extensionTokens.filter((entry) => entry.userId === userId && !entry.revokedAt).length,
           captureConnections: state.captureConnections.filter((entry) => entry.userId === userId).length,
         },
@@ -822,8 +810,6 @@ function createLocalStore({ dataPath }) {
         itemArchives: privacy.itemArchives,
         linkHealthChecks: privacy.linkHealthChecks,
         itemReminders: privacy.itemReminders,
-        providerCredentials: privacy.providerCredentials,
-        legacyAiKeys: privacy.legacyAiKeys || [],
         extensionTokens: privacy.extensionTokens,
         captureConnections: privacy.captureConnections,
         searchEvents: privacy.searchEvents,
@@ -2209,7 +2195,6 @@ function createLocalStore({ dataPath }) {
         credits: {
           freeUsed: usageBySource.free || 0,
           paidUsed: usageBySource.paid || 0,
-          byokUsed: usageBySource.byok || 0,
           paidCreditsAvailable: state.creditTransactions.reduce((total, entry) => total + Number(entry.amount || 0), 0),
         },
         purchases: {
@@ -2250,7 +2235,6 @@ function createLocalStore({ dataPath }) {
         counts: {
           imports: state.imports.filter((entry) => entry.userId === user.id).length,
           saves: state.items.filter((entry) => entry.userId === user.id).length,
-          providerCredentials: state.providerCredentials.filter((entry) => entry.userId === user.id).length,
           extensionTokens: state.extensionTokens.filter((entry) => entry.userId === user.id && !entry.revokedAt).length,
           captureConnections: state.captureConnections.filter((entry) => entry.userId === user.id).length,
         },
@@ -2337,89 +2321,6 @@ function createLocalStore({ dataPath }) {
         .filter((entry) => !severity || entry.severity === severity)
         .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
         .slice(0, Math.max(1, Math.min(Number(limit) || 100, 200)));
-    },
-
-    listProviderCredentials(userId) {
-      return state.providerCredentials
-        .filter((credential) => credential.userId === userId)
-        .map(publicCredential);
-    },
-
-    saveProviderCredential(userId, { provider, purpose, model, apiKey, encryptionKey, status = 'active', isPreferred = true, baseUrl = '', displayName = '' }) {
-      assertProviderPurpose(provider, purpose);
-      if (purpose === 'media' && provider === 'openrouter') assertMediaModelAllowed(model);
-      assertOpenAICompatibleConfig({ provider, purpose, model, baseUrl });
-      if (!apiKey) throw new Error('API key is required.');
-      const normalizedBaseUrl = provider === OPENAI_COMPATIBLE_PROVIDER ? normalizeOpenAICompatibleBaseUrl(baseUrl) : null;
-      const normalizedDisplayName = provider === OPENAI_COMPATIBLE_PROVIDER ? normalizeOpenAICompatibleDisplayName(displayName) : null;
-
-      if (isPreferred) {
-        state.providerCredentials
-          .filter((credential) => credential.userId === userId && credential.purpose === purpose)
-          .forEach((credential) => {
-            credential.isPreferred = false;
-            credential.updatedAt = now();
-          });
-      }
-
-      const existing = state.providerCredentials.find(
-        (credential) => credential.userId === userId && credential.provider === provider && credential.purpose === purpose,
-      );
-      const row = existing || {
-        id: `credential-${Date.now()}-${state.providerCredentials.length + 1}`,
-        userId,
-        provider,
-        purpose,
-        createdAt: now(),
-      };
-      Object.assign(row, {
-        model,
-        baseUrl: normalizedBaseUrl,
-        displayName: normalizedDisplayName,
-        encryptedKey: encryptSecret(apiKey, encryptionKey),
-        keyHint: maskSecret(apiKey),
-        status,
-        isPreferred,
-        updatedAt: now(),
-      });
-      if (!existing) state.providerCredentials.push(row);
-      this.recordUserActivity({
-        userId,
-        eventType: existing ? 'provider_credential_updated' : 'provider_credential_created',
-        metadata: { credentialId: row.id, provider, purpose, model },
-      });
-      save();
-      return publicCredential(row);
-    },
-
-    getPreferredProviderCredential(userId, purpose, encryptionKey) {
-      const credential = state.providerCredentials
-        .filter((entry) => entry.userId === userId && entry.purpose === purpose && entry.status === 'active')
-        .sort((a, b) => Number(b.isPreferred) - Number(a.isPreferred) || String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
-      if (!credential) return null;
-      return {
-        ...publicCredential(credential),
-        apiKey: decryptSecret(credential.encryptedKey, encryptionKey),
-      };
-    },
-
-    getProviderCredential(userId, id, encryptionKey) {
-      const credential = state.providerCredentials.find((entry) => entry.userId === userId && entry.id === id);
-      if (!credential) return null;
-      return {
-        ...publicCredential(credential),
-        apiKey: decryptSecret(credential.encryptedKey, encryptionKey),
-      };
-    },
-
-    deleteProviderCredential(userId, id) {
-      const before = state.providerCredentials.length;
-      state.providerCredentials = state.providerCredentials.filter((credential) => !(credential.userId === userId && credential.id === id));
-      if (state.providerCredentials.length !== before) {
-        this.recordUserActivity({ userId, eventType: 'provider_credential_deleted', metadata: { credentialId: id } });
-      }
-      save();
-      return state.providerCredentials.length !== before;
     },
 
     dump() {

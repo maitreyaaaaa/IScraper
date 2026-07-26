@@ -4,7 +4,6 @@ import {
   BrandLogo,
   ExternalLink,
   gsap,
-  KeyRound,
   ScrollTrigger,
   Search,
   Upload,
@@ -96,72 +95,8 @@ const HOW_TO_STEPS = [
   {
     image: '/how-to/instagram-16-upload-files.png',
     title: 'Upload the Instagram ZIP',
-    copy: 'Drop the ZIP into IScraper or click Choose export files. IScraper will import your saved Instagram posts from that file.',
+    copy: 'Drop the ZIP into IScraper or click Import your data. IScraper will import only your saved Instagram posts from that file.',
     wide: true,
-  },
-];
-
-const OPENROUTER_STEPS = [
-  {
-    image: '/how-to/openrouter-01.png',
-    title: 'Open OpenRouter',
-    copy: <>Open your browser and go to <a href="https://openrouter.ai" target="_blank" rel="noreferrer" className="font-semibold text-primary underline underline-offset-4">openrouter.ai</a>.</>,
-    url: 'openrouter.ai',
-  },
-  {
-    image: '/how-to/openrouter-02.png',
-    title: 'Click Get API Key',
-    copy: 'On the OpenRouter homepage, click Get API Key.',
-  },
-  {
-    image: '/how-to/openrouter-03.png',
-    title: 'Use the API key button',
-    copy: 'Click the Get API Key button in the hero section.',
-  },
-  {
-    image: '/how-to/openrouter-04.png',
-    title: 'Sign in',
-    copy: 'Sign in with Google, GitHub, MetaMask, or email. If you do not have an account, create one.',
-  },
-  {
-    image: '/how-to/openrouter-05.png',
-    title: 'Open API Keys',
-    copy: 'After login, you should land on API Keys. If not, open API Keys from the left sidebar.',
-  },
-  {
-    image: '/how-to/openrouter-06.png',
-    title: 'Create a new key',
-    copy: 'Click New Key.',
-  },
-  {
-    image: '/how-to/openrouter-07.png',
-    title: 'Name the key',
-    copy: 'Give it any name you like. Leave the credit limit blank unless you want a hard spending limit. Then click Create.',
-  },
-  {
-    image: '/how-to/openrouter-08.png',
-    title: 'Copy the key',
-    copy: 'Copy the key now. You will not be able to see it again after closing this window.',
-  },
-  {
-    image: '/how-to/openrouter-09.png',
-    title: 'Save it in IScraper',
-    copy: 'Go back to IScraper, open Settings, choose OpenRouter, paste the key once, and save it. IScraper chooses the right models automatically.',
-  },
-  {
-    image: '/how-to/openrouter-10.png',
-    title: 'Open Credits',
-    copy: 'Back in OpenRouter, use the left sidebar and click Credits.',
-  },
-  {
-    image: '/how-to/openrouter-11.png',
-    title: 'Add credits',
-    copy: 'Click Add Credits.',
-  },
-  {
-    image: '/how-to/openrouter-12.png',
-    title: 'Add $1-$3',
-    copy: 'Add a payment method and buy 1 to 3 dollars of credits. That is enough to start testing.',
   },
 ];
 
@@ -247,7 +182,6 @@ const PINTEREST_STEPS = [
 
 const HOW_TO_GUIDES = [
   { key: 'instagram', icon: Upload, title: 'Instagram export', copy: 'Get your saved posts file from Instagram and upload it into IScraper.', status: 'Guide ready' },
-  { key: 'api-keys', icon: KeyRound, title: 'API keys', copy: 'Method 1: use OpenRouter for summaries, tags, and semantic search.', status: 'Guide ready' },
   { key: 'pinterest', icon: ExternalLink, title: 'Pinterest export', copy: 'Request and download your Pinterest data export.', status: 'Guide ready' },
   { key: 'extension', icon: Search, title: 'Browser extension', copy: 'Coming soon for normal users: save pages, use Lens, and later capture screenshots, text, images, and videos.', status: 'Coming soon' },
 ];
@@ -256,11 +190,6 @@ function HowToUsePage({ onBack, onOpenApp }) {
   const pageRef = useRef(null);
   const [activeGuide, setActiveGuide] = useState(null);
   const activeGuideDetails = HOW_TO_GUIDES.find((guide) => guide.key === activeGuide);
-  const openKeysPrivacy = () => {
-    window.history.pushState({}, 'IScraper App', '/app?tab=settings');
-    window.dispatchEvent(new PopStateEvent('popstate'));
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
 
   useEffect(() => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -344,10 +273,10 @@ function HowToUsePage({ onBack, onOpenApp }) {
         <section className="howto-reveal mb-10 max-w-4xl md:mb-14">
           <div className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-primary">How to use IScraper</div>
           <h1 className="font-display text-4xl font-bold leading-tight tracking-tighter sm:text-5xl md:text-7xl">
-            Guides for imports, API keys, and upcoming features.
+            Guides for imports and upcoming features.
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground md:mt-6 md:text-lg md:leading-8">
-            Start with Instagram or Pinterest exports, then add links manually when you want one-off saves. We will keep adding simple guides here for API keys, the browser extension, and other capture flows as they become available.
+            Start with Instagram or Pinterest exports, then add links manually when you want one-off saves. We will keep adding simple guides here for the browser extension and other capture flows as they become available.
           </p>
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
             {HOW_TO_GUIDES.map(({ key, icon: Icon, title, copy, status }) => (
@@ -384,7 +313,7 @@ function HowToUsePage({ onBack, onOpenApp }) {
           </section>
         )}
 
-        {activeGuide && activeGuide !== 'instagram' && activeGuide !== 'api-keys' && activeGuide !== 'pinterest' && activeGuide !== 'extension' && (
+        {activeGuide && activeGuide !== 'instagram' && activeGuide !== 'pinterest' && activeGuide !== 'extension' && (
           <section className="howto-reveal rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 md:p-10">
             <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">{activeGuideDetails?.status}</div>
             <h2 className="mt-3 font-display text-3xl font-bold tracking-tight">{activeGuideDetails?.title}</h2>
@@ -392,60 +321,6 @@ function HowToUsePage({ onBack, onOpenApp }) {
               This guide will live here next. For now, use the Help Center or email us if you get stuck.
             </p>
           </section>
-        )}
-
-        {activeGuide === 'api-keys' && (
-          <>
-            <section className="howto-reveal mb-6">
-              <div className="font-mono text-xs uppercase tracking-[0.3em] text-primary">API keys / Method 1</div>
-              <h2 className="mt-3 font-display text-3xl font-bold tracking-tight md:text-5xl">Use OpenRouter with IScraper.</h2>
-            </section>
-
-            <div className="space-y-6 md:space-y-0">
-              {OPENROUTER_STEPS.map((step, index) => (
-                <article
-                  key={step.image}
-                  data-reverse={index % 2 === 1}
-                  className="howto-step grid min-h-[calc(100vh-5rem)] items-center gap-8 py-10 md:grid-cols-2 md:gap-14 md:py-16"
-                >
-                  <div className={`howto-shot ${index % 2 === 1 ? 'md:order-2' : ''}`}>
-                    <div className="mx-auto max-w-[22rem] overflow-hidden rounded-[1.75rem] shadow-2xl shadow-black/50 md:max-w-[42rem]">
-                      <img src={step.image} alt={`Step ${index + 1}: ${step.title}`} className="max-h-[68vh] w-full object-contain" loading={index < 2 ? 'eager' : 'lazy'} />
-                    </div>
-                    {step.url && (
-                      <div className="mx-auto mt-4 flex max-w-[42rem] items-center gap-3 rounded-full border border-white/10 bg-white/[0.06] px-4 py-3 font-mono text-sm text-foreground shadow-xl shadow-black/30">
-                        <span className="h-2.5 w-2.5 rounded-full bg-primary" />
-                        <span className="text-muted-foreground">https://</span>
-                        <span className="font-semibold">{step.url}</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className={`howto-copy flex flex-col justify-center p-2 md:p-10 ${index % 2 === 1 ? 'md:order-1' : ''}`}>
-                    <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-primary font-display text-2xl font-bold text-primary-foreground">
-                      {index + 1}
-                    </div>
-                    <h2 className="font-display text-3xl font-bold tracking-tight md:text-5xl">{step.title}</h2>
-                    <p className="mt-5 max-w-xl text-lg leading-8 text-muted-foreground">{step.copy}</p>
-                  </div>
-                </article>
-              ))}
-            </div>
-
-            <section className="howto-reveal mt-14 rounded-[2rem] border border-primary/30 bg-primary p-6 text-black md:p-10">
-              <h2 className="font-display text-4xl font-bold tracking-tight">OpenRouter alternatives</h2>
-              <p className="mt-3 max-w-2xl text-base leading-7">
-                You can also use{' '}
-                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="font-bold underline underline-offset-4">Gemini</a>,{' '}
-                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="font-bold underline underline-offset-4">OpenAI</a>,{' '}
-                <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="font-bold underline underline-offset-4">Anthropic</a>, or{' '}
-                <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer" className="font-bold underline underline-offset-4">DeepSeek</a>{' '}
-                keys. They follow a similar process: create an account, create an API key, add credits or billing if needed, then paste the key in IScraper.
-              </p>
-              <button type="button" onClick={openKeysPrivacy} className="mt-6 inline-flex items-center gap-3 rounded-full bg-black px-6 py-4 font-semibold text-white transition hover:scale-[1.02]">
-                Open Settings <ArrowRight className="h-5 w-5" />
-              </button>
-            </section>
-          </>
         )}
 
         {activeGuide === 'pinterest' && (

@@ -2745,47 +2745,21 @@ test('authenticated imports require profile setup first', async () => {
   }
 });
 
-test('provider credential API stores keys without returning secrets', async () => {
+test('provider credential API is not exposed', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
-  const app = createApp({ store, config: { adminApiKey: 'admin-key', credentialEncryptionKey: 'dev-encryption-key' } });
+  const app = createApp({ store, config: { adminApiKey: 'admin-key' } });
   const server = app.listen(0);
 
   try {
     const port = server.address().port;
-    const createResponse = await fetch(`http://127.0.0.1:${port}/api/provider-credentials`, {
+    const response = await fetch(`http://127.0.0.1:${port}/api/provider-credentials`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: 'openrouter',
-        purpose: 'text',
-        model: 'deepseek/deepseek-v4-pro',
-        apiKey: 'sk-or-test-secret',
-      }),
+      body: JSON.stringify({ provider: 'openrouter', purpose: 'text', apiKey: 'sk-or-test-secret' }),
     });
-    const created = await createResponse.json();
-    const listResponse = await fetch(`http://127.0.0.1:${port}/api/provider-credentials`);
-    const listed = await listResponse.json();
-    const revealResponse = await fetch(`http://127.0.0.1:${port}/api/provider-credentials/${created.credential.id}/reveal`, {
-      method: 'POST',
-    });
-    const revealed = await revealResponse.json();
-    const auditResponse = await fetch(`http://127.0.0.1:${port}/api/admin/audit-events?eventType=provider_key_revealed`, {
-      headers: { 'x-admin-api-key': 'admin-key' },
-    });
-    const audit = await auditResponse.json();
 
-    assert.equal(createResponse.status, 200);
-    assert.equal(created.credential.keyHint, 'sk-...cret');
-    assert.doesNotMatch(JSON.stringify(created), /sk-or-test-secret/);
-    assert.equal(listed.credentials.length, 1);
-    assert.doesNotMatch(JSON.stringify(listed), /sk-or-test-secret/);
-    assert.equal(revealResponse.status, 200);
-    assert.equal(revealed.apiKey, 'sk-or-test-secret');
-    assert.equal(auditResponse.status, 200);
-    assert.equal(audit.auditEvents.some((entry) => entry.eventType === 'provider_key_revealed'), true);
-    assert.equal(audit.auditEvents.find((entry) => entry.eventType === 'provider_key_revealed')?.metadata?.credentialId, created.credential.id);
-    assert.doesNotMatch(JSON.stringify(audit), /sk-or-test-secret/);
+    assert.equal(response.status, 404);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });

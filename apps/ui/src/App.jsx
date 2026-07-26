@@ -6,6 +6,7 @@ import HowToUsePage from './pages/HowToUsePage.jsx';
 import Landing from './pages/Landing.jsx';
 import LegalPage from './pages/LegalPage.jsx';
 import LoginPage from './pages/LoginPage.jsx';
+import PricingPage from './pages/PricingPage.jsx';
 
 export default function App() {
   const [route, setRoute] = useState(() => {
@@ -53,6 +54,7 @@ export default function App() {
 
   if (route === 'app') return <Dashboard onBack={() => navigate('landing')} onOpenLogin={() => navigate('login')} onOpenHowTo={() => navigate('how-to-use')} />;
   if (route === 'login') return <LoginPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />;
+  if (route === 'pricing') return <PricingPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} onOpenHelp={() => navigate('help')} />;
   if (route === 'how-to-use') return <HowToUsePage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />;
   if (route === 'terms') return <LegalPage type="terms" onBack={() => navigate('landing')} />;
   if (route === 'privacy') return <LegalPage type="privacy" onBack={() => navigate('landing')} />;
@@ -65,6 +67,7 @@ export default function App() {
     <Landing
       onOpenApp={() => navigate('app')}
       onOpenLogin={() => navigate('login')}
+      onOpenPricing={() => navigate('pricing')}
       onOpenHowTo={() => navigate('how-to-use')}
       onOpenTerms={() => navigate('terms')}
       onOpenPrivacy={() => navigate('privacy')}

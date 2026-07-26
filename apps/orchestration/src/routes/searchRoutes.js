@@ -1,5 +1,5 @@
 const { isDeletionBlockingStatus, publicDeletionRequest } = require('../services/accountDeletion');
-const { cleanLensText, describeLensCrop } = require('../services/lensSearch');
+const { cleanLensText, describeLensCrop, parseLensCrop } = require('../services/lensSearch');
 
 function registerPublicSearchRoutes(app, deps) {
   const { config, http, store, workflows } = deps;
@@ -28,10 +28,17 @@ function registerPublicSearchRoutes(app, deps) {
     }
 
     if (type === 'image') {
-      if (!config.credentialEncryptionKey || typeof store.getPreferredProviderCredential !== 'function') {
-        return res.status(428).json({ error: 'Connect a media AI key before using Lens image search.' });
+      parseLensCrop(req.body?.imageDataUrl);
+      if (!config.openAiApiKey) {
+        return res.status(428).json({ error: 'IScraper image AI is not configured yet.' });
       }
-      const mediaCredential = await store.getPreferredProviderCredential(user.id, 'media', config.credentialEncryptionKey);
+      const mediaCredential = {
+        id: 'app-openai-lens-search',
+        provider: 'openai',
+        purpose: 'media',
+        model: config.openAiMediaModel || config.openAiModel || 'gpt-4o',
+        apiKey: config.openAiApiKey,
+      };
       const described = await describeLensCrop({ dataUrl: req.body?.imageDataUrl, credential: mediaCredential });
       query = described.query;
       imageAnalysis = described.analysis;

@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { createOpenRouterEmbedding } = require('../services/embeddings');
+const { createOpenAIEmbedding } = require('../services/embeddings');
 const { createOpenAiWebSearchAnswer, createOpenRouterLibraryChatAnswer, createOpenRouterSearchAnswer } = require('../services/aiSearch');
 const { recordRequestTiming } = require('../services/observability');
 const { cleanText, withTimeout } = require('./common');
@@ -98,25 +98,19 @@ function createSearchWorkflow({ store, config, http }) {
     let queryEmbedding = null;
     const shouldTrySemantic = query
       && semanticSearchRequested(filters)
-      && config.credentialEncryptionKey
+      && config.openAiApiKey
       && store.supportsSemanticSearch
-      && typeof store.getPreferredProviderCredential === 'function';
+      && typeof store.search === 'function';
     if (shouldTrySemantic) {
       try {
-        const credentialStartedAt = process.hrtime.bigint();
-        const embeddingCredential = await store.getPreferredProviderCredential(userId, 'embedding', config.credentialEncryptionKey);
-        recordSearchTiming(req, 'searchSemanticCredentialMs', credentialStartedAt);
-        if (embeddingCredential) {
-          const embeddingStartedAt = process.hrtime.bigint();
-          queryEmbedding = await createOpenRouterEmbedding({
-            apiKey: embeddingCredential.apiKey,
-            model: embeddingCredential.model || 'openai/text-embedding-3-small',
-            input: query,
-            dimensions: config.embeddingDimensions,
-            inputType: 'search_query',
-          });
-          recordSearchTiming(req, 'searchSemanticEmbeddingMs', embeddingStartedAt);
-        }
+        const embeddingStartedAt = process.hrtime.bigint();
+        queryEmbedding = await createOpenAIEmbedding({
+          apiKey: config.openAiApiKey,
+          model: config.openAiEmbeddingModel || 'text-embedding-3-small',
+          input: query,
+          dimensions: config.embeddingDimensions,
+        });
+        recordSearchTiming(req, 'searchSemanticEmbeddingMs', embeddingStartedAt);
       } catch (error) {
         console.warn(`Semantic query embedding failed: ${error.message}`);
       }

@@ -1,4 +1,4 @@
-const { describeLensCrop } = require('../services/lensSearch');
+const { describeLensCrop, parseLensCrop } = require('../services/lensSearch');
 const { recordRequestTiming } = require('../services/observability');
 const {
   findSimilarVisualItems: findVisualSearchItems,
@@ -126,10 +126,17 @@ function registerPrivateSearchRoutes(app, deps) {
   app.post('/api/visual-search', searchRateLimit, asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
     try {
-      if (!config.credentialEncryptionKey || typeof store.getPreferredProviderCredential !== 'function') {
-        return res.status(428).json({ error: 'Connect a media AI key before using Same Vibe Search.' });
+      parseLensCrop(req.body?.imageDataUrl);
+      if (!config.openAiApiKey) {
+        return res.status(428).json({ error: 'IScraper image AI is not configured yet.' });
       }
-      const mediaCredential = await store.getPreferredProviderCredential(req.user.id, 'media', config.credentialEncryptionKey);
+      const mediaCredential = {
+        id: 'app-openai-visual-search',
+        provider: 'openai',
+        purpose: 'media',
+        model: config.openAiMediaModel || config.openAiModel || 'gpt-4o',
+        apiKey: config.openAiApiKey,
+      };
       const described = await describeLensCrop({ dataUrl: req.body?.imageDataUrl, credential: mediaCredential });
       const allItems = await store.getItems(req.user.id);
       const limit = Math.max(1, Math.min(Number(req.body?.limit) || 24, 60));

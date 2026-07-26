@@ -290,7 +290,7 @@ async function processOneJob({
         item,
         job: currentJob,
         status: 'paused_api_limit',
-        message: 'Saved post did not process because your API limit was reached.',
+        message: 'Saved post did not process because IScraper AI capacity was reached.',
       });
       await recordSupportEvent(store, {
         userId,
@@ -359,36 +359,12 @@ async function chooseAnalysisPlan({
   store,
   userId,
   item,
-  credentialEncryptionKey,
   openAiApiKey = null,
   openAiModel = 'gpt-4o',
   openAiMediaModel = 'gpt-4o',
   openAiEmbeddingModel = 'text-embedding-3-small',
 }) {
   const needsMedia = requiresMediaAnalysis(item);
-
-  const mediaUserCredential =
-    needsMedia && typeof store.getPreferredProviderCredential === 'function' && credentialEncryptionKey
-      ? await store.getPreferredProviderCredential(userId, 'media', credentialEncryptionKey)
-      : null;
-  const textUserCredential =
-    typeof store.getPreferredProviderCredential === 'function' && credentialEncryptionKey
-      ? await store.getPreferredProviderCredential(userId, 'text', credentialEncryptionKey)
-      : null;
-  const embeddingCredential =
-    typeof store.getPreferredProviderCredential === 'function' && credentialEncryptionKey
-      ? await store.getPreferredProviderCredential(userId, 'embedding', credentialEncryptionKey)
-      : null;
-
-  if (mediaUserCredential || textUserCredential) {
-    return {
-      source: 'byok',
-      mediaCredential: mediaUserCredential,
-      textCredential: textUserCredential,
-      billingCredential: textUserCredential,
-      embeddingCredential,
-    };
-  }
 
   const appTextCredential = openAiApiKey
     ? appOpenAICredential({ purpose: 'text', apiKey: openAiApiKey, model: openAiModel })
@@ -400,7 +376,21 @@ async function chooseAnalysisPlan({
     ? appOpenAICredential({ purpose: 'embedding', apiKey: openAiApiKey, model: openAiEmbeddingModel })
     : null;
 
-  if (appTextCredential && typeof store.getCredits === 'function') {
+  if (!appTextCredential) {
+    throw pauseError('paused_missing_provider', 'Saved post did not process because IScraper AI processing is not configured.');
+  }
+
+  if (typeof store.getCredits !== 'function') {
+    return {
+      source: null,
+      mediaCredential: needsMedia ? appMediaCredential : null,
+      textCredential: appTextCredential,
+      billingCredential: appTextCredential,
+      embeddingCredential: appEmbeddingCredential,
+    };
+  }
+
+  if (appTextCredential) {
     const credits = await store.getCredits(userId);
     if (credits.paidCredits > 0) {
       return {
@@ -413,8 +403,6 @@ async function chooseAnalysisPlan({
     }
     throw pauseError('paused_needs_billing', 'Saved post did not process because no enrichment credits are available.');
   }
-
-  throw pauseError('paused_missing_provider', 'Saved post did not process because no text AI provider key is connected.');
 }
 
 function appOpenAICredential({ purpose, apiKey, model }) {

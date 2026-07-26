@@ -2,7 +2,7 @@ const crypto = require('crypto');
 
 function deriveKey(encryptionKey) {
   if (!encryptionKey) {
-    throw new Error('CREDENTIAL_ENCRYPTION_KEY is required to store provider credentials.');
+    throw new Error('CREDENTIAL_ENCRYPTION_KEY is required to store encrypted secrets.');
   }
   return crypto.createHash('sha256').update(String(encryptionKey)).digest();
 }
@@ -33,25 +33,8 @@ function maskSecret(secret) {
   return `${value.slice(0, 3)}...${value.slice(-4)}`;
 }
 
-function publicCredential(row) {
-  return {
-    id: row.id,
-    provider: row.provider,
-    purpose: row.purpose,
-    model: row.model,
-    baseUrl: row.baseUrl || null,
-    displayName: row.displayName || null,
-    keyHint: row.keyHint,
-    status: row.status,
-    isPreferred: Boolean(row.isPreferred),
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
 module.exports = {
   decryptSecret,
   encryptSecret,
   maskSecret,
-  publicCredential,
 };

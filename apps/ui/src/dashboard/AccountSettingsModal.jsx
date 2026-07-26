@@ -6,7 +6,6 @@ import {
   buildDataUsage,
   cancelAccountDeletion,
   CheckCircle2,
-  Copy,
   createDataExport,
   deletionStatusCopy,
   deletionStatusLabel,
@@ -14,8 +13,6 @@ import {
   downloadBlob,
   downloadDataExport,
   exportStatusLabel,
-  Eye,
-  EyeOff,
   FileText,
   formatUsageDate,
   formatUsageNumber,
@@ -25,26 +22,16 @@ import {
   getCredits,
   getDataExports,
   getItems,
-  getOnboarding,
   getPrivacyExportData,
-  getProviderCredentials,
   getUserDataMap,
-  groupProviderCredentials,
   identifyPostHogUser,
   initialForSession,
-  KeyRound,
   Loader2,
   LoadingSpinner,
   Lock,
   mapItem,
-  onboardingFormFromRecord,
-  onboardingIsDone,
   ProgressBar,
-  PROVIDER_DISPLAY_LABELS,
-  PROVIDER_KEY_PRIVACY_NOTICE,
   requestAccountDeletion,
-  revealProviderCredential,
-  saveOnboarding,
   saveProfile,
   Search,
   securityActivityLabel,
@@ -52,9 +39,7 @@ import {
   ShieldCheck,
   SkeletonBlock,
   SkeletonRows,
-  Sparkles,
   supabase,
-  testProviderCredential,
   useEffect,
   useMemo,
   User,
@@ -62,15 +47,13 @@ import {
   X,
   Zap,
 } from '../AppShared.jsx';
-import { Banner, OnboardingPreferencesFields } from '../components/Common.jsx';
+import { Banner } from '../components/Common.jsx';
 function AccountSettingsModal({
   open,
   onClose,
   session,
   profile,
-  onboarding: initialOnboarding = null,
   onProfileSaved,
-  onOnboardingSaved,
   mode = 'modal',
   extraTabs = [],
   renderExtraTab = null,
@@ -82,9 +65,6 @@ function AccountSettingsModal({
     username: profile?.username || '',
     avatarUrl: profile?.avatarUrl || avatarUrlForSession(session, profile) || '',
   });
-  const [onboarding, setOnboarding] = useState(initialOnboarding);
-  const [onboardingForm, setOnboardingForm] = useState(onboardingFormFromRecord(initialOnboarding));
-  const [credentials, setCredentials] = useState([]);
   const [usageItems, setUsageItems] = useState([]);
   const [credits, setCredits] = useState(null);
   const [accountSummary, setAccountSummary] = useState(null);
@@ -94,9 +74,6 @@ function AccountSettingsModal({
   const [includeExportFiles, setIncludeExportFiles] = useState(false);
   const [usageLoading, setUsageLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
-  const [healthByGroup, setHealthByGroup] = useState({});
-  const [revealedByGroup, setRevealedByGroup] = useState({});
-  const [confirmRevealGroup, setConfirmRevealGroup] = useState(null);
   const [deletionState, setDeletionState] = useState(null);
   const [deletionLoading, setDeletionLoading] = useState(false);
   const [deletionForm, setDeletionForm] = useState({ reason: '', exportConfirmed: false });
@@ -105,7 +82,6 @@ function AccountSettingsModal({
   const [error, setError] = useState('');
   const avatarUrl = avatarUrlForSession(session, profile);
   const initial = initialForSession(session, profile);
-  const groupedCredentials = Object.values(groupProviderCredentials(credentials));
   const email = session?.user?.email || 'Not available';
   const dataUsage = useMemo(() => buildDataUsage(usageItems, credits), [credits, usageItems]);
   const extraTabKeys = useMemo(() => extraTabs.map(([key]) => key).join('|'), [extraTabs]);
@@ -125,41 +101,9 @@ function AccountSettingsModal({
   }, [isModal, onClose, open]);
 
   useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    getOnboarding()
-      .then((body) => {
-        if (cancelled) return;
-        setOnboarding(body.onboarding || null);
-        setOnboardingForm(onboardingFormFromRecord(body.onboarding));
-      })
-      .catch((err) => {
-        if (!cancelled && err.status !== 423) setError(err.message);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
-  useEffect(() => {
     if (!open || !extraTabKeys.split('|').includes(activeTab)) return;
     onExtraTabChange?.(activeTab);
   }, [activeTab, extraTabKeys, onExtraTabChange, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    getProviderCredentials()
-      .then((body) => {
-        if (!cancelled) setCredentials(body.credentials || []);
-      })
-      .catch((err) => {
-        if (!cancelled && err.status !== 423) setError(err.message);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -275,68 +219,6 @@ function AccountSettingsModal({
     }
   };
 
-  const handleOnboardingSettingsSave = async (event) => {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    setMessage('');
-    try {
-      const body = await saveOnboarding(onboardingForm);
-      setOnboarding(body.onboarding || null);
-      setOnboardingForm(onboardingFormFromRecord(body.onboarding));
-      onOnboardingSaved?.(body.onboarding || null);
-      setMessage('Personalization saved.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleHealthCheck = async (group) => {
-    setHealthByGroup((current) => ({ ...current, [group.id]: 'checking' }));
-    setError('');
-    setMessage('');
-    try {
-      for (const credential of group.credentials) {
-        await testProviderCredential(credential.id);
-      }
-      setHealthByGroup((current) => ({ ...current, [group.id]: 'working' }));
-      setMessage(`${PROVIDER_DISPLAY_LABELS[group.provider] || group.provider} key is working.`);
-    } catch (err) {
-      setHealthByGroup((current) => ({ ...current, [group.id]: 'failed' }));
-      setError(err.message || 'This key needs attention.');
-    }
-  };
-
-  const handleReveal = async (group) => {
-    if (confirmRevealGroup !== group.id) {
-      setConfirmRevealGroup(group.id);
-      return;
-    }
-    setBusy(true);
-    setError('');
-    setMessage('');
-    try {
-      const body = await revealProviderCredential(group.credentials[0].id);
-      setRevealedByGroup((current) => ({ ...current, [group.id]: body.apiKey || '' }));
-      setConfirmRevealGroup(null);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleCopy = async (value) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setMessage('Copied.');
-    } catch {
-      setError('Could not copy automatically. Select the key and copy it manually.');
-    }
-  };
-
   const handlePrivacyExport = async () => {
     setExportLoading(true);
     setError('');
@@ -431,11 +313,6 @@ function AccountSettingsModal({
     }
   };
 
-  const healthCopy = {
-    checking: ['Checking', 'text-primary', Loader2],
-    working: ['Working', 'text-primary', CheckCircle2],
-    failed: ['Needs attention', 'text-destructive', AlertCircle],
-  };
   const visualCoverage = dataUsage.searchable
     ? Math.round((dataUsage.visualReady / dataUsage.searchable) * 100)
     : 0;
@@ -443,8 +320,6 @@ function AccountSettingsModal({
     ['account', User, 'Account'],
     ['usage', ShieldCheck, 'Privacy'],
     ['profile', Settings, 'Profile'],
-    ['personalization', Sparkles, 'Personalization'],
-    ['api', KeyRound, 'API Health'],
     ['requests', AlertCircle, 'Requests'],
     ...extraTabs,
   ];
@@ -559,17 +434,13 @@ function AccountSettingsModal({
                     <div className="mt-3 font-semibold">Export or delete data</div>
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">Create a ZIP export, see request status, or start account deletion review.</p>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('api')}
-                    className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-primary/40 hover:bg-primary/5"
-                  >
-                    <KeyRound className="h-5 w-5 text-primary" />
-                    <div className="mt-3 font-semibold">Connected keys</div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                    <Lock className="h-5 w-5 text-primary" />
+                    <div className="mt-3 font-semibold">Connected access</div>
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                      {formatUsageNumber(accountSummary?.counts?.providerCredentials || groupedCredentials.length)} provider keys and {formatUsageNumber(accountSummary?.counts?.extensionTokens || 0)} active extension or agent tokens.
+                      {formatUsageNumber((accountSummary?.counts?.extensionTokens || 0) + (accountSummary?.counts?.captureConnections || 0))} extension, agent, or capture connections tracked for your account.
                     </p>
-                  </button>
+                  </div>
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                     <Zap className="h-5 w-5 text-primary" />
                     <div className="mt-3 font-semibold">Billing and credits</div>
@@ -614,7 +485,7 @@ function AccountSettingsModal({
                       <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">Recent security activity</div>
                       <h4 className="mt-2 font-display text-2xl font-bold tracking-tight">Account safety log</h4>
                       <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                        Shows sensitive account actions like exports, token changes, provider-key changes, support views, and deletion steps.
+                        Shows sensitive account actions like exports, token changes, support views, and deletion steps.
                       </p>
                     </div>
                     <span className="rounded-full border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
@@ -773,98 +644,6 @@ function AccountSettingsModal({
                   Save profile
                 </button>
               </form>
-            )}
-
-            {activeTab === 'personalization' && (
-              <form onSubmit={handleOnboardingSettingsSave} className="space-y-5">
-                <OnboardingPreferencesFields form={onboardingForm} setForm={setOnboardingForm} />
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-muted-foreground">
-                  {onboardingIsDone(onboarding)
-                    ? 'Your onboarding answers are saved. You can update them any time.'
-                    : 'You have not completed personalization yet. This is optional.'}
-                </div>
-                <button disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground disabled:opacity-60">
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                  Save personalization
-                </button>
-              </form>
-            )}
-
-            {activeTab === 'api' && (
-              <div className="space-y-5">
-                <div>
-                  <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-primary">API Health</div>
-                  <h3 className="mt-2 font-display text-3xl font-bold tracking-tight">Your saved keys</h3>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">Keys stay hidden until you choose to reveal one.</p>
-                  <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-muted-foreground">{AI_PROCESSING_NOTICE} {PROVIDER_KEY_PRIVACY_NOTICE}</p>
-                </div>
-                {groupedCredentials.length === 0 ? (
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-sm text-muted-foreground">
-                    No API keys saved yet. Add OpenRouter from Settings when you are ready.
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {groupedCredentials.map((group) => {
-                      const revealed = revealedByGroup[group.id] || '';
-                      const health = healthByGroup[group.id];
-                      const [label, color, HealthIcon] = healthCopy[health] || ['Not checked', 'text-muted-foreground', ShieldCheck];
-                      return (
-                        <div key={group.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                            <div className="min-w-0">
-                              <div className="font-semibold">{PROVIDER_DISPLAY_LABELS[group.provider] || group.provider}</div>
-                              <div className="mt-1 text-xs text-muted-foreground">{group.credentials.map((credential) => credential.purpose).join(', ')}</div>
-                            </div>
-                            <span className={`inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs ${color}`}>
-                              <HealthIcon className={`h-3.5 w-3.5 ${health === 'checking' ? 'animate-spin' : ''}`} /> {label}
-                            </span>
-                          </div>
-                          <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
-                            <div className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black px-4 py-3 font-mono text-xs">
-                              {revealed ? <span className="break-all">{revealed}</span> : <span>{group.keyHint}</span>}
-                            </div>
-                            <div className="flex gap-2">
-                              <button type="button" onClick={() => handleHealthCheck(group)} disabled={health === 'checking'} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-3 py-3 text-xs font-semibold transition hover:bg-white/5 disabled:opacity-60">
-                                {health === 'checking' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-                                Check
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (revealed) {
-                                    setRevealedByGroup((current) => ({ ...current, [group.id]: '' }));
-                                    return;
-                                  }
-                                  handleReveal(group);
-                                }}
-                                disabled={busy}
-                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-accent/40 px-3 py-3 text-xs font-semibold text-accent transition hover:bg-accent/10 disabled:opacity-60"
-                              >
-                                {revealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                                {revealed ? 'Hide' : 'Reveal'}
-                              </button>
-                              {revealed && (
-                                <button type="button" onClick={() => handleCopy(revealed)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-3 py-3 text-xs font-semibold text-primary-foreground">
-                                  <Copy className="h-4 w-4" /> Copy
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                          {confirmRevealGroup === group.id && !revealed && (
-                            <div className="mt-3 rounded-xl border border-accent/40 bg-accent/10 p-3 text-sm leading-6 text-accent">
-                              Revealing an API key exposes the full secret on this screen. Only do this on your own device.
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                <button type="button" onClick={() => handleReveal(group)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground">Reveal key</button>
-                                <button type="button" onClick={() => setConfirmRevealGroup(null)} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-foreground">Cancel</button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
             )}
 
             {activeTab === 'requests' && (
@@ -1046,7 +825,7 @@ function AccountSettingsModal({
                       <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-destructive">Deletion request</div>
                       <h4 className="mt-2 font-display text-2xl font-bold tracking-tight">Request account deletion</h4>
                       <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                        This will freeze imports, search enrichment, API keys, extension access, checkout, and Lens while the request is reviewed.
+                        This will freeze imports, search enrichment, extension access, checkout, and Lens while the request is reviewed.
                         Some security, accounting, backup, log, Stripe, PostHog, email, and AI-provider records may remain outside IScraper.
                       </p>
                     </div>

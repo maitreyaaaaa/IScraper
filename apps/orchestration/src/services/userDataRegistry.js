@@ -66,7 +66,7 @@ const USER_DATA_CATEGORIES = [
   {
     key: 'access',
     label: 'Connected access',
-    description: 'Provider key metadata, extension tokens, agent tokens, and capture connections.',
+    description: 'Extension tokens, agent tokens, and capture connections.',
     purpose: 'Let the user connect approved tools and revoke access when needed.',
     classification: 'credential',
     sensitivity: 'credential_metadata',
@@ -74,9 +74,9 @@ const USER_DATA_CATEGORIES = [
     retention: 'Kept until the user revokes/deletes the connection or the account is deleted.',
     retentionPeriod: 'Until revoked, expired, deleted, or account deletion.',
     retentionDays: null,
-    minimization: 'Only metadata and key hints are shown or exported; hashes and encrypted secrets stay server-only.',
-    deletion: 'Credentials and tokens are revoked/deleted during approved account deletion.',
-    tables: ['user_provider_credentials', 'user_ai_keys', 'extension_tokens', 'capture_connections'],
+    minimization: 'Only metadata is shown or exported; hashes and one-time secrets stay server-only.',
+    deletion: 'Tokens and connections are revoked/deleted during approved account deletion.',
+    tables: ['extension_tokens', 'capture_connections'],
     redaction: 'Encrypted keys, raw tokens, token hashes, and one-time secrets are never exported.',
   },
   {
@@ -116,6 +116,8 @@ const USER_DATA_CATEGORIES = [
 const EXCLUDED_USER_DATA_TABLES = [
   { table: 'account_deletion_audit', reason: 'Retained audit table; user export excludes internal hashes.' },
   { table: 'security_audit_events', reason: 'Server-only security audit table; exports expose user-facing activity without IP/user-agent hashes.' },
+  { table: 'user_provider_credentials', reason: 'Legacy BYOK table; SaaS AI no longer exports or exposes user provider-key records.' },
+  { table: 'user_ai_keys', reason: 'Legacy AI-key table; SaaS AI no longer exports or exposes user provider-key records.' },
   { table: 'item_embeddings', reason: 'Derived vector data is not useful to users and may be large.' },
   { table: 'processing_jobs', reason: 'Operational queue state is not part of user data export.' },
 ];
@@ -161,15 +163,6 @@ const TABLE_DATA_CLASSIFICATIONS = {
 };
 
 const SECRET_LIFECYCLE_RULES = [
-  {
-    key: 'provider_api_keys',
-    label: 'Provider API keys',
-    classification: 'credential',
-    storage: 'Encrypted at rest with server-side encryption before writing to user_provider_credentials or legacy user_ai_keys.',
-    exposure: 'Only provider, purpose, model, status, key hint, and timestamps are shown after creation.',
-    lifecycle: 'User can replace, disable, or delete keys; account deletion disables and deletes credential rows.',
-    exportRule: 'Never export encrypted keys or raw API keys.',
-  },
   {
     key: 'extension_and_agent_tokens',
     label: 'Extension and agent tokens',

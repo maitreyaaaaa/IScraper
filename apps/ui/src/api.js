@@ -396,10 +396,6 @@ export function createCreditCheckout(packageId) {
   });
 }
 
-export function getProviderCredentials() {
-  return request('/provider-credentials');
-}
-
 export function getExtensionTokens() {
   return request('/extension-tokens');
 }
@@ -433,32 +429,6 @@ export function createAgentAccessToken(name = 'Agent access') {
 export function revokeAgentAccessToken(id) {
   return request(`/agent-access/tokens/${id}`, {
     method: 'DELETE',
-  });
-}
-
-export function saveProviderCredential(payload) {
-  return request('/provider-credentials', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-}
-
-export function deleteProviderCredential(id) {
-  return request(`/provider-credentials/${id}`, {
-    method: 'DELETE',
-  });
-}
-
-export function testProviderCredential(id) {
-  return request(`/provider-credentials/${id}/test`, {
-    method: 'POST',
-  });
-}
-
-export function revealProviderCredential(id) {
-  return request(`/provider-credentials/${id}/reveal`, {
-    method: 'POST',
   });
 }
 

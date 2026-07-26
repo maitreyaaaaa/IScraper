@@ -51,7 +51,7 @@ function lensQueryFromAnalysis(analysis = {}) {
 async function describeLensCrop({ dataUrl, credential, fetchImpl = fetch }) {
   const parsed = parseLensCrop(dataUrl);
   if (!credential?.apiKey) {
-    const error = new Error('Connect a media AI key before using Lens image search.');
+    const error = new Error('IScraper image AI is not configured yet.');
     error.statusCode = 428;
     throw error;
   }

@@ -5,17 +5,13 @@ import {
   BrandLogo,
   CheckCircle2,
   cleanAuthCallbackUrl,
-  getOnboarding,
   getProfile,
   identifyPostHogUser,
   Loader2,
   Lock,
   Mail,
-  onboardingFormFromRecord,
-  onboardingIsDone,
   recordSessionSignInActivity,
   resetPostHogUser,
-  saveOnboarding,
   saveProfile,
   sendEmailOtp,
   setApiAccessToken,
@@ -26,15 +22,12 @@ import {
   useState,
   verifyEmailOtp,
 } from '../AppShared.jsx';
-import { Banner, OnboardingPreferencesPanel } from '../components/Common.jsx';
+import { Banner } from '../components/Common.jsx';
 function LoginPage({ onBack, onOpenApp }) {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [profileRequired, setProfileRequired] = useState(false);
   const [profileForm, setProfileForm] = useState({ username: '', avatarUrl: '' });
-  const [onboarding, setOnboarding] = useState(null);
-  const [onboardingForm, setOnboardingForm] = useState(onboardingFormFromRecord(null));
-  const [onboardingPromptEligible, setOnboardingPromptEligible] = useState(false);
   const [emailForm, setEmailForm] = useState({ email: '', code: '' });
   const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [notice, setNotice] = useState('');
@@ -60,24 +53,17 @@ function LoginPage({ onBack, onOpenApp }) {
     setApiAccessToken(data.session?.access_token);
     if (!data.session) {
       resetPostHogUser();
-      return { session: null, profile: null, profileRequired: false, onboarding: null };
+      return { session: null, profile: null, profileRequired: false };
     }
     recordSessionSignInActivity(data.session);
-    const [profileBody, onboardingBody] = await Promise.all([
-      getProfile(),
-      getOnboarding().catch(() => ({ onboarding: null })),
-    ]);
+    const profileBody = await getProfile();
     applyProfileState(profileBody.profile, profileBody.required);
-    setOnboardingPromptEligible(Boolean(profileBody.required));
-    setOnboarding(onboardingBody.onboarding || null);
-    setOnboardingForm(onboardingFormFromRecord(onboardingBody.onboarding));
     identifyPostHogUser(data.session, profileBody.profile);
     cleanAuthCallbackUrl();
     return {
       session: data.session,
       profile: profileBody.profile || null,
       profileRequired: Boolean(profileBody.required),
-      onboarding: onboardingBody.onboarding || null,
     };
   }, [applyProfileState]);
 
@@ -104,9 +90,6 @@ function LoginPage({ onBack, onOpenApp }) {
       } else {
         setProfile(null);
         setProfileRequired(false);
-        setOnboarding(null);
-        setOnboardingForm(onboardingFormFromRecord(null));
-        setOnboardingPromptEligible(false);
         resetPostHogUser();
       }
     });
@@ -194,31 +177,9 @@ function LoginPage({ onBack, onOpenApp }) {
     try {
       const body = await saveProfile(profileForm);
       applyProfileState(body.profile, false);
-      setOnboardingPromptEligible(true);
       identifyPostHogUser(session, body.profile);
     } catch (err) {
       setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleOnboardingSave = async ({ skipped = false } = {}) => {
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      const body = await saveOnboarding({
-        ...onboardingForm,
-        skipped,
-      });
-      setOnboarding(body.onboarding || null);
-      setOnboardingForm(onboardingFormFromRecord(body.onboarding));
-      setOnboardingPromptEligible(false);
-      onOpenApp();
-    } catch (err) {
-      setError(err.message);
-      onOpenApp();
     } finally {
       setBusy(false);
     }
@@ -335,14 +296,6 @@ function LoginPage({ onBack, onOpenApp }) {
                 Continue
               </button>
             </form>
-          ) : onboardingPromptEligible && !onboardingIsDone(onboarding) ? (
-            <OnboardingPreferencesPanel
-              form={onboardingForm}
-              setForm={setOnboardingForm}
-              onSave={() => handleOnboardingSave()}
-              onSkip={() => handleOnboardingSave({ skipped: true })}
-              busy={busy}
-            />
           ) : (
             <div>
               <CheckCircle2 className="h-9 w-9 text-primary" />

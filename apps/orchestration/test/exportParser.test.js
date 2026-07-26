@@ -34,7 +34,7 @@ test('parseImportExport reads Instagram saved files from nested ZIP path only', 
 
   assert.equal(parsed.items.length, 1);
   assert.equal(parsed.items[0].id, 'POST111');
-  assert.deepEqual(parsed.items[0].collections, ['Instagram saved posts', 'Ideas']);
+  assert.deepEqual(parsed.items[0].collections, ['Instagram saved posts']);
 });
 
 test('parseImportExport reads X bookmark files from a ZIP', async () => {

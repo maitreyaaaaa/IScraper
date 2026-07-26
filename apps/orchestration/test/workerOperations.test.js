@@ -38,7 +38,6 @@ test('worker preflight fails closed without leaking secret values', () => {
   const result = checkWorkerPreflight({
     storageMode: 'local',
     supabaseServiceRoleKey: 'super-secret-service-role',
-    credentialEncryptionKey: 'super-secret-encryption-key',
     openAiApiKey: 'super-secret-openai-key',
   });
   const serialized = JSON.stringify(result);
@@ -47,23 +46,20 @@ test('worker preflight fails closed without leaking secret values', () => {
   assert.match(serialized, /STORAGE_MODE/);
   assert.match(serialized, /SUPABASE_URL/);
   assert.equal(serialized.includes('super-secret-service-role'), false);
-  assert.equal(serialized.includes('super-secret-encryption-key'), false);
   assert.equal(serialized.includes('super-secret-openai-key'), false);
 });
 
-test('worker preflight accepts Supabase mode with a text indexing provider path', () => {
+test('worker preflight accepts Supabase mode with app-owned text indexing', () => {
   const result = checkWorkerPreflight({
     storageMode: 'supabase',
     supabaseUrl: 'https://project.supabase.co',
     supabaseServiceRoleKey: 'super-secret-service-role',
-    credentialEncryptionKey: 'super-secret-encryption-key',
     openAiApiKey: 'super-secret-openai-key',
   });
   const serialized = JSON.stringify(result);
 
   assert.equal(result.ok, true);
   assert.equal(serialized.includes('super-secret-service-role'), false);
-  assert.equal(serialized.includes('super-secret-encryption-key'), false);
   assert.equal(serialized.includes('super-secret-openai-key'), false);
 });
 

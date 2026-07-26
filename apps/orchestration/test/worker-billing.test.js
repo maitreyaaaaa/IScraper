@@ -49,53 +49,19 @@ test('media job pauses only when no text provider is available', async () => {
     assert.equal(job.status, 'paused_missing_provider');
     assert.equal(item.status, 'paused_missing_provider');
     assert.equal(item.analysis, null);
-    assert.match(item.error, /no text AI provider/i);
+    assert.match(item.error, /IScraper AI processing is not configured/i);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('processing one saved item uses the user key without consuming app credits', async () => {
+test('processing one saved item pauses without app-owned AI', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const userId = 'u1';
-  const originalFetch = global.fetch;
-
-  global.fetch = async () => ({
-    ok: true,
-    json: async () => ({
-      choices: [
-        {
-          message: {
-            content: JSON.stringify({
-              title: 'Saved idea',
-              summary: 'A useful saved post.',
-              transcript: '',
-              ocrText: '',
-              visualDescription: '',
-              brandsMentioned: [],
-              toolsMentioned: [],
-              reposMentioned: [],
-              peopleMentioned: [],
-              topics: ['saved'],
-              tags: ['saved'],
-              whyUseful: 'It is worth finding again.',
-            }),
-          },
-        },
-      ],
-    }),
-  });
 
   try {
     store.ensureUser(userId, 'u1@example.com');
-    store.saveProviderCredential(userId, {
-      provider: 'openrouter',
-      purpose: 'text',
-      model: 'deepseek/deepseek-v4-pro',
-      apiKey: 'test-key',
-      encryptionKey: 'dev-encryption-key',
-    });
     const entry = store.createImport({ userId, source: 'instagram-export', fileNames: ['saved_posts.html'] });
     const items = store.upsertImportData({
       userId,
@@ -125,14 +91,13 @@ test('processing one saved item uses the user key without consuming app credits'
       credentialEncryptionKey: 'dev-encryption-key',
     });
 
-    const credits = store.getCredits(userId);
+    const job = store.getJobs(userId, entry.id)[0];
     const item = store.getItem(userId, 'item-1');
 
-    assert.equal(item.status, 'done');
-    assert.equal(credits.freeItemsUsed, 0);
-    assert.equal(credits.freeItemsRemaining, 0);
+    assert.equal(job.status, 'paused_missing_provider');
+    assert.equal(item.status, 'paused_missing_provider');
+    assert.match(item.error, /IScraper AI processing is not configured/i);
   } finally {
-    global.fetch = originalFetch;
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -330,13 +295,7 @@ test('transient provider failures back off instead of retrying immediately forev
 
   try {
     store.ensureUser(userId, 'u1@example.com');
-    store.saveProviderCredential(userId, {
-      provider: 'openrouter',
-      purpose: 'text',
-      model: 'deepseek/deepseek-v4-pro',
-      apiKey: 'test-key',
-      encryptionKey: 'dev-encryption-key',
-    });
+    store.addCreditTransaction({ userId, amount: 1, reason: 'test' });
     const entry = store.createImport({ userId, source: 'manual-link', fileNames: ['https://example.com/retry'] });
     const items = store.upsertImportData({
       userId,
@@ -354,7 +313,9 @@ test('transient provider failures back off instead of retrying immediately forev
       importId: entry.id,
       videoDir: path.join(dir, 'videos'),
       shouldDownload: false,
-      credentialEncryptionKey: 'dev-encryption-key',
+      openAiApiKey: 'app-openai-key',
+      openAiModel: 'gpt-4o',
+      openAiEmbeddingModel: 'text-embedding-3-small',
       maxAttempts: 2,
       retryBackoffMs: 60 * 1000,
     });
@@ -388,13 +349,7 @@ test('provider failures become terminal after max attempts', async () => {
 
   try {
     store.ensureUser(userId, 'u1@example.com');
-    store.saveProviderCredential(userId, {
-      provider: 'openrouter',
-      purpose: 'text',
-      model: 'deepseek/deepseek-v4-pro',
-      apiKey: 'test-key',
-      encryptionKey: 'dev-encryption-key',
-    });
+    store.addCreditTransaction({ userId, amount: 1, reason: 'test' });
     const entry = store.createImport({ userId, source: 'manual-link', fileNames: ['https://example.com/fail'] });
     const items = store.upsertImportData({
       userId,
@@ -412,7 +367,9 @@ test('provider failures become terminal after max attempts', async () => {
       importId: entry.id,
       videoDir: path.join(dir, 'videos'),
       shouldDownload: false,
-      credentialEncryptionKey: 'dev-encryption-key',
+      openAiApiKey: 'app-openai-key',
+      openAiModel: 'gpt-4o',
+      openAiEmbeddingModel: 'text-embedding-3-small',
       maxAttempts: 1,
     });
 

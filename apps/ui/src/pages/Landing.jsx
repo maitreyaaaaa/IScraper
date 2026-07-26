@@ -45,7 +45,7 @@ import {
 import { AnimatedFeatureSelect } from '../components/Common.jsx';
 import { AccountSettingsModal } from '../dashboard/AccountSettingsModal.jsx';
 const LIBRARY_STARTED_KEY = 'iscraper.libraryStarted';
-function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHelp, onOpenSecurity, onOpenDataDeletion, onOpenCookies }) {
+function Landing({ onOpenApp, onOpenLogin, onOpenPricing, onOpenHowTo, onOpenTerms, onOpenPrivacy, onOpenHelp, onOpenSecurity, onOpenDataDeletion, onOpenCookies }) {
   const root = useRef(null);
   const introRef = useRef(null);
   const cursorRef = useRef(null);
@@ -359,10 +359,9 @@ function Landing({ onOpenApp, onOpenLogin, onOpenHowTo, onOpenTerms, onOpenPriva
             <BrandLogo className="h-20 w-64 md:h-[7.5rem] md:w-[24rem]" />
           </button>
           <nav className="pointer-events-auto absolute left-1/2 hidden -translate-x-1/2 rounded-full border border-white/10 bg-black/75 p-1 text-sm font-semibold text-muted-foreground shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl md:flex">
-            <a href="#features" onClick={(event) => scrollToSection(event, '#features')} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">Features</a>
-            <a href="#how-it-works" onClick={(event) => scrollToSection(event, '#how-it-works')} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">How it works</a>
-            <a href="#extension" onClick={(event) => scrollToSection(event, '#extension')} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">Extension</a>
-            <button type="button" onClick={onOpenHowTo} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">How to Use</button>
+            <button type="button" onClick={onOpenPricing} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">Pricing</button>
+            <button type="button" onClick={onOpenHelp} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">Contact us</button>
+            <button type="button" onClick={onOpenHowTo} className="nav-item rounded-full px-4 py-2 transition hover:bg-white/10 hover:text-foreground">How to use</button>
           </nav>
           <div className="nav-item pointer-events-auto flex items-center gap-2 justify-self-end">
             {landingSession ? (

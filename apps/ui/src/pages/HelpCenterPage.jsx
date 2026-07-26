@@ -2,10 +2,10 @@ import {
   ArrowLeft,
   BrandLogo,
   FileText,
-  KeyRound,
   LifeBuoy,
   Mail,
   Search,
+  ShieldCheck,
   Upload,
   useState,
 } from '../AppShared.jsx';
@@ -23,7 +23,7 @@ function HelpCenterPage({ onBack, onOpenApp, onOpenHowTo }) {
   });
   const helpTopics = [
     [Upload, 'Import and save help', 'Use the Instagram or Pinterest guides for exports, or paste a single link from the Add saves tab.'],
-    [KeyRound, 'AI keys', 'IScraper is BYOK right now. Add your own text, media, and embedding keys in Settings.'],
+    [ShieldCheck, 'AI processing', 'IScraper handles AI indexing through the app. Settings only cover account, privacy, and library tools.'],
     [Search, 'Search and Lens problems', 'If results feel wrong, make sure saves were approved and indexed. Search improves after summaries, OCR, tags, and Lens analysis exist.'],
     [LifeBuoy, 'Account support', 'Email us if login, usernames, profile setup, or imports are not working.'],
   ];

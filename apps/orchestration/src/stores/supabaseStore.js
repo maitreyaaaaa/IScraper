@@ -1,14 +1,5 @@
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
-const { decryptSecret, encryptSecret, maskSecret, publicCredential } = require('../services/credentials');
-const {
-  OPENAI_COMPATIBLE_PROVIDER,
-  assertMediaModelAllowed,
-  assertOpenAICompatibleConfig,
-  assertProviderPurpose,
-  normalizeOpenAICompatibleBaseUrl,
-  normalizeOpenAICompatibleDisplayName,
-} = require('../services/providers');
 const { DEFAULT_CREDIT_PACKAGES, FREE_ITEMS_LIMIT, normalizePackage } = require('../services/credits');
 const { normalizeUsername, publicProfile } = require('../services/profiles');
 const { publicOnboardingPreferences } = require('../services/onboarding');
@@ -472,7 +463,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return mapDeletionRequest(data);
     },
     async getPrivacyExport(userId) {
-      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, credentials, legacyAiKeys, extensionTokens, captureConnections, searchEvents, searchFeedback, userActivity, analysisUsage, profile, onboarding, credits, deletionRequest] = await Promise.all([
+      const [items, itemArchives, linkHealthChecks, itemReminders, imports, collections, smartCollections, smartCollectionItems, extensionTokens, captureConnections, searchEvents, searchFeedback, userActivity, analysisUsage, profile, onboarding, credits, deletionRequest] = await Promise.all([
         this.getItems(userId),
         selectAllUserRows(client, 'item_archives', userId, '*', (query) => query.order('updated_at', { ascending: false })),
         selectAllUserRows(client, 'link_health_checks', userId, '*', (query) => query.order('checked_at', { ascending: false })),
@@ -481,11 +472,6 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         selectAllUserRows(client, 'collections', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'smart_collections', userId, '*', (query) => query.order('updated_at', { ascending: false })),
         selectAllUserRows(client, 'smart_collection_items', userId, '*', (query) => query.order('updated_at', { ascending: false })),
-        this.listProviderCredentials(userId),
-        selectAllUserRows(client, 'user_ai_keys', userId, 'provider,key_hint,created_at,updated_at', (query) => query.order('updated_at', { ascending: false })).catch((err) => {
-          if (err?.code === '42P01') return [];
-          throw err;
-        }),
         this.listExtensionTokens(userId),
         this.listCaptureConnections(userId),
         selectAllUserRows(client, 'search_events', userId, '*', (query) => query.order('created_at', { ascending: false })),
@@ -508,13 +494,6 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         smartCollections,
         smartCollectionItems,
         credits,
-        providerCredentials: credentials,
-        legacyAiKeys: legacyAiKeys.map((row) => ({
-          provider: row.provider,
-          keyHint: row.key_hint || '',
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        })),
         extensionTokens,
         captureConnections,
         searchEvents: searchEvents.map(mapSearchEvent),
@@ -530,10 +509,9 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       const { data: user, error } = await client.from('users').select('*').eq('id', userId).maybeSingle();
       if (error) throw error;
       if (!user) return null;
-      const [summary, imports, providerCredentials, extensionTokens, captureConnections, deletion, lastActivityRows, lastExportRows] = await Promise.all([
+      const [summary, imports, extensionTokens, captureConnections, deletion, lastActivityRows, lastExportRows] = await Promise.all([
         this.getAdminUserSummary(user),
         countRows(client, 'imports', (query) => query.eq('user_id', userId)),
-        countRows(client, 'user_provider_credentials', (query) => query.eq('user_id', userId)),
         countRows(client, 'extension_tokens', (query) => query.eq('user_id', userId).is('revoked_at', null)),
         countRows(client, 'capture_connections', (query) => query.eq('user_id', userId)),
         this.getActiveDeletionRequest(userId),
@@ -548,7 +526,6 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         counts: {
           imports,
           saves: summary.itemStats.total,
-          providerCredentials,
           extensionTokens,
           captureConnections,
         },
@@ -579,8 +556,6 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         itemArchives: privacy.itemArchives,
         linkHealthChecks: privacy.linkHealthChecks,
         itemReminders: privacy.itemReminders,
-        providerCredentials: privacy.providerCredentials,
-        legacyAiKeys: privacy.legacyAiKeys || [],
         extensionTokens: privacy.extensionTokens,
         captureConnections: privacy.captureConnections,
         searchEvents: privacy.searchEvents,
@@ -2129,7 +2104,6 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         credits: {
           freeUsed: usageBySource.free || 0,
           paidUsed: usageBySource.paid || 0,
-          byokUsed: usageBySource.byok || 0,
           paidCreditsAvailable: transactionRows.reduce((total, row) => total + Number(row.amount || 0), 0),
         },
         purchases: {
@@ -2187,13 +2161,12 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       const { data: user, error } = await client.from('users').select('*').eq('id', userId).maybeSingle();
       if (error) throw error;
       if (!user) return null;
-      const [summary, transactions, purchases, adjustments, imports, providerCredentials, extensionTokens, captureConnections, jobs, deletion, lastActivityRows] = await Promise.all([
+      const [summary, transactions, purchases, adjustments, imports, extensionTokens, captureConnections, jobs, deletion, lastActivityRows] = await Promise.all([
         this.getAdminUserSummary(user),
         selectUserRows(client, 'credit_transactions', userId, '*', 100),
         selectUserRows(client, 'credit_purchases', userId, '*', 50),
         selectUserRows(client, 'admin_credit_adjustments', userId, '*', 50),
         countRows(client, 'imports', (query) => query.eq('user_id', userId)),
-        countRows(client, 'user_provider_credentials', (query) => query.eq('user_id', userId)),
         countRows(client, 'extension_tokens', (query) => query.eq('user_id', userId).is('revoked_at', null)),
         countRows(client, 'capture_connections', (query) => query.eq('user_id', userId)),
         selectRows(client, 'processing_jobs', 'status', 10000, (query) => query.eq('user_id', userId)),
@@ -2206,7 +2179,6 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         counts: {
           imports,
           saves: summary.itemStats.total,
-          providerCredentials,
           extensionTokens,
           captureConnections,
         },
@@ -2302,92 +2274,6 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       if (error && error.code === '42P01') return [];
       if (error) throw error;
       return (data || []).map(mapSecurityAuditEvent);
-    },
-    async listProviderCredentials(userId) {
-      const { data, error } = await client
-        .from('user_provider_credentials')
-        .select('*')
-        .eq('user_id', userId)
-        .order('updated_at', { ascending: false });
-      if (error) throw error;
-      return data.map(mapCredential).map(publicCredential);
-    },
-    async saveProviderCredential(userId, { provider, purpose, model, apiKey, encryptionKey, status = 'active', isPreferred = true, baseUrl = '', displayName = '' }) {
-      assertProviderPurpose(provider, purpose);
-      if (purpose === 'media' && provider === 'openrouter') assertMediaModelAllowed(model);
-      assertOpenAICompatibleConfig({ provider, purpose, model, baseUrl });
-      if (!apiKey) throw new Error('API key is required.');
-      const normalizedBaseUrl = provider === OPENAI_COMPATIBLE_PROVIDER ? normalizeOpenAICompatibleBaseUrl(baseUrl) : null;
-      const normalizedDisplayName = provider === OPENAI_COMPATIBLE_PROVIDER ? normalizeOpenAICompatibleDisplayName(displayName) : null;
-
-      if (isPreferred) {
-        await client
-          .from('user_provider_credentials')
-          .update({ is_preferred: false })
-          .eq('user_id', userId)
-          .eq('purpose', purpose)
-          .throwOnError();
-      }
-
-      const row = {
-        user_id: userId,
-        provider,
-        purpose,
-        model,
-        base_url: normalizedBaseUrl,
-        display_name: normalizedDisplayName,
-        encrypted_key: encryptSecret(apiKey, encryptionKey),
-        key_hint: maskSecret(apiKey),
-        status,
-        is_preferred: isPreferred,
-      };
-      const { data, error } = await client
-        .from('user_provider_credentials')
-        .upsert(row, { onConflict: 'user_id,provider,purpose' })
-        .select('*')
-        .single();
-      if (error) throw error;
-      await this.recordUserActivity({
-        userId,
-        eventType: 'provider_credential_saved',
-        metadata: { credentialId: data.id, provider, purpose, model },
-      });
-      return publicCredential(mapCredential(data));
-    },
-    async getPreferredProviderCredential(userId, purpose, encryptionKey) {
-      const { data, error } = await client
-        .from('user_provider_credentials')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('purpose', purpose)
-        .eq('status', 'active')
-        .order('is_preferred', { ascending: false })
-        .order('updated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (error) throw error;
-      return data ? credentialWithSecret(data, encryptionKey) : null;
-    },
-    async getProviderCredential(userId, id, encryptionKey) {
-      const { data, error } = await client
-        .from('user_provider_credentials')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('id', id)
-        .maybeSingle();
-      if (error) throw error;
-      return data ? credentialWithSecret(data, encryptionKey) : null;
-    },
-    async deleteProviderCredential(userId, id) {
-      const { data, error } = await client
-        .from('user_provider_credentials')
-        .delete()
-        .eq('user_id', userId)
-        .eq('id', id)
-        .select('id');
-      if (error) throw error;
-      if (data?.length) await this.recordUserActivity({ userId, eventType: 'provider_credential_deleted', metadata: { credentialId: id } });
-      return Boolean(data?.length);
     },
     async search(userId, query, filters = {}, options = {}) {
       const items = await this.getItems(userId);
@@ -3211,32 +3097,6 @@ function toAnalysisRow(analysis) {
     topics: analysis.topics,
     tags: analysis.tags,
     why_useful: analysis.whyUseful,
-  };
-}
-
-function mapCredential(row) {
-  return {
-    id: row.id,
-    userId: row.user_id,
-    provider: row.provider,
-    purpose: row.purpose,
-    model: row.model,
-    baseUrl: row.base_url || null,
-    displayName: row.display_name || null,
-    encryptedKey: row.encrypted_key,
-    keyHint: row.key_hint,
-    status: row.status,
-    isPreferred: row.is_preferred,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function credentialWithSecret(row, encryptionKey) {
-  const credential = mapCredential(row);
-  return {
-    ...publicCredential(credential),
-    apiKey: decryptSecret(credential.encryptedKey, encryptionKey),
   };
 }
 

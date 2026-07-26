@@ -3,30 +3,25 @@ const test = require('node:test');
 
 const { chooseAnalysisPlan } = require('../src/services/worker');
 
-test('media saves can fall back to text-only indexing when media credential is missing', async () => {
-  const textCredential = {
-    id: 'text-key',
-    provider: 'openrouter',
-    purpose: 'text',
-    model: 'deepseek/deepseek-v4-pro',
-    apiKey: 'sk-test',
-  };
+test('user provider credentials are ignored when app-owned AI is not configured', async () => {
   const store = {
     async getPreferredProviderCredential(_userId, purpose) {
-      return purpose === 'text' ? textCredential : null;
+      return {
+        id: `${purpose}-key`,
+        provider: 'openrouter',
+        purpose,
+        model: 'deepseek/deepseek-v4-pro',
+        apiKey: 'sk-test',
+      };
     },
   };
 
-  const plan = await chooseAnalysisPlan({
+  await assert.rejects(() => chooseAnalysisPlan({
     store,
     userId: 'user-1',
     item: { contentType: 'reel' },
     credentialEncryptionKey: 'dev-key',
-  });
-
-  assert.equal(plan.source, 'byok');
-  assert.equal(plan.mediaCredential, null);
-  assert.equal(plan.textCredential, textCredential);
+  }), /IScraper AI processing is not configured/);
 });
 
 test('app-owned analysis uses OpenAI gpt-4o when configured', async () => {

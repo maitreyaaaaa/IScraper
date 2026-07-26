@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } from 'd3-force';
+import JSZip from 'jszip';
 import {
   Activity,
   AlertCircle,
@@ -19,7 +20,6 @@ import {
   Copy,
   Database,
   Download,
-  EyeOff,
   ExternalLink,
   Eye,
   FileText,
@@ -28,7 +28,6 @@ import {
   GitBranch,
   Hash,
   Images,
-  KeyRound,
   LifeBuoy,
   List,
   Loader2,
@@ -60,14 +59,11 @@ import {
   archiveItem,
   approveReviewItem,
   cancelAccountDeletion,
-  createAgentAccessToken,
   createDataExport,
   createExtensionToken,
   createNote,
-  deleteProviderCredential,
   downloadDataExport,
   downloadObsidianGraph,
-  getAgentAccessTokens,
   getAccountDeletion,
   getAccountSecurityActivity,
   getAccountSummary,
@@ -86,31 +82,26 @@ import {
   getProfile,
   getPrivacyExportData,
   getPublicFeedback,
-  getProviderCredentials,
   getUserDataMap,
   getSimilarVisuals,
   importInstagramExport,
   queueStorageImport,
   enrichIntentBatch,
   enrichItem,
-  revealProviderCredential,
   recordSignInActivity,
   requestAccountDeletion,
-  revokeAgentAccessToken,
   getSmartCollectionItems,
   getSmartCollections,
   refreshSmartCollections,
   saveLink,
   saveOnboarding,
   saveProfile,
-  saveProviderCredential,
   searchItems,
   searchVisuals,
   setSmartCollectionItemOverride,
   setApiAccessToken,
   submitSearchFeedback,
   submitPublicFeedback,
-  testProviderCredential,
   updateSmartCollection,
   updateReviewItem,
   checkLibraryLinks,
@@ -264,9 +255,9 @@ const VERCEL_SAFE_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 const EXPORT_UPLOAD_EXTENSIONS = new Set(['.html', '.htm', '.zip', '.json', '.csv', '.js', '.txt']);
 
-const INSTAGRAM_SAVED_EXPORT_RE = /(^|\/)your_instagram_activity\/saved\/saved_(posts|collections)\.(html|htm|json)$/i;
+const INSTAGRAM_SAVED_POST_EXPORT_RE = /(^|\/)your_instagram_activity\/saved\/saved_posts?\.(html|htm|json)$/i;
 
-const INSTAGRAM_SAVED_FILE_RE = /^saved_(posts|collections)\.(html|htm|json)$/i;
+const INSTAGRAM_SAVED_POST_FILE_RE = /^saved_posts?\.(html|htm|json)$/i;
 
 const X_BOOKMARK_FILE_RE = /(^|\/)(data\/)?(bookmarks?|x[-_ ]?bookmarks?|twitter[-_ ]?bookmarks?|pauch[-_ ]?.*)\.(json|js|csv|txt)$/i;
 
@@ -282,7 +273,7 @@ function fileExtension(name = '') {
 function isInstagramSavedFile(file) {
   const name = fileImportName(file);
   const baseName = name.split('/').pop() || name;
-  return INSTAGRAM_SAVED_EXPORT_RE.test(name) || INSTAGRAM_SAVED_FILE_RE.test(baseName) || fileExtension(name) === '.zip';
+  return INSTAGRAM_SAVED_POST_EXPORT_RE.test(name) || INSTAGRAM_SAVED_POST_FILE_RE.test(baseName) || fileExtension(name) === '.zip';
 }
 
 function isXBookmarkFile(file) {
@@ -317,8 +308,60 @@ function validateExportFiles(files = [], sourceType = 'auto') {
     }
   }
   if (sourceType === 'instagram' && !files.some(isInstagramSavedFile)) {
-    throw new Error('For Instagram, upload the full export ZIP or the saved_posts/saved_collections HTML or JSON file from your_instagram_activity/saved/.');
+    throw new Error('For Instagram, upload the full export ZIP or the saved_posts HTML/JSON file from your_instagram_activity/saved/.');
   }
+}
+
+function instagramSavedPostMimeType(name = '') {
+  const extension = fileExtension(name);
+  if (extension === '.json') return 'application/json';
+  return 'text/html';
+}
+
+async function extractInstagramSavedPostFiles(files = [], sourceType = 'auto') {
+  if (sourceType === 'pinterest' || sourceType === 'x') return files;
+  const extracted = [];
+  let inspectedInstagramZip = false;
+
+  for (const file of files) {
+    const name = fileImportName(file) || file.name;
+    if (fileExtension(name) !== '.zip') {
+      extracted.push(file);
+      continue;
+    }
+
+    let zip;
+    try {
+      zip = await JSZip.loadAsync(file);
+    } catch {
+      extracted.push(file);
+      continue;
+    }
+
+    const entries = Object.values(zip.files)
+      .filter((entry) => !entry.dir && INSTAGRAM_SAVED_POST_EXPORT_RE.test(String(entry.name || '')))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+    if (!entries.length) {
+      extracted.push(file);
+      continue;
+    }
+
+    inspectedInstagramZip = true;
+    for (const entry of entries) {
+      const blob = await entry.async('blob');
+      const entryName = String(entry.name || '').split('/').pop() || 'saved_posts.json';
+      extracted.push(new File([blob], entryName, {
+        type: instagramSavedPostMimeType(entryName),
+        lastModified: file.lastModified || Date.now(),
+      }));
+    }
+  }
+
+  if (!extracted.length && inspectedInstagramZip) {
+    throw new Error('The Instagram ZIP did not include your_instagram_activity/saved/saved_posts.json or saved_posts.html.');
+  }
+  return extracted;
 }
 
 function importHealthForFiles(files = [], sourceType = 'auto') {
@@ -402,149 +445,7 @@ async function uploadImportFilesToStorage({ files, session }) {
   return uploaded;
 }
 
-const KEY_SETUP_OPTIONS = {
-  openrouter_all: {
-    label: 'OpenRouter - recommended',
-    shortLabel: 'OpenRouter',
-    help: 'Best option. One OpenRouter key powers summaries, image/video reading, and smart search. Add $1-$3 credits in OpenRouter before indexing.',
-    credentials: (options) => [
-      {
-        purpose: 'text',
-        provider: 'openrouter',
-        model: options?.defaultAppTextModel || 'deepseek/deepseek-v4-pro',
-      },
-      {
-        purpose: 'media',
-        provider: 'openrouter',
-        model: options?.defaultAppMediaModel || 'google/gemini-3.1-flash-lite-preview',
-      },
-      {
-        purpose: 'embedding',
-        provider: 'openrouter',
-        model: options?.defaultEmbeddingModel || 'openai/text-embedding-3-small',
-      },
-    ],
-  },
-  gemini: {
-    label: 'Gemini API key',
-    shortLabel: 'Gemini',
-    help: 'Good for reading images/videos and basic summaries. It does not enable smart semantic search by itself.',
-    credentials: (options) => [
-      {
-        purpose: 'text',
-        provider: 'gemini',
-        model: options?.textProviders?.gemini?.defaultModel || 'gemini-1.5-flash',
-      },
-      {
-        purpose: 'media',
-        provider: 'gemini',
-        model: options?.mediaProviders?.gemini?.defaultModel || 'gemini-1.5-flash',
-      },
-    ],
-  },
-  openai: {
-    label: 'OpenAI API key',
-    shortLabel: 'OpenAI',
-    help: 'Works for text summaries and tags only. Use OpenRouter if you want one simple setup for everything.',
-    credentials: (options) => [
-      {
-        purpose: 'text',
-        provider: 'openai',
-        model: options?.textProviders?.openai?.defaultModel || 'gpt-4o',
-      },
-    ],
-  },
-  anthropic: {
-    label: 'Anthropic Claude key',
-    shortLabel: 'Anthropic',
-    help: 'Works for text summaries and tags only.',
-    credentials: (options) => [
-      {
-        purpose: 'text',
-        provider: 'anthropic',
-        model: options?.textProviders?.anthropic?.defaultModel || 'claude-3-5-haiku-latest',
-      },
-    ],
-  },
-  deepseek: {
-    label: 'DeepSeek key',
-    shortLabel: 'DeepSeek',
-    help: 'Works for text summaries and tags only.',
-    credentials: (options) => [
-      {
-        purpose: 'text',
-        provider: 'deepseek',
-        model: options?.textProviders?.deepseek?.defaultModel || 'deepseek-chat',
-      },
-    ],
-  },
-  glm: {
-    label: 'GLM / Z.ai key',
-    shortLabel: 'GLM / Z.ai',
-    help: 'Works for text summaries and tags only.',
-    credentials: (options) => [
-      {
-        purpose: 'text',
-        provider: 'glm',
-        model: options?.textProviders?.glm?.defaultModel || 'z-ai/glm-5.1',
-      },
-    ],
-  },
-  openai_compatible: {
-    label: 'OpenAI-compatible service',
-    shortLabel: 'OpenAI-compatible',
-    help: 'Advanced option for services that let apps use an OpenAI-style chat API.',
-    advanced: true,
-    credentials: (_options, form) => [
-      {
-        purpose: 'text',
-        provider: 'openai_compatible',
-        model: String(form.model || '').trim(),
-        baseUrl: String(form.baseUrl || '').trim(),
-        displayName: String(form.displayName || '').trim(),
-      },
-    ],
-  },
-};
-
-const PROVIDER_DISPLAY_LABELS = {
-  openrouter: 'OpenRouter',
-  gemini: 'Gemini',
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-  deepseek: 'DeepSeek',
-  glm: 'Z.ai',
-  openai_compatible: 'OpenAI-compatible service',
-};
-
-const OPENAI_COMPATIBLE_NOTE = 'Advanced option. This can work if your service supports OpenAI-style chat APIs. It is usually for text summaries only unless you know your model supports images, video, or embeddings.';
-
-const AI_PROCESSING_NOTICE = 'When you index saves, content may be processed by your selected AI providers or IScraper\'s configured provider to summarize, transcribe, OCR, embed, tag, visually analyze, and power search.';
-
-const PROVIDER_KEY_PRIVACY_NOTICE = 'Provider keys are encrypted after saving, shown later only as metadata, and used only for the selected processing purpose.';
-
-const PROVIDER_WARNING_COPY = {
-  anthropic: {
-    title: 'Claude is text-only here.',
-    body: 'This key can help IScraper understand text, captions, and notes. It will not help index Reels or videos. It will not read images, extract text from screenshots, or power smart search by itself.',
-  },
-  openai: {
-    title: 'OpenAI is limited in this setup.',
-    body: 'This key can help with text summaries and tags. In this setup, it does not fully handle Reels/video indexing or smart search by itself.',
-  },
-  gemini: {
-    title: 'Gemini is not the full setup.',
-    body: 'This key can help IScraper read images and some video content, plus create basic summaries. It does not power smart search by itself.',
-  },
-  deepseek: {
-    title: 'DeepSeek is mainly for text.',
-    body: 'This key can help summarize captions, notes, and saved-page text. It will not read Reels/videos or images, and it will not power smart search by itself.',
-  },
-  glm: {
-    title: 'GLM / Z.ai is mainly for text.',
-    body: 'This key can help summarize captions, notes, and saved-page text. It will not read Reels/videos or images, and it will not power smart search by itself.',
-  },
-};
+const AI_PROCESSING_NOTICE = 'When you index saves, content may be processed by IScraper configured AI services to summarize, transcribe, OCR, embed, tag, visually analyze, and power search.';
 
 function normalizeStatus(status = 'queued') {
   return String(status).startsWith('paused') ? 'paused' : status;
@@ -1094,6 +995,7 @@ const ROUTE_PATHS = {
   landing: '/',
   app: '/app',
   login: '/login',
+  pricing: '/pricing',
   'how-to-use': '/how-to-use',
   terms: '/terms',
   privacy: '/privacy',
@@ -1108,6 +1010,7 @@ const ROUTE_TITLES = {
   landing: 'IScraper',
   app: 'IScraper App',
   login: 'Log in to IScraper',
+  pricing: 'IScraper Pricing',
   'how-to-use': 'How to Use IScraper',
   terms: 'IScraper Terms',
   privacy: 'IScraper Privacy',
@@ -1273,26 +1176,6 @@ async function verifyEmailOtp(email, token) {
   return data;
 }
 
-function keyValidationMessage(setup, apiKey, form = {}) {
-  const value = String(apiKey || '').trim();
-  if (!value) return 'Paste your API key first.';
-  if (setup === 'openai_compatible') {
-    if (!String(form.baseUrl || '').trim()) return 'Paste the base URL for your OpenAI-compatible service.';
-    if (!String(form.model || '').trim()) return 'Enter the model ID for your OpenAI-compatible service.';
-    try {
-      const parsed = new URL(String(form.baseUrl || '').trim());
-      if (parsed.protocol !== 'https:') return 'The base URL must start with https://.';
-    } catch {
-      return 'The base URL must be a valid URL.';
-    }
-  }
-  if (setup === 'openrouter_all' && !value.startsWith('sk-or-')) return 'This does not look like an OpenRouter key. OpenRouter keys usually start with sk-or-.';
-  if (setup === 'gemini' && !value.startsWith('AIza')) return 'This does not look like a Gemini API key. Gemini keys usually start with AIza.';
-  if (setup === 'anthropic' && !value.startsWith('sk-ant-')) return 'This does not look like an Anthropic key. Anthropic keys usually start with sk-ant-.';
-  if ((setup === 'openai' || setup === 'deepseek') && !value.startsWith('sk-')) return 'This does not look like the right key. This provider usually gives keys starting with sk-.';
-  return '';
-}
-
 function avatarUrlForSession(session, profile) {
   return profile?.avatarUrl || session?.user?.user_metadata?.avatar_url || session?.user?.user_metadata?.picture || '';
 }
@@ -1320,22 +1203,6 @@ function recordSessionSignInActivity(session) {
   if (recordedSignInActivitySessions.has(key)) return;
   recordedSignInActivitySessions.add(key);
   recordSignInActivity().catch(() => recordedSignInActivitySessions.delete(key));
-}
-
-function groupProviderCredentials(credentials = []) {
-  return credentials.reduce((groups, credential) => {
-    const key = `${credential.provider}:${credential.keyHint}`;
-    if (!groups[key]) {
-      groups[key] = {
-        id: key,
-        provider: credential.provider,
-        keyHint: credential.keyHint,
-        credentials: [],
-      };
-    }
-    groups[key].credentials.push(credential);
-    return groups;
-  }, {});
 }
 
 function rememberPendingSave() {
@@ -1436,7 +1303,6 @@ export {
   Columns2,
   Columns3,
   Copy,
-  createAgentAccessToken,
   createDataExport,
   createExtensionToken,
   createItemReminder,
@@ -1446,7 +1312,6 @@ export {
   dashboardTabFromLocation,
   Database,
   DeferredSkeletonCardGrid,
-  deleteProviderCredential,
   deletionStatusCopy,
   deletionStatusLabel,
   Download,
@@ -1462,7 +1327,6 @@ export {
   extensionConnectFromLocation,
   ExternalLink,
   Eye,
-  EyeOff,
   FEEDBACK_FEATURE_OPTIONS,
   fileExtension,
   fileImportName,
@@ -1488,7 +1352,6 @@ export {
   getAdminUserDetailWithKey,
   getAdminUsers,
   getAdminUserTimelineWithKey,
-  getAgentAccessTokens,
   getCredits,
   getDataExports,
   getIndexingSummary,
@@ -1500,7 +1363,6 @@ export {
   getOnboarding,
   getPrivacyExportData,
   getProfile,
-  getProviderCredentials,
   getPublicFeedback,
   getRouteFromLocation,
   getSimilarVisuals,
@@ -1508,7 +1370,6 @@ export {
   getSmartCollections,
   getUserDataMap,
   GitBranch,
-  groupProviderCredentials,
   gsap,
   Hash,
   HERO_OUTCOME_WORDS,
@@ -1520,12 +1381,13 @@ export {
   IMPORT_STORAGE_BUCKET,
   importCandidateFiles,
   importHealthForFiles,
+  extractInstagramSavedPostFiles,
   importInstagramExport,
   INDEXING_META,
   indexingStageFromStatus,
   initialForSession,
-  INSTAGRAM_SAVED_EXPORT_RE,
-  INSTAGRAM_SAVED_FILE_RE,
+  INSTAGRAM_SAVED_POST_EXPORT_RE,
+  INSTAGRAM_SAVED_POST_FILE_RE,
   isExtensionCaptureItem,
   isInstagramSavedFile,
   isLinkItem,
@@ -1537,9 +1399,6 @@ export {
   itemMatchesCollection,
   itemStateMatches,
   itemTypeMatches,
-  KEY_SETUP_OPTIONS,
-  KeyRound,
-  keyValidationMessage,
   legacyRouteFromHash,
   LIBRARY_LAYOUT_ITEMS,
   LIBRARY_LAYOUT_OPTIONS,
@@ -1569,7 +1428,6 @@ export {
   ONBOARDING_REFERRAL_OPTIONS,
   onboardingFormFromRecord,
   onboardingIsDone,
-  OPENAI_COMPATIBLE_NOTE,
   PanelLeftClose,
   PanelLeftOpen,
   Pause,
@@ -1578,9 +1436,6 @@ export {
   platformOptionsForItems,
   Plus,
   ProgressBar,
-  PROVIDER_DISPLAY_LABELS,
-  PROVIDER_KEY_PRIVACY_NOTICE,
-  PROVIDER_WARNING_COPY,
   queueStorageImport,
   readFileAsDataUrl,
   readStoredLibraryLayout,
@@ -1594,8 +1449,6 @@ export {
   requestAccountDeletion,
   resetPageScroll,
   resetPostHogUser,
-  revealProviderCredential,
-  revokeAgentAccessToken,
   RotateCcw,
   RotatingOutcomeText,
   RotatingPlatformLogo,
@@ -1606,7 +1459,6 @@ export {
   saveLink,
   saveOnboarding,
   saveProfile,
-  saveProviderCredential,
   scrollToLandingSection,
   scrollToSection,
   ScrollTrigger,
@@ -1641,7 +1493,6 @@ export {
   submitSearchFeedback,
   supabase,
   Tag,
-  testProviderCredential,
   ThumbsDown,
   ThumbsUp,
   TYPE_FILTERS,

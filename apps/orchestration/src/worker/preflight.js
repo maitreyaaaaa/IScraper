@@ -15,14 +15,8 @@ function checkWorkerPreflight(config = {}) {
     errors.push('SUPABASE_SERVICE_ROLE_KEY is required for production worker mode.');
   }
 
-  if (!config.credentialEncryptionKey) {
-    errors.push('CREDENTIAL_ENCRYPTION_KEY is required for worker provider credentials.');
-  }
-
-  if (!config.openAiApiKey && !config.credentialEncryptionKey) {
-    errors.push('Text indexing needs OPENAI_API_KEY or encrypted user provider credentials.');
-  } else if (!config.openAiApiKey) {
-    warnings.push('OPENAI_API_KEY is not configured; text indexing depends on user provider credentials.');
+  if (!config.openAiApiKey) {
+    errors.push('OPENAI_API_KEY is required for SaaS-owned text indexing.');
   }
 
   return {

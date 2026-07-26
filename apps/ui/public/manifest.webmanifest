@@ -1,7 +1,7 @@
 {
   "name": "IScraper",
   "short_name": "IScraper",
-  "description": "Save posts, links, notes, and creator references into your private IScraper library.",
+  "description": "Capture posts, links, screenshots, notes, and web research into a private AI memory library you can search later.",
   "start_url": "/app",
   "scope": "/",
   "display": "standalone",

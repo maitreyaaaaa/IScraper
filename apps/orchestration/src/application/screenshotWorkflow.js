@@ -19,11 +19,7 @@ function createScreenshotWorkflow({ store, config }) {
       if (credits.paidCredits > 0) return { credential: appCredential, source: 'paid' };
     }
 
-    const userCredential =
-      config.credentialEncryptionKey && typeof store.getPreferredProviderCredential === 'function'
-        ? await store.getPreferredProviderCredential(userId, 'media', config.credentialEncryptionKey)
-        : null;
-    return userCredential ? { credential: userCredential, source: 'byok' } : null;
+    return null;
   }
 
   async function analyzeExtensionScreenshot({ userId, item, file }) {

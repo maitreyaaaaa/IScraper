@@ -1,5 +1,3 @@
-const { credentialOptions } = require('../services/providers');
-const { testProviderCredential } = require('../services/providerClients');
 const { recordSecurityAuditForRequest } = require('../services/auditLog');
 const {
   DEFAULT_AGENT_SCOPES,
@@ -154,72 +152,6 @@ function registerPrivateIntegrationRoutes(app, deps) {
     return res.json({ url: session.url, sessionId: session.id });
   }));
 
-  app.get('/api/provider-credentials', asyncRoute(async (req, res) => {
-    res.json({
-      credentials: await store.listProviderCredentials(req.user.id),
-      options: credentialOptions(),
-    });
-  }));
-
-  app.post('/api/provider-credentials', asyncRoute(async (req, res) => {
-    const credential = await store.saveProviderCredential(req.user.id, {
-      provider: req.body.provider,
-      purpose: req.body.purpose,
-      model: req.body.model,
-      apiKey: req.body.apiKey,
-      baseUrl: req.body.baseUrl,
-      displayName: req.body.displayName,
-      encryptionKey: config.credentialEncryptionKey,
-    });
-    await recordSecurityAuditForRequest(store, req, {
-      eventType: 'provider_key_changed',
-      severity: 'critical',
-      metadata: {
-        credentialId: credential.id,
-        provider: credential.provider,
-        purpose: credential.purpose,
-        model: credential.model,
-      },
-    });
-    captureWorkflow(req, 'provider credential saved', { provider: credential.provider, purpose: credential.purpose, model: credential.model, displayName: credential.displayName, credentialId: credential.id });
-    res.json({ credential });
-  }));
-
-  app.delete('/api/provider-credentials/:id', asyncRoute(async (req, res) => {
-    const deleted = await store.deleteProviderCredential(req.user.id, req.params.id);
-    if (!deleted) return res.status(404).json({ error: 'Credential not found.' });
-    await recordSecurityAuditForRequest(store, req, {
-      eventType: 'provider_key_deleted',
-      severity: 'critical',
-      metadata: { credentialId: req.params.id },
-    });
-    captureWorkflow(req, 'provider credential deleted', { credentialId: req.params.id });
-    return res.json({ deleted: true });
-  }));
-
-  app.post('/api/provider-credentials/:id/test', asyncRoute(async (req, res) => {
-    const credential = await store.getProviderCredential(req.user.id, req.params.id, config.credentialEncryptionKey);
-    if (!credential) return res.status(404).json({ error: 'Credential not found.' });
-    await testProviderCredential({ credential });
-    await recordSecurityAuditForRequest(store, req, {
-      eventType: 'provider_key_tested',
-      severity: 'warning',
-      metadata: { credentialId: req.params.id, provider: credential.provider, purpose: credential.purpose, model: credential.model },
-    });
-    captureWorkflow(req, 'provider credential tested', { credentialId: req.params.id, provider: credential.provider, purpose: credential.purpose, model: credential.model });
-    return res.json({ ok: true, provider: credential.provider, purpose: credential.purpose, model: credential.model });
-  }));
-
-  app.post('/api/provider-credentials/:id/reveal', asyncRoute(async (req, res) => {
-    const credential = await store.getProviderCredential(req.user.id, req.params.id, config.credentialEncryptionKey);
-    if (!credential) return res.status(404).json({ error: 'Credential not found.' });
-    await recordSecurityAuditForRequest(store, req, {
-      eventType: 'provider_key_revealed',
-      severity: 'critical',
-      metadata: { credentialId: req.params.id, provider: credential.provider, purpose: credential.purpose, model: credential.model },
-    });
-    return res.json({ apiKey: credential.apiKey });
-  }));
 }
 
 module.exports = {

@@ -5,22 +5,19 @@ const { parsePinterestExport } = require('./pinterestParser');
 const { parseXBookmarksExport } = require('./xBookmarksParser');
 
 const INSTAGRAM_EXPORT_EXTENSIONS = new Set(['.html', '.htm', '.json']);
-const INSTAGRAM_SAVED_EXPORT_NAMES = new Set([
+const INSTAGRAM_SAVED_POST_EXPORT_NAMES = new Set([
   'saved_posts.html',
   'saved_posts.htm',
   'saved_posts.json',
   'saved_post.html',
   'saved_post.htm',
   'saved_post.json',
-  'saved_collections.html',
-  'saved_collections.htm',
-  'saved_collections.json',
 ]);
 
 function isInstagramSavedExportFile(sourceName = '') {
   const normalized = String(sourceName || '').replace(/\\/g, '/').toLowerCase();
   const fileName = path.basename(normalized);
-  if (!INSTAGRAM_SAVED_EXPORT_NAMES.has(fileName)) return false;
+  if (!INSTAGRAM_SAVED_POST_EXPORT_NAMES.has(fileName)) return false;
   return normalized.includes('/your_instagram_activity/saved/') || normalized.includes('your_instagram_activity/saved/') || !normalized.includes('/');
 }
 

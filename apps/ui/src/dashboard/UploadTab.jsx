@@ -50,6 +50,7 @@ function UploadTab({
   const linkInputRef = useRef(null);
   const reviewSectionRef = useRef(null);
   const noteImageInputRef = useRef(null);
+  const importInputRef = useRef(null);
   const importHealth = useMemo(() => importHealthForFiles(files, importSourceType), [files, importSourceType]);
   const addModeOptions = [
     { value: 'link', label: 'Paste link', icon: ExternalLink },
@@ -132,14 +133,24 @@ function UploadTab({
           <FileText className="h-3.5 w-3.5" /> Guide
         </button>
         <br />
-        <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]">
-          Choose export files
-          <input type="file" multiple accept=".html,.htm,.zip,.json,.csv,.js,.txt" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
-        </label>
-        <label className="ml-3 inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/10 px-6 py-3 text-sm font-semibold text-foreground transition hover:bg-white/5">
-          Choose export folder
-          <input type="file" multiple webkitdirectory="" directory="" onChange={(event) => setFiles(Array.from(event.target.files || []))} className="hidden" />
-        </label>
+        <button
+          type="button"
+          onClick={() => importInputRef.current?.click()}
+          className="inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:scale-[1.02]"
+        >
+          <Upload className="h-4 w-4" /> Import your data
+        </button>
+        <input
+          ref={importInputRef}
+          type="file"
+          multiple
+          accept=".html,.htm,.zip,.json,.csv,.js,.txt"
+          onChange={(event) => {
+            setFiles(Array.from(event.target.files || []));
+            event.target.value = '';
+          }}
+          className="hidden"
+        />
         {files.length > 0 && (
           <div className="mt-6 space-y-2 text-left">
             {files.map((file) => (
