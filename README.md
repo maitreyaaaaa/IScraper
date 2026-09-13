@@ -1,6 +1,8 @@
 This was made possible by two ChatGPT Plus, six Gemini Pro accounts, and one genius brain.
 To prove this was built during the hackathon, we have included proof artifacts in [Proofs Created](./Proofs%20Created/). The idea, frontend direction, marketing site, workflow structure, logos, colors, and brand identity were planned earlier over months of discussion, but college and exams kept delaying the actual build; that is why the final product looks polished while the core implementation was completed in the hackathon with the help of those subscriptions and a very clear product vision.
 
+DEMO VIDEO - https://drive.google.com/file/d/1U7ISjK09FKoINHVDLmvfyHnzZLvPZDmb/view?usp=sharing
+
 # IScraper
 
 Ice Scraper is a private campaign-memory workspace for saved internet references. It turns links, exports, screenshots, captions, posts, and product inspiration into searchable workflows that help a creator or marketing team move from scattered saves to usable campaign decisions.
