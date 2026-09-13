@@ -2,36 +2,36 @@
 
 Target length: under 2 minutes.
 
-## 0:00-0:30 - Product Intro
+## 0:00-0:35 - Product Intro
 
-This is Ice Scraper. It is a private campaign-memory workspace for the useful things people save online: Instagram saves, Pinterest exports, competitor ads, product pages, hooks, landing pages, and screenshots.
+This is Ice Scraper. It is a private campaign-memory workspace for the useful things people save online: Instagram saves, Pinterest exports, competitor ads, product pages, hooks, landing pages, reels, and screenshots.
 
-The product is not just a saved-link library. The important part is the workflow it creates from messy references to usable campaign decisions.
+In simple terms, it takes the content you already saved and makes it searchable, organized, and ready to use. But the main thing we are pitching is not just the library. It is the workflow engine built on top of that library.
 
-## 0:30-0:55 - Capture Workflow
+## 0:35-0:55 - Reference-To-Workflow Input
 
-First, we capture references from multiple sources. A user can import saved-post exports, upload Pinterest files, or manually save links.
+The user opens the Workflows tab and selects saved posts, reels, images, or campaign references from their Ice Scraper library.
 
-Everything lands in one library with source context, title, description, platform, and collections.
+These become the creative inputs for the agent, so the workflow starts from real references instead of a blank prompt.
 
-## 0:55-1:15 - Review Workflow
+## 0:55-1:20 - Agent Planning
 
-Next, the user reviews what should become part of the campaign memory.
+The user tells the agent what they want: for example, make an Instagram carousel from these two saved reels, create a product post in this style, or turn these references into a week of content.
 
-Items can wait for approval before indexing, which keeps the workflow clean and human-controlled. This matters because marketing teams do not want random scraped noise mixed into their strategy base.
+The agent understands the references, extracts the hook, format, tone, audience, and visual direction, then creates a step-by-step marketing workflow.
 
-## 1:15-1:35 - Enrichment Workflow
+## 1:20-1:40 - Content Generation Workflow
 
-After approval, the indexing workflow enriches the item.
+That workflow can generate a media prompt for an image or video model, draft the carousel structure, write captions, create hashtags, choose the format, and prepare the schedule.
 
-It can summarize, tag, identify topics and brands, extract text, connect similar visuals, and prepare the save for search. The worker-based setup makes this more reliable than trying to do everything inside the UI.
+The point is that saved content becomes a reusable creative engine, not just an archive.
 
-## 1:35-1:55 - Campaign Workflow
+## 1:40-1:55 - Approval And Publishing
 
-Now the user can search the memory, ask cited questions, find patterns, cluster references, and turn the saved material into a campaign brief.
+Before anything goes live, the human reviews and approves it.
 
-Ice Scraper improves the workflow by making the creative process evidence-led. Instead of starting from a blank prompt, teams start from the references they already collected.
+After approval, the workflow can dispatch through integrations like Composio to Instagram, and later the same system can extend to LinkedIn ghostwriting, carousels, and other channels.
 
 ## 1:55-2:00 - Close
 
-So the real value is the workflow: capture, review, enrich, search, brief, approve, and export.
+So the value is simple: Ice Scraper turns saved posts into marketing workflows that create new posts.

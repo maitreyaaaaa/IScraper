@@ -3,9 +3,15 @@ To prove this was built during the hackathon, we have included proof artifacts i
 
 # Ice Scraper
 
-Ice Scraper is a private campaign-memory workspace for saved internet references. It turns links, exports, screenshots, captions, posts, and product inspiration into searchable workflows that help a creator or marketing team move from scattered saves to usable campaign decisions.
+Ice Scraper is a private campaign-memory and workflow engine for saved internet references. It turns links, exports, screenshots, captions, posts, reels, and product inspiration into searchable workflows that help a creator or marketing team turn saved references into new marketing posts.
 
-The product matters, but the main submission is the workflow layer: capture references, review them, enrich them, search them, cluster them, generate a brief, approve the next action, and keep a proof trail of what happened.
+The product matters, but the main submission is the workflow layer: capture references, review them, enrich them, select saved posts as creative inputs, generate post/reel/carousel plans, create captions and hashtags, schedule the output, approve the next action, and keep a proof trail of what happened.
+
+## Submission Links
+
+- Live demo: [https://iscraper.vercel.app](https://iscraper.vercel.app)
+- Demo video: [Google Drive demo video](https://drive.google.com/file/d/1U7ISjK09FKoINHVDLmvfyHnzZLvPZDmb/view?usp=sharing)
+- Proof artifacts: [Proofs Created](./Proofs%20Created/)
 
 ## What It Does
 
@@ -17,6 +23,7 @@ The product matters, but the main submission is the workflow layer: capture refe
 - Supports searchable answers with citations from the saved library.
 - Builds smart collections, visual similarity, and an Obsidian-ready knowledge graph.
 - Uses a worker workflow for indexing, retries, observability, and audit-friendly processing.
+- Adds a Workflows tab where an AI agent can turn selected saved references into marketing content plans, media prompts, captions, hashtags, schedules, and approval-gated publish actions.
 
 ## Workflow Focus
 
@@ -36,51 +43,51 @@ Approved items enter the indexing worker. The worker downloads what it can, extr
 
 The library becomes a reusable memory of hooks, creative patterns, platform references, competitors, products, formats, and visual directions.
 
-### 5. Brief Creation
+### 5. Marketing Workflow Creation
 
-Instead of asking an AI tool from a blank prompt, the user can ask questions against their saved reference base and generate campaign briefs grounded in their own library.
+Instead of asking an AI tool from a blank prompt, the user can select saved reels, images, captions, or competitor references and ask the workflow agent to create a new post, reel, carousel, or campaign sequence grounded in those references.
 
 ### 6. Approval And Export
 
-The system is designed for draft-first workflows: humans review outputs, approve what should be used, and can export structured knowledge for other tools.
+The system is designed for draft-first workflows: humans review generated media prompts, captions, hashtags, schedules, and publishing actions before anything is sent to Instagram or other channels.
 
 ## Demo Script
 
 Target length: under 2 minutes.
 
-**0:00-0:30 - Product intro**
+**0:00-0:35 - Product intro**
 
-"This is Ice Scraper. It is a private campaign-memory workspace for the useful things people save online: Instagram saves, Pinterest exports, competitor ads, product pages, hooks, landing pages, and screenshots. The product is not just a saved-link library. The important part is the workflow it creates from messy references to usable campaign decisions."
+"This is Ice Scraper. It is a private campaign-memory workspace for the useful things people save online: Instagram saves, Pinterest exports, competitor ads, product pages, hooks, landing pages, reels, and screenshots. In simple terms, it takes the content you already saved and makes it searchable, organized, and ready to use. But the main thing we are pitching is not just the library. It is the workflow engine built on top of that library."
 
-**0:30-0:55 - Capture workflow**
+**0:35-0:55 - Reference-to-workflow input**
 
-"First, we capture references from multiple sources. A user can import saved-post exports, upload Pinterest files, or manually save links. Everything lands in one library with source context, title, description, platform, and collections."
+"The user opens the Workflows tab and selects saved posts, reels, images, or campaign references from their Ice Scraper library. These become the creative inputs for the agent, so the workflow starts from real references instead of a blank prompt."
 
-**0:55-1:15 - Review workflow**
+**0:55-1:20 - Agent planning**
 
-"Next, the user reviews what should become part of the campaign memory. Items can wait for approval before indexing, which keeps the workflow clean and human-controlled. This matters because marketing teams do not want random scraped noise mixed into their strategy base."
+"The user tells the agent what they want: for example, make an Instagram carousel from these two saved reels, create a product post in this style, or turn these references into a week of content. The agent understands the references, extracts the hook, format, tone, audience, and visual direction, then creates a step-by-step marketing workflow."
 
-**1:15-1:35 - Enrichment workflow**
+**1:20-1:40 - Content generation workflow**
 
-"After approval, the indexing workflow enriches the item. It can summarize, tag, identify topics and brands, extract text, connect similar visuals, and prepare the save for search. The worker-based setup makes this more reliable than trying to do everything inside the UI."
+"That workflow can generate a media prompt for an image or video model, draft the carousel structure, write captions, create hashtags, choose the format, and prepare the schedule. The point is that saved content becomes a reusable creative engine, not just an archive."
 
-**1:35-1:55 - Campaign workflow**
+**1:40-1:55 - Approval and publishing**
 
-"Now the user can search the memory, ask cited questions, find patterns, cluster references, and turn the saved material into a campaign brief. Ice Scraper improves the workflow by making the creative process evidence-led: instead of starting from a blank prompt, teams start from the references they already collected."
+"Before anything goes live, the human reviews and approves it. After approval, the workflow can dispatch through integrations like Composio to Instagram, and later the same system can extend to LinkedIn ghostwriting, carousels, and other channels."
 
 **1:55-2:00 - Close**
 
-"So the real value is the workflow: capture, review, enrich, search, brief, approve, and export."
+"So the value is simple: Ice Scraper turns saved posts into marketing workflows that create new posts."
 
 ## Why It Helps
 
-Most creators and marketers save useful material constantly, but their saved content does not become a working system. Ice Scraper turns that passive archive into an active workflow for campaign research, creative direction, and reusable knowledge.
+Most creators and marketers save useful material constantly, but their saved content does not become a working system. Ice Scraper turns that passive archive into an active workflow for campaign research, creative direction, generated marketing assets, scheduling, and approval-gated publishing.
 
 For judges, the strongest parts to inspect are:
 
 - Technical execution: monorepo with React/Vite UI, Express orchestration API, worker runtime, Supabase-ready storage, migrations, and browser-extension work.
 - Reliability and evaluation: tests around imports, workers, storage, search, visual similarity, billing, security checks, and route behavior.
-- Usefulness: practical workflows for marketers, creators, agencies, and builders who already collect references.
+- Usefulness: practical workflows for marketers, creators, agencies, and builders who already collect references and need to turn them into publishable posts.
 - Originality: campaign memory built around saved references rather than another blank-prompt AI wrapper.
 - Demo clarity: the demo is structured around the workflow, not a feature list.
 
