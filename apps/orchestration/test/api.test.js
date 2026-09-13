@@ -7,6 +7,7 @@ const JSZip = require('jszip');
 
 const { createApp } = require('../src/server');
 const { createLocalStore } = require('../src/stores/localStore');
+const { executeApprovedPublish } = require('../src/services/contentWorkflows');
 const {
   EXCLUDED_USER_DATA_TABLES,
   SECRET_LIFECYCLE_RULES,
@@ -171,6 +172,52 @@ test('content workflow endpoints generate drafts and block unapproved publishing
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('approved Instagram workflow publish uses Composio tool execution payload', async () => {
+  const calls = [];
+  const result = await executeApprovedPublish({
+    config: {
+      composioApiKey: 'test-composio-key',
+      composioEntityId: 'entity-123',
+      composioInstagramConnectedAccountId: 'instagram-account-123',
+      composioInstagramIgUserId: 'ig-user-123',
+      composioBaseUrl: 'https://backend.composio.dev/api/v3',
+    },
+    payload: {
+      approved: true,
+      platform: 'instagram',
+      format: 'reel',
+      mediaUrl: 'https://cdn.example.com/reel.mp4',
+      caption: 'Launch post',
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ successful: true, data: { id: 'container-123' }, log_id: 'log-123' }),
+      };
+    },
+  });
+
+  assert.equal(result.status, 'submitted');
+  assert.equal(result.toolSlug, 'INSTAGRAM_POST_IG_USER_MEDIA');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://backend.composio.dev/api/v3/tools/execute');
+  assert.equal(calls[0].options.headers['x-api-key'], 'test-composio-key');
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.action, 'INSTAGRAM_POST_IG_USER_MEDIA');
+  assert.equal(body.entityId, 'entity-123');
+  assert.equal(body.user_uuid, 'entity-123');
+  assert.equal(body.connected_account_id, 'instagram-account-123');
+  assert.deepEqual(body.input, {
+    ig_user_id: 'ig-user-123',
+    caption: 'Launch post',
+    media_type: 'REELS',
+    video_url: 'https://cdn.example.com/reel.mp4',
+    share_to_feed: true,
+  });
 });
 
 test('API request and correlation IDs propagate through manual save jobs', async () => {

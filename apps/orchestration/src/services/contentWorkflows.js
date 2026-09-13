@@ -15,7 +15,7 @@ function compactText(value, maxLength = 1400) {
 }
 
 function workflowReadiness(config = {}) {
-  const instagramConnected = Boolean(config.composioApiKey && (config.composioInstagramConnectedAccountId || config.composioUserId));
+  const instagramConnected = Boolean(config.composioApiKey && config.composioInstagramIgUserId && (config.composioInstagramConnectedAccountId || config.composioUserId || config.composioEntityId));
   const linkedinConnected = Boolean(config.composioApiKey && config.composioLinkedInConnectedAccountId);
   return {
     models: {
@@ -217,9 +217,11 @@ function composioExecutionReadiness({ config, payload = {} }) {
   const connectedAccountId = platform === 'linkedin'
     ? config.composioLinkedInConnectedAccountId
     : config.composioInstagramConnectedAccountId;
+  const igUserId = config.composioInstagramIgUserId;
   const missing = [];
   if (!config.composioApiKey) missing.push('COMPOSIO_API_KEY');
-  if (!config.composioUserId && !connectedAccountId) missing.push(platform === 'linkedin' ? 'COMPOSIO_LINKEDIN_CONNECTED_ACCOUNT_ID' : 'COMPOSIO_INSTAGRAM_CONNECTED_ACCOUNT_ID');
+  if (!config.composioUserId && !config.composioEntityId && !connectedAccountId) missing.push(platform === 'linkedin' ? 'COMPOSIO_LINKEDIN_CONNECTED_ACCOUNT_ID' : 'COMPOSIO_USER_ID or COMPOSIO_ENTITY_ID');
+  if (platform === 'instagram' && !igUserId) missing.push('COMPOSIO_INSTAGRAM_IG_USER_ID');
   if (platform === 'instagram' && !payload.mediaUrl && !payload.creationId) missing.push('generatedMediaUrl or creationId');
   if (!payload.approved) missing.push('explicit approval');
   return {
@@ -227,22 +229,34 @@ function composioExecutionReadiness({ config, payload = {} }) {
     missing,
     readiness,
     connectedAccountId,
+    igUserId,
   };
 }
 
-function instagramToolForPayload(payload = {}) {
+function instagramToolForPayload(payload = {}, execution = {}) {
   if (payload.creationId) return {
     toolSlug: 'INSTAGRAM_POST_IG_USER_MEDIA_PUBLISH',
-    arguments: { creation_id: payload.creationId },
+    arguments: {
+      ig_user_id: execution.igUserId,
+      creation_id: payload.creationId,
+      max_wait_seconds: 120,
+      poll_interval_seconds: 3,
+    },
   };
+  const argumentsPayload = {
+    ig_user_id: execution.igUserId,
+    caption: compactText(payload.caption, 2200),
+    media_type: payload.format === 'reel' ? 'REELS' : payload.format === 'carousel' ? 'CAROUSEL' : undefined,
+  };
+  if (payload.format === 'reel') {
+    argumentsPayload.video_url = payload.mediaUrl;
+    argumentsPayload.share_to_feed = true;
+  } else {
+    argumentsPayload.image_url = payload.mediaUrl;
+  }
   return {
     toolSlug: 'INSTAGRAM_POST_IG_USER_MEDIA',
-    arguments: {
-      image_url: payload.mediaUrl,
-      video_url: payload.mediaUrl,
-      caption: compactText(payload.caption, 2200),
-      media_type: payload.format === 'reel' ? 'REELS' : payload.format === 'carousel' ? 'CAROUSEL' : 'IMAGE',
-    },
+    arguments: Object.fromEntries(Object.entries(argumentsPayload).filter(([, value]) => value !== undefined && value !== '')),
   };
 }
 
@@ -266,26 +280,30 @@ async function executeApprovedPublish({ config, payload, fetchImpl = fetch }) {
     };
   }
 
-  const tool = instagramToolForPayload(payload);
-  const response = await fetchImpl(`${String(config.composioBaseUrl || 'https://backend.composio.dev').replace(/\/$/, '')}/api/v3/tools/execute/${tool.toolSlug}`, {
+  const tool = instagramToolForPayload(payload, execution);
+  const baseUrl = String(config.composioBaseUrl || 'https://backend.composio.dev').replace(/\/$/, '').replace(/\/api\/v3$/, '');
+  const body = {
+    action: tool.toolSlug,
+    entityId: config.composioEntityId || config.composioUserId,
+    user_uuid: config.composioEntityId || config.composioUserId,
+    connectedAccountId: execution.connectedAccountId || undefined,
+    connected_account_id: execution.connectedAccountId || undefined,
+    input: tool.arguments,
+  };
+  const response = await fetchImpl(`${baseUrl}/api/v3/tools/execute`, {
     method: 'POST',
     headers: {
       'x-api-key': config.composioApiKey,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      connected_account_id: execution.connectedAccountId,
-      user_id: config.composioUserId,
-      version: COMPOSIO_INSTAGRAM_TOOL_VERSION,
-      arguments: tool.arguments,
-    }),
+    body: JSON.stringify(body),
   });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || body?.successful === false) {
+  const responseBody = await response.json().catch(() => ({}));
+  if (!response.ok || responseBody?.successful === false) {
     return {
       status: 'failed',
-      message: body?.error || `Composio publish failed with ${response.status}`,
-      logId: body?.log_id || '',
+      message: response.status === 401 ? 'Composio rejected the execution request. Check entity/account mapping for this API key.' : responseBody?.error || responseBody?.message || `Composio publish failed with ${response.status}`,
+      logId: responseBody?.log_id || '',
       readiness: execution.readiness,
     };
   }
@@ -293,8 +311,8 @@ async function executeApprovedPublish({ config, payload, fetchImpl = fetch }) {
     status: 'submitted',
     message: 'Composio accepted the approved publish job.',
     toolSlug: tool.toolSlug,
-    result: body?.data || body,
-    logId: body?.log_id || '',
+    result: responseBody?.data || responseBody,
+    logId: responseBody?.log_id || '',
     readiness: execution.readiness,
   };
 }
