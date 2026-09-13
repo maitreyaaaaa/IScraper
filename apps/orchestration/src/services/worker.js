@@ -2,12 +2,19 @@ const path = require('path');
 const fs = require('fs');
 const { analyzeTextMetadata, mergeAnalysis } = require('./analyzer');
 const { buildEmbeddingContent, createEmbeddingWithCredential } = require('./embeddings');
+const { buildAnalysisInputHash, buildEmbeddingContentHash } = require('./contentHashes');
+const { analyzeMediaWithLocalMl } = require('./localMlExtractors');
+const { visualEmbeddingFromAnalysis, visualEmbeddingModelFromAnalysis } = require('./visualEmbeddings');
 const { analyzeMediaWithCredential, analyzeTextWithCredential, buildTextBaseAnalysis, isProviderLimitError } = require('./providerClients');
 const { DEFAULT_MAX_JOB_ATTEMPTS, nextRetryAt, pickNextProcessableJob } = require('./queue');
 const { downloadInstagramMedia } = require('./downloader');
 const { recordSupportEvent } = require('./auditLog');
 
 const AI_STEP_TIMEOUT_MS = 90 * 1000;
+const ANALYSIS_PROCESSING_LEVELS = {
+  BASIC: 'basic',
+  AI_ENRICHED: 'ai_enriched',
+};
 
 async function analyzeItem({ item, mediaPaths = [], openAiApiKey = null, openAiModel = 'gpt-4o', openAiMediaModel = 'gpt-4o' }) {
   let baseAnalysis = null;
@@ -58,6 +65,11 @@ async function processImportJobs({
   openAiModel = 'gpt-4o',
   openAiMediaModel = 'gpt-4o',
   openAiEmbeddingModel = 'text-embedding-3-small',
+  localMlEndpoint = null,
+  localMlApiKey = '',
+  localMlTimeoutMs = 30 * 1000,
+  localMlFetchImpl = fetch,
+  downloadMedia = downloadInstagramMedia,
   embeddingDimensions = 1536,
   credentialEncryptionKey = null,
   indexingConcurrency = 3,
@@ -101,6 +113,11 @@ async function processImportJobs({
       openAiModel,
       openAiMediaModel,
       openAiEmbeddingModel,
+      localMlEndpoint,
+      localMlApiKey,
+      localMlTimeoutMs,
+      localMlFetchImpl,
+      downloadMedia,
       embeddingDimensions,
       credentialEncryptionKey,
       maxAttempts,
@@ -125,6 +142,11 @@ async function processOneJob({
   openAiModel,
   openAiMediaModel,
   openAiEmbeddingModel,
+  localMlEndpoint,
+  localMlApiKey,
+  localMlTimeoutMs,
+  localMlFetchImpl,
+  downloadMedia,
   embeddingDimensions,
   credentialEncryptionKey,
   maxAttempts = DEFAULT_MAX_JOB_ATTEMPTS,
@@ -184,28 +206,48 @@ async function processOneJob({
     let mediaPaths = [];
     if (shouldDownload && requiresMediaAnalysis(item)) {
       try {
-        const download = await downloadInstagramMedia({ url: item.url, outputDir: videoDir, id: item.id });
+        const download = await downloadMedia({ url: item.url, outputDir: videoDir, id: item.id });
         mediaPaths = download.outputPaths || [];
       } catch (error) {
         mediaPaths = [];
       }
     }
+    const sourceContentHash = buildAnalysisInputHash(item, mediaPaths);
+    const existingAnalysisMetadata = typeof store.getAnalysisMetadata === 'function'
+      ? await store.getAnalysisMetadata(userId, item.id)
+      : null;
+    const reusedMediaAnalysis = reusableMediaAnalysisFromItem({
+      item,
+      metadata: existingAnalysisMetadata,
+      sourceContentHash,
+    });
 
     currentJob = await updateCurrentJob({ store, userId, job: currentJob, patch: { status: 'analyzing', error: null } });
     if (!currentJob) return null;
     await store.setItemStatus?.(userId, item.id, 'analyzing', null);
 
-    const mediaAnalysis = analysisPlan.mediaCredential && mediaPaths.length
+    const localMediaAnalysis = !reusedMediaAnalysis && mediaPaths.length
+      ? await runOptionalLocalMlMediaAnalysis({
+        endpoint: localMlEndpoint,
+        apiKey: localMlApiKey,
+        mediaPaths,
+        item,
+        timeoutMs: localMlTimeoutMs,
+        fetchImpl: localMlFetchImpl,
+      })
+      : null;
+    const paidMediaAnalysis = !reusedMediaAnalysis && !localMediaAnalysis && analysisPlan.mediaCredential && mediaPaths.length
       ? await withTimeout(
         analyzeMediaWithCredential({
-            credential: analysisPlan.mediaCredential,
-            mediaPaths,
-            item,
-          }),
+          credential: analysisPlan.mediaCredential,
+          mediaPaths,
+          item,
+        }),
         AI_STEP_TIMEOUT_MS,
         'Media indexing timed out.',
       )
       : null;
+    const mediaAnalysis = reusedMediaAnalysis || localMediaAnalysis || paidMediaAnalysis;
     const baseAnalysis = buildTextBaseAnalysis(item, mediaAnalysis);
     const textAnalysis = analysisPlan.textCredential
       ? await withTimeout(
@@ -218,41 +260,68 @@ async function processOneJob({
         'Text indexing timed out.',
       )
       : null;
-    const analysis = mergeAnalysis(baseAnalysis, textAnalysis);
+    let analysis = withAnalysisMetadata(
+      mergeAnalysis(baseAnalysis, textAnalysis),
+      {
+        processingLevel: analysisProcessingLevel({
+          existingAnalysisMetadata,
+          reusedMediaAnalysis,
+          localMediaAnalysis,
+          paidMediaAnalysis,
+          textAnalysis,
+        }),
+        sourceContentHash,
+      },
+    );
     if (!(await isLeaseStillOwned({ store, userId, job: currentJob }))) return null;
 
     let embeddingPayload = null;
     if (analysisPlan.embeddingCredential && typeof store.saveEmbedding === 'function') {
       try {
         const content = buildEmbeddingContent(item, analysis);
-        const embedding = await withTimeout(
-          createEmbeddingWithCredential({
-            credential: {
-              ...analysisPlan.embeddingCredential,
-              model: analysisPlan.embeddingCredential.model || openAiEmbeddingModel,
-            },
-            input: content,
-            dimensions: embeddingDimensions,
-            inputType: 'search_document',
-          }),
-          AI_STEP_TIMEOUT_MS,
-          'Search embedding timed out.',
-        );
-        if (embedding) {
-          embeddingPayload = {
-            content,
-            embedding,
-            model: analysisPlan.embeddingCredential.model || openAiEmbeddingModel,
-          };
+        const contentHash = buildEmbeddingContentHash(content);
+        const model = analysisPlan.embeddingCredential.model || openAiEmbeddingModel;
+        analysis = withAnalysisMetadata(analysis, { embeddingContentHash: contentHash });
+        const existingEmbedding = typeof store.getEmbeddingMetadata === 'function'
+          ? await store.getEmbeddingMetadata(userId, item.id)
+          : null;
+        const unchangedEmbedding = existingEmbedding?.contentHash === contentHash
+          && existingEmbedding?.model === model;
+        if (!unchangedEmbedding) {
+          const embedding = await withTimeout(
+            createEmbeddingWithCredential({
+              credential: {
+                ...analysisPlan.embeddingCredential,
+                model,
+              },
+              input: content,
+              dimensions: embeddingDimensions,
+              inputType: 'search_document',
+            }),
+            AI_STEP_TIMEOUT_MS,
+            'Search embedding timed out.',
+          );
+          if (embedding) {
+            embeddingPayload = {
+              content,
+              contentHash,
+              embedding,
+              model,
+            };
+          }
         }
       } catch (error) {
         console.warn(`Search embedding failed for ${item.id}: ${error.message}`);
       }
     }
     if (!(await isLeaseStillOwned({ store, userId, job: currentJob }))) return null;
+    const visualEmbeddingPayload = visualEmbeddingPayloadFromAnalysis(analysis, sourceContentHash);
     await store.saveAnalysis(userId, item.id, analysis);
     if (embeddingPayload) {
       await store.saveEmbedding(userId, item.id, embeddingPayload);
+    }
+    if (visualEmbeddingPayload && typeof store.saveVisualEmbedding === 'function') {
+      await store.saveVisualEmbedding(userId, item.id, visualEmbeddingPayload);
     }
     if (analysisPlan.source === 'free' || analysisPlan.source === 'paid') {
       await store.recordUsage({
@@ -355,6 +424,52 @@ function requiresMediaAnalysis(item) {
   return ['reel', 'post'].includes(item.contentType);
 }
 
+function reusableMediaAnalysisFromItem({ item, metadata, sourceContentHash }) {
+  if (!item?.analysis || !metadata?.sourceContentHash || metadata.sourceContentHash !== sourceContentHash) return null;
+  if (!['ml', ANALYSIS_PROCESSING_LEVELS.AI_ENRICHED].includes(metadata.processingLevel)) return null;
+  const mediaFields = {
+    transcript: item.analysis.transcript || '',
+    ocrText: item.analysis.ocrText || '',
+    visualDescription: item.analysis.visualDescription || '',
+  };
+  if (!mediaFields.transcript && !mediaFields.ocrText && !mediaFields.visualDescription) return null;
+  return mediaFields;
+}
+
+async function runOptionalLocalMlMediaAnalysis({ endpoint, apiKey, mediaPaths, item, timeoutMs, fetchImpl }) {
+  if (!endpoint || !mediaPaths.length) return null;
+  try {
+    return await analyzeMediaWithLocalMl({
+      endpoint,
+      apiKey,
+      mediaPaths,
+      item,
+      timeoutMs,
+      fetchImpl,
+    });
+  } catch (error) {
+    console.warn(`Local media extraction failed for ${item.id}: ${error.message}`);
+    return null;
+  }
+}
+
+function analysisProcessingLevel({ existingAnalysisMetadata, reusedMediaAnalysis, localMediaAnalysis, paidMediaAnalysis, textAnalysis }) {
+  if (textAnalysis || paidMediaAnalysis) return ANALYSIS_PROCESSING_LEVELS.AI_ENRICHED;
+  if (reusedMediaAnalysis) return existingAnalysisMetadata?.processingLevel || 'ml';
+  if (localMediaAnalysis) return 'ml';
+  return ANALYSIS_PROCESSING_LEVELS.BASIC;
+}
+
+function visualEmbeddingPayloadFromAnalysis(analysis = {}, sourceContentHash = '') {
+  const embedding = visualEmbeddingFromAnalysis(analysis);
+  if (!embedding) return null;
+  return {
+    embedding,
+    contentHash: sourceContentHash,
+    model: visualEmbeddingModelFromAnalysis(analysis),
+  };
+}
+
 async function chooseAnalysisPlan({
   store,
   userId,
@@ -377,7 +492,13 @@ async function chooseAnalysisPlan({
     : null;
 
   if (!appTextCredential) {
-    throw pauseError('paused_missing_provider', 'Saved post did not process because IScraper AI processing is not configured.');
+    return {
+      source: null,
+      mediaCredential: null,
+      textCredential: null,
+      billingCredential: null,
+      embeddingCredential: null,
+    };
   }
 
   if (typeof store.getCredits !== 'function') {
@@ -401,7 +522,13 @@ async function chooseAnalysisPlan({
         embeddingCredential: appEmbeddingCredential,
       };
     }
-    throw pauseError('paused_needs_billing', 'Saved post did not process because no enrichment credits are available.');
+    return {
+      source: null,
+      mediaCredential: null,
+      textCredential: null,
+      billingCredential: null,
+      embeddingCredential: null,
+    };
   }
 }
 
@@ -412,6 +539,15 @@ function appOpenAICredential({ purpose, apiKey, model }) {
     purpose,
     model,
     apiKey,
+  };
+}
+
+function withAnalysisMetadata(analysis, metadata = {}) {
+  return {
+    ...analysis,
+    _processingLevel: metadata.processingLevel || analysis?._processingLevel || ANALYSIS_PROCESSING_LEVELS.BASIC,
+    _sourceContentHash: metadata.sourceContentHash || analysis?._sourceContentHash || '',
+    _embeddingContentHash: metadata.embeddingContentHash || analysis?._embeddingContentHash || '',
   };
 }
 

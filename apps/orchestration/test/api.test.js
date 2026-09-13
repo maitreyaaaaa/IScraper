@@ -919,6 +919,16 @@ test('similar visuals endpoint returns user-scoped visual matches', async () => 
     topics: ['kitchen'],
     tags: ['brass'],
   });
+  store.saveVisualEmbedding('visual-user', 'source-kitchen', {
+    embedding: [1, 0, 0],
+    contentHash: 'source-hash',
+    model: 'clip-vit-base',
+  });
+  store.saveVisualEmbedding('visual-user', 'related-kitchen', {
+    embedding: [0.98, 0.02, 0],
+    contentHash: 'related-hash',
+    model: 'clip-vit-base',
+  });
   const app = createApp({ store });
   const server = app.listen(0);
 
@@ -934,11 +944,27 @@ test('similar visuals endpoint returns user-scoped visual matches', async () => 
     assert.equal(body.results[0].item.id, 'related-kitchen');
     assert.ok(body.results[0].similarity.score > 0);
     assert.equal(body.results.some((entry) => entry.item.id === 'other-kitchen'), false);
+    const serialized = JSON.stringify(body);
+    assert.equal(hasAnyObjectKey(body, new Set([
+      '_visualEmbedding',
+      '_visualEmbeddingModel',
+      'visualEmbedding',
+      'imageEmbedding',
+      'embedding',
+    ])), false);
+    assert.equal(serialized.includes('clip-vit-base'), false);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function hasAnyObjectKey(value, keys) {
+  if (Array.isArray(value)) return value.some((entry) => hasAnyObjectKey(entry, keys));
+  if (!value || typeof value !== 'object') return false;
+  return Object.keys(value).some((key) => keys.has(key))
+    || Object.values(value).some((entry) => hasAnyObjectKey(entry, keys));
+}
 
 test('admin approval and deletion processing are idempotent and prevent account recreation', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
@@ -1956,8 +1982,8 @@ test('worker process endpoints require a worker key and process bounded queued s
     assert.equal(denied.status, 403);
     assert.equal(allowed.status, 200);
     assert.equal(body.scopeCount, 1);
-    assert.equal(body.processedCount, 0);
-    assert.equal(jobs.filter((job) => job.status === 'paused_missing_provider').length, 1);
+    assert.equal(body.processedCount, 1);
+    assert.equal(jobs.filter((job) => job.status === 'done').length, 1);
     assert.equal(jobs.filter((job) => job.status === 'queued').length, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));

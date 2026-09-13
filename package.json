@@ -12,6 +12,7 @@
     "dev:web": "npm run dev --workspace @iscraper/ui",
     "dev:api": "npm run dev --workspace @iscraper/orchestration",
     "dev:worker": "npm run worker --workspace @iscraper/orchestration",
+    "dev:ml": "npm run ml:local --workspace @iscraper/orchestration",
     "worker:once": "npm run worker:once --workspace @iscraper/orchestration",
     "worker:loop": "npm run worker --workspace @iscraper/orchestration",
     "build": "npm run build --workspaces --if-present",

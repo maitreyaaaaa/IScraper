@@ -45,6 +45,7 @@ const VISUAL_FIELDS = [
   'summary',
   'title',
 ];
+const { cosineSimilarity } = require('./visualEmbeddings');
 
 function cleanText(value = '') {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -147,6 +148,23 @@ function scoreVisualSimilarity(sourceProfile, candidateProfile) {
   };
 }
 
+function visualEmbeddingMap(rows = []) {
+  return new Map((rows || [])
+    .filter((row) => row?.itemId && Array.isArray(row.embedding) && row.embedding.length)
+    .map((row) => [String(row.itemId), row.embedding]));
+}
+
+function mergeVectorSimilarity(similarity, vectorScore) {
+  if (!Number.isFinite(vectorScore) || vectorScore <= 0) return similarity;
+  const score = Math.max(similarity.score, vectorScore * 1.35);
+  return {
+    ...similarity,
+    score,
+    hasContentMatch: true,
+    reasons: vectorScore >= 0.85 ? ['Looks very visually similar.'] : ['Looks visually similar.'],
+  };
+}
+
 function findSimilarVisualItems(items = [], sourceItemId, options = {}) {
   const limit = Math.max(1, Math.min(Number(options.limit) || 8, 20));
   const threshold = Number.isFinite(Number(options.threshold)) ? Number(options.threshold) : 0.16;
@@ -154,11 +172,17 @@ function findSimilarVisualItems(items = [], sourceItemId, options = {}) {
   if (!source) return { source: null, items: [] };
 
   const sourceProfile = buildVisualProfile(source);
+  const embeddingsByItemId = visualEmbeddingMap(options.visualEmbeddings);
+  const sourceEmbedding = embeddingsByItemId.get(String(sourceItemId));
   const results = items
     .filter((item) => String(item.id) !== String(sourceItemId))
     .map((item) => {
       const candidateProfile = buildVisualProfile(item);
-      const similarity = scoreVisualSimilarity(sourceProfile, candidateProfile);
+      let similarity = scoreVisualSimilarity(sourceProfile, candidateProfile);
+      const vectorScore = sourceEmbedding
+        ? cosineSimilarity(sourceEmbedding, embeddingsByItemId.get(String(item.id)))
+        : 0;
+      similarity = mergeVectorSimilarity(similarity, vectorScore);
       return { item, similarity };
     })
     .filter((entry) => entry.similarity.hasContentMatch && entry.similarity.score >= threshold)
@@ -181,4 +205,5 @@ module.exports = {
   buildVisualProfile,
   findSimilarVisualItems,
   scoreVisualSimilarity,
+  visualEmbeddingMap,
 };

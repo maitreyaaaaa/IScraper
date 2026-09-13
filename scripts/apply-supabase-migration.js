@@ -99,6 +99,12 @@ async function verifyMigration({ accessToken, projectRef, migrationName }) {
   if (migrationName === '202605300001_user_onboarding_preferences') {
     return verifyOnboardingPreferencesMigration({ accessToken, projectRef });
   }
+  if (migrationName === '202609080001_item_analysis_processing_level') {
+    return verifyItemAnalysisProcessingLevelMigration({ accessToken, projectRef });
+  }
+  if (migrationName === '202609080002_item_visual_embeddings') {
+    return verifyItemVisualEmbeddingsMigration({ accessToken, projectRef });
+  }
   const query = `
 select
   exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'users' and column_name = 'public_ref') as users_public_ref,
@@ -135,6 +141,86 @@ select
     publicRefIndex: Boolean(row.public_ref_index),
     requestPolicies: Boolean(row.request_policies),
     stepPolicies: Boolean(row.step_policies),
+  };
+  return { ok: Object.values(checks).every(Boolean), checks };
+}
+
+async function verifyItemAnalysisProcessingLevelMigration({ accessToken, projectRef }) {
+  const query = `
+select
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'item_analysis' and column_name = 'processing_level') as analysis_processing_level,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'item_analysis' and column_name = 'source_content_hash') as analysis_source_hash,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'item_analysis' and column_name = 'embedding_content_hash') as analysis_embedding_hash,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'item_embeddings' and column_name = 'content_hash') as embeddings_content_hash,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'item_analysis_user_processing_level_idx') as processing_level_index,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'item_analysis_user_source_content_hash_idx') as source_hash_index,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'item_embeddings_user_content_hash_idx') as embedding_hash_index;
+`;
+  const response = await fetch(`${MANAGEMENT_API}/projects/${projectRef}/database/query/read-only`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Supabase verification query failed with ${response.status}: ${safeApiMessage(body)}`);
+  }
+  const body = await response.json().catch(() => ({}));
+  const row = Array.isArray(body) ? body[0] : body.result?.[0] || body.data?.[0] || body;
+  const checks = {
+    analysisProcessingLevel: Boolean(row.analysis_processing_level),
+    analysisSourceHash: Boolean(row.analysis_source_hash),
+    analysisEmbeddingHash: Boolean(row.analysis_embedding_hash),
+    embeddingsContentHash: Boolean(row.embeddings_content_hash),
+    processingLevelIndex: Boolean(row.processing_level_index),
+    sourceHashIndex: Boolean(row.source_hash_index),
+    embeddingHashIndex: Boolean(row.embedding_hash_index),
+  };
+  return { ok: Object.values(checks).every(Boolean), checks };
+}
+
+async function verifyItemVisualEmbeddingsMigration({ accessToken, projectRef }) {
+  const query = `
+select
+  to_regclass('public.item_visual_embeddings') is not null as visual_embeddings_table,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'item_visual_embeddings' and column_name = 'item_id') as item_id_column,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'item_visual_embeddings' and column_name = 'user_id') as user_id_column,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'item_visual_embeddings' and column_name = 'embedding') as embedding_column,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'item_visual_embeddings' and column_name = 'content_hash') as content_hash_column,
+  exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'item_visual_embeddings' and column_name = 'embedding_model') as embedding_model_column,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'item_visual_embeddings_pkey') as visual_embeddings_pk,
+  exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'item_visual_embeddings_user_content_hash_idx') as content_hash_index,
+  exists(select 1 from pg_tables where schemaname = 'public' and tablename = 'item_visual_embeddings' and rowsecurity = true) as rls_enabled,
+  exists(select 1 from pg_policies where schemaname = 'public' and tablename = 'item_visual_embeddings' and policyname = 'Users own visual embeddings') as user_policy;
+`;
+  const response = await fetch(`${MANAGEMENT_API}/projects/${projectRef}/database/query/read-only`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Supabase verification query failed with ${response.status}: ${safeApiMessage(body)}`);
+  }
+  const body = await response.json().catch(() => ({}));
+  const row = Array.isArray(body) ? body[0] : body.result?.[0] || body.data?.[0] || body;
+  const checks = {
+    visualEmbeddingsTable: Boolean(row.visual_embeddings_table),
+    itemIdColumn: Boolean(row.item_id_column),
+    userIdColumn: Boolean(row.user_id_column),
+    embeddingColumn: Boolean(row.embedding_column),
+    contentHashColumn: Boolean(row.content_hash_column),
+    embeddingModelColumn: Boolean(row.embedding_model_column),
+    visualEmbeddingsPk: Boolean(row.visual_embeddings_pk),
+    contentHashIndex: Boolean(row.content_hash_index),
+    rlsEnabled: Boolean(row.rls_enabled),
+    userPolicy: Boolean(row.user_policy),
   };
   return { ok: Object.values(checks).every(Boolean), checks };
 }

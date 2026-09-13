@@ -73,3 +73,33 @@ test('findSimilarVisualItems ranks visually related saves above unrelated saves'
   assert.ok(result.items[0].similarity.score > 0.5);
   assert.match(result.items[0].similarity.reasons[0], /Similar visual details|Shared topics/);
 });
+
+test('findSimilarVisualItems uses visual embeddings when text overlap is absent', () => {
+  const source = {
+    id: 'source-vector',
+    thumbnailUrl: 'https://example.com/source.jpg',
+    analysis: { title: 'Source frame' },
+  };
+  const vectorRelated = {
+    id: 'vector-related',
+    thumbnailUrl: 'https://example.com/related.jpg',
+    analysis: { title: 'Different words' },
+  };
+  const unrelated = {
+    id: 'vector-unrelated',
+    thumbnailUrl: 'https://example.com/unrelated.jpg',
+    analysis: { title: 'Other item' },
+  };
+
+  const result = findSimilarVisualItems([source, unrelated, vectorRelated], 'source-vector', {
+    visualEmbeddings: [
+      { itemId: 'source-vector', embedding: [1, 0, 0] },
+      { itemId: 'vector-related', embedding: [0.98, 0.02, 0] },
+      { itemId: 'vector-unrelated', embedding: [0, 1, 0] },
+    ],
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].item.id, 'vector-related');
+  assert.match(result.items[0].similarity.reasons[0], /visually similar/i);
+});

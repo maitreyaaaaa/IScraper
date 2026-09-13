@@ -16,7 +16,7 @@ function checkWorkerPreflight(config = {}) {
   }
 
   if (!config.openAiApiKey) {
-    errors.push('OPENAI_API_KEY is required for SaaS-owned text indexing.');
+    warnings.push('OPENAI_API_KEY is not configured; worker will run basic indexing only.');
   }
 
   return {

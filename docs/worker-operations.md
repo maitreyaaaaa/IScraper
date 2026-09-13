@@ -6,6 +6,7 @@ IScraper still runs as one Vercel UI/API deployment. Phase 5 pilots a separate R
 
 - Local loop: `npm.cmd run worker:loop`
 - Local one-pass smoke run: `npm.cmd run worker:once`
+- Local OCR/ASR extractor: `npm.cmd run dev:ml`
 - Orchestration workspace one-pass run: `npm.cmd --workspace @iscraper/orchestration run worker:once`
 - Existing loop command remains valid: `npm.cmd --workspace @iscraper/orchestration run worker`
 
@@ -47,6 +48,25 @@ Secrets are listed with `sync: false`; set them in Render during service creatio
 - `INLINE_INDEXING_ENABLED=false`
 
 Raise concurrency only after queue volume, database load, provider rate limits, and job duration are visible in logs.
+
+## Local ML Extractor
+
+The optional local extractor lets the worker and screenshot capture run low-cost OCR/ASR before paid multimodal analysis.
+
+Recommended local settings:
+
+- `LOCAL_ML_ENDPOINT=http://127.0.0.1:3037`
+- `LOCAL_ML_API_KEY=<shared local secret if auth is required>`
+- `TESSERACT_CMD=tesseract`
+- `WHISPER_CMD=whisper` only after Whisper is installed and available on the worker host
+- `VISUAL_EMBEDDING_CMD=<local image embedding command>` only after a CLIP/SigLIP-style wrapper is installed
+- `VISUAL_EMBEDDING_MODEL=<model identifier>`
+
+Run it with `npm.cmd run dev:ml`. Keep the default `LOCAL_ML_HOST=127.0.0.1` unless the extractor is behind a private network boundary. If `LOCAL_ML_API_KEY` is set on the extractor process, set the same value on the orchestration process so requests include `x-local-ml-api-key`.
+
+The worker stores source-content hashes internally. When the current media input hash matches existing analysis metadata and that analysis already has transcript, OCR text, or visual description, the worker skips local extraction and avoids falling through to paid media analysis for the unchanged save.
+
+When the local extractor returns a visual embedding, the worker stores it in internal visual-vector storage. Similar-visuals ranking uses vector cosine similarity when both saves have vectors and falls back to metadata/text matching otherwise. Visual vectors are derived operational data and are not returned in item payloads.
 
 ## Shutdown Behavior
 

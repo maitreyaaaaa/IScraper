@@ -68,7 +68,7 @@ test('runWorkerPass respects a total job cap across worker scopes', async () => 
     ];
 
     assert.equal(result.scopeCount, 2);
-    assert.equal(allJobs.filter((job) => job.status === 'paused_missing_provider').length, 1);
+    assert.equal(allJobs.filter((job) => job.status === 'done').length, 1);
     assert.equal(allJobs.filter((job) => job.status === 'queued').length, 3);
   } finally {
     rmSync(dir, { recursive: true, force: true });

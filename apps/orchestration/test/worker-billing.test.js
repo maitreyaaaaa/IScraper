@@ -1,13 +1,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { mkdtempSync, rmSync } = require('node:fs');
+const { mkdtempSync, readFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 
 const { processImportJobs } = require('../src/services/worker');
+const { buildEmbeddingContent } = require('../src/services/embeddings');
+const { buildEmbeddingContentHash } = require('../src/services/contentHashes');
 const { createLocalStore } = require('../src/stores/localStore');
 
-test('media job pauses only when no text provider is available', async () => {
+test('media job completes basic indexing when no text provider is available', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const userId = 'u1';
@@ -46,16 +48,22 @@ test('media job pauses only when no text provider is available', async () => {
     const job = store.getJob(userId, jobs[0].id);
     const item = store.getItem(userId, 'reel-1');
 
-    assert.equal(job.status, 'paused_missing_provider');
-    assert.equal(item.status, 'paused_missing_provider');
-    assert.equal(item.analysis, null);
-    assert.match(item.error, /IScraper AI processing is not configured/i);
+    assert.equal(job.status, 'done');
+    assert.equal(item.status, 'done');
+    assert.equal(item.analysis.title, 'Claude media workflow');
+    assert.equal(item.analysis.summary, 'Claude media workflow');
+    assert.equal(item.analysis.transcript, '');
+    assert.equal(item.analysis._processingLevel, undefined);
+    assert.equal(item.analysis._sourceContentHash, undefined);
+    assert.equal(item.analysis._embeddingContentHash, undefined);
+    assert.equal(item.analysis.processingLevel, undefined);
+    assert.equal(item.error, null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('processing one saved item pauses without app-owned AI', async () => {
+test('processing one saved item completes basic indexing without app-owned AI', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
   const userId = 'u1';
@@ -94,9 +102,15 @@ test('processing one saved item pauses without app-owned AI', async () => {
     const job = store.getJobs(userId, entry.id)[0];
     const item = store.getItem(userId, 'item-1');
 
-    assert.equal(job.status, 'paused_missing_provider');
-    assert.equal(item.status, 'paused_missing_provider');
-    assert.match(item.error, /IScraper AI processing is not configured/i);
+    assert.equal(job.status, 'done');
+    assert.equal(item.status, 'done');
+    assert.equal(item.analysis.title, 'Saved kitchen idea');
+    assert.equal(item.analysis.summary, 'Saved kitchen idea');
+    assert.equal(item.analysis._processingLevel, undefined);
+    assert.equal(item.analysis._sourceContentHash, undefined);
+    assert.equal(item.analysis._embeddingContentHash, undefined);
+    assert.equal(item.analysis.processingLevel, undefined);
+    assert.equal(item.error, null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -179,11 +193,298 @@ test('processing one saved item uses app OpenAI key and consumes paid credit', a
 
     const credits = store.getCredits(userId);
     const item = store.getItem(userId, 'item-2');
+    const rawState = JSON.parse(readFileSync(path.join(dir, 'brain.local.json'), 'utf8'));
+    const rawItem = rawState.items.find((entry) => entry.id === 'item-2');
 
     assert.equal(item.status, 'done');
+    assert.equal(item.analysis._processingLevel, undefined);
+    assert.equal(item.analysis._sourceContentHash, undefined);
+    assert.equal(item.analysis._embeddingContentHash, undefined);
+    assert.equal(item.analysis.processingLevel, undefined);
+    assert.equal(rawItem.analysisMetadata.processingLevel, 'ai_enriched');
+    assert.match(rawItem.analysisMetadata.sourceContentHash, /^[a-f0-9]{64}$/);
     assert.equal(credits.freeItemsUsed, 0);
     assert.equal(credits.freeItemsRemaining, 0);
     assert.equal(credits.paidCredits, 0);
+  } finally {
+    global.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('media job uses local ML extraction without paid AI credits', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const userId = 'u1';
+  let localMlRequests = 0;
+
+  try {
+    store.ensureUser(userId, 'u1@example.com');
+    const entry = store.createImport({ userId, source: 'instagram-export', fileNames: ['saved_posts.html'] });
+    const items = store.upsertImportData({
+      userId,
+      importId: entry.id,
+      parsed: {
+        collections: [],
+        items: [
+          {
+            id: 'local-ml-post',
+            url: 'https://www.instagram.com/p/local-ml-post/',
+            contentType: 'post',
+            caption: 'Local media extraction',
+            hashtags: [],
+            collections: [],
+          },
+        ],
+      },
+    });
+    store.createJobs({ userId, importId: entry.id, items });
+
+    await processImportJobs({
+      store,
+      userId,
+      importId: entry.id,
+      videoDir: path.join(dir, 'videos'),
+      shouldDownload: true,
+      openAiApiKey: 'app-openai-key',
+      localMlEndpoint: 'http://127.0.0.1:7777',
+      localMlFetchImpl: async (url, options) => {
+        localMlRequests += 1;
+        const body = JSON.parse(options.body);
+        assert.equal(url, 'http://127.0.0.1:7777/v1/media/analyze');
+        assert.equal(body.media[0].fileName, 'local-ml-post.png');
+        return {
+          ok: true,
+          json: async () => ({
+            ocrText: 'Supabase launch checklist',
+            visualDescription: 'Screenshot of a product launch checklist.',
+            imageEmbedding: [0.1, 0.2, 0.3],
+            imageEmbeddingModel: 'clip-vit-base',
+          }),
+        };
+      },
+      downloadMedia: async () => ({
+        outputPaths: [path.join(dir, 'local-ml-post.png')],
+      }),
+      credentialEncryptionKey: 'dev-encryption-key',
+    });
+
+    const job = store.getJobs(userId, entry.id)[0];
+    const item = store.getItem(userId, 'local-ml-post');
+    const rawState = JSON.parse(readFileSync(path.join(dir, 'brain.local.json'), 'utf8'));
+    const rawItem = rawState.items.find((entry) => entry.id === 'local-ml-post');
+
+    assert.equal(localMlRequests, 1);
+    assert.equal(job.status, 'done');
+    assert.equal(item.status, 'done');
+    assert.equal(item.analysis.ocrText, 'Supabase launch checklist');
+    assert.equal(item.analysis._processingLevel, undefined);
+    assert.equal(item.analysis._visualEmbedding, undefined);
+    assert.equal(rawItem.analysisMetadata.processingLevel, 'ml');
+    assert.deepEqual(store.getVisualEmbeddingMetadata(userId, 'local-ml-post'), {
+      contentHash: rawItem.analysisMetadata.sourceContentHash,
+      model: 'clip-vit-base',
+      dimensions: 3,
+    });
+    assert.equal(store.getCredits(userId).paidCredits, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('media job skips unchanged local ML extraction input', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const userId = 'u1';
+  let localMlRequests = 0;
+  let downloads = 0;
+
+  try {
+    store.ensureUser(userId, 'u1@example.com');
+    const entry = store.createImport({ userId, source: 'instagram-export', fileNames: ['saved_posts.html'] });
+    const items = store.upsertImportData({
+      userId,
+      importId: entry.id,
+      parsed: {
+        collections: [],
+        items: [
+          {
+            id: 'local-ml-cached',
+            url: 'https://www.instagram.com/p/local-ml-cached/',
+            contentType: 'post',
+            caption: 'Cached local media extraction',
+            hashtags: [],
+            collections: [],
+          },
+        ],
+      },
+    });
+    const [job] = store.createJobs({ userId, importId: entry.id, items });
+
+    const downloadMedia = async () => {
+      downloads += 1;
+      return { outputPaths: [path.join(dir, 'local-ml-cached.png')] };
+    };
+
+    await processImportJobs({
+      store,
+      userId,
+      importId: entry.id,
+      videoDir: path.join(dir, 'videos'),
+      shouldDownload: true,
+      localMlEndpoint: 'http://127.0.0.1:7777',
+      localMlFetchImpl: async () => {
+        localMlRequests += 1;
+        return {
+          ok: true,
+          json: async () => ({
+            ocrText: 'Cached product launch checklist',
+            visualDescription: 'Screenshot of a launch checklist.',
+          }),
+        };
+      },
+      downloadMedia,
+      credentialEncryptionKey: 'dev-encryption-key',
+    });
+
+    store.updateJob(userId, job.id, {
+      status: 'queued',
+      attempts: 0,
+      error: null,
+      leaseOwner: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      nextAttemptAt: null,
+      completedAt: null,
+    });
+    store.setItemStatus(userId, 'local-ml-cached', 'queued', null);
+
+    await processImportJobs({
+      store,
+      userId,
+      importId: entry.id,
+      videoDir: path.join(dir, 'videos'),
+      shouldDownload: true,
+      localMlEndpoint: 'http://127.0.0.1:7777',
+      localMlFetchImpl: async () => {
+        localMlRequests += 1;
+        throw new Error('unchanged media should not be extracted again');
+      },
+      downloadMedia,
+      credentialEncryptionKey: 'dev-encryption-key',
+    });
+
+    const rawState = JSON.parse(readFileSync(path.join(dir, 'brain.local.json'), 'utf8'));
+    const rawItem = rawState.items.find((entry) => entry.id === 'local-ml-cached');
+    const item = store.getItem(userId, 'local-ml-cached');
+
+    assert.equal(downloads, 2);
+    assert.equal(localMlRequests, 1);
+    assert.equal(item.status, 'done');
+    assert.equal(item.analysis.ocrText, 'Cached product launch checklist');
+    assert.equal(rawItem.analysisMetadata.processingLevel, 'ml');
+    assert.match(rawItem.analysisMetadata.sourceContentHash, /^[a-f0-9]{64}$/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('processing skips unchanged embedding content', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const userId = 'u1';
+  const originalFetch = global.fetch;
+  let embeddingRequests = 0;
+  let savedEmbeddings = 0;
+
+  const llmAnalysis = {
+    title: 'Cached embedding idea',
+    summary: 'A useful save with an existing embedding.',
+    transcript: '',
+    ocrText: '',
+    visualDescription: '',
+    brandsMentioned: [],
+    toolsMentioned: [],
+    reposMentioned: [],
+    peopleMentioned: [],
+    topics: ['saved'],
+    tags: ['saved'],
+    whyUseful: 'It is worth finding again.',
+  };
+
+  global.fetch = async (url) => {
+    if (String(url).includes('/embeddings')) {
+      embeddingRequests += 1;
+      return {
+        ok: true,
+        json: async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify(llmAnalysis),
+            },
+          },
+        ],
+      }),
+    };
+  };
+
+  try {
+    store.ensureUser(userId, 'u1@example.com');
+    store.addCreditTransaction({ userId, amount: 1, reason: 'test' });
+    const entry = store.createImport({ userId, source: 'instagram-export', fileNames: ['saved_posts.html'] });
+    const items = store.upsertImportData({
+      userId,
+      importId: entry.id,
+      parsed: {
+        collections: [],
+        items: [
+          {
+            id: 'item-cached-embedding',
+            url: 'https://www.instagram.com/p/item-cached-embedding/',
+            contentType: 'unknown',
+            caption: 'Saved cached embedding idea',
+            hashtags: [],
+            collections: [],
+          },
+        ],
+      },
+    });
+    store.createJobs({ userId, importId: entry.id, items });
+
+    const expectedContent = buildEmbeddingContent(items[0], llmAnalysis);
+    const expectedHash = buildEmbeddingContentHash(expectedContent);
+    store.getEmbeddingMetadata = async () => ({
+      contentHash: expectedHash,
+      model: 'text-embedding-3-small',
+    });
+    store.saveEmbedding = async () => {
+      savedEmbeddings += 1;
+    };
+
+    await processImportJobs({
+      store,
+      userId,
+      importId: entry.id,
+      videoDir: path.join(dir, 'videos'),
+      shouldDownload: false,
+      openAiApiKey: 'app-openai-key',
+      openAiModel: 'gpt-4o',
+      openAiEmbeddingModel: 'text-embedding-3-small',
+      credentialEncryptionKey: 'dev-encryption-key',
+    });
+
+    const rawState = JSON.parse(readFileSync(path.join(dir, 'brain.local.json'), 'utf8'));
+    const rawItem = rawState.items.find((entry) => entry.id === 'item-cached-embedding');
+
+    assert.equal(embeddingRequests, 0);
+    assert.equal(savedEmbeddings, 0);
+    assert.equal(rawItem.analysisMetadata.embeddingContentHash, expectedHash);
   } finally {
     global.fetch = originalFetch;
     rmSync(dir, { recursive: true, force: true });

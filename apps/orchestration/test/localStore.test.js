@@ -1,10 +1,81 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { mkdtempSync, rmSync } = require('node:fs');
+const { mkdtempSync, readFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 
 const { createLocalStore } = require('../src/stores/localStore');
+
+test('localStore keeps analysis processing level internal', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+
+  try {
+    const [created] = store.upsertImportData({
+      userId: 'local-dev-user',
+      importId: 'first-import',
+      parsed: {
+        collections: [],
+        items: [{
+          id: 'internal-depth',
+          url: 'https://instagram.com/p/internal-depth',
+          contentType: 'post',
+          caption: 'Internal processing level test',
+          hashtags: [],
+          collections: [],
+        }],
+      },
+    });
+
+    store.saveAnalysis('local-dev-user', created.id, {
+      title: 'Indexed internally',
+      summary: 'Visible summary',
+      _processingLevel: 'ml',
+      _sourceContentHash: 'source-hash',
+      _embeddingContentHash: 'embedding-hash',
+      _visualEmbedding: [0.1, 0.2],
+      _visualEmbeddingModel: 'clip-vit-base',
+    });
+    store.saveVisualEmbedding('local-dev-user', created.id, {
+      embedding: [0.1, 0.2],
+      contentHash: 'source-hash',
+      model: 'clip-vit-base',
+    });
+
+    const item = store.getItem('local-dev-user', created.id);
+    const rawState = JSON.parse(readFileSync(path.join(dir, 'brain.local.json'), 'utf8'));
+    const rawItem = rawState.items.find((entry) => entry.id === created.id);
+
+    assert.equal(item.analysis.title, 'Indexed internally');
+    assert.equal(item.analysis._processingLevel, undefined);
+    assert.equal(item.analysis._sourceContentHash, undefined);
+    assert.equal(item.analysis._embeddingContentHash, undefined);
+    assert.equal(item.analysis.processingLevel, undefined);
+    assert.equal(item.analysis.sourceContentHash, undefined);
+    assert.equal(item.analysis.embeddingContentHash, undefined);
+    assert.equal(item.analysis._visualEmbedding, undefined);
+    assert.equal(item.analysis.visualEmbedding, undefined);
+    assert.equal(item.analysisMetadata, undefined);
+    assert.equal(rawItem.analysisMetadata.processingLevel, 'ml');
+    assert.equal(rawItem.analysisMetadata.sourceContentHash, 'source-hash');
+    assert.equal(rawItem.analysisMetadata.embeddingContentHash, 'embedding-hash');
+    assert.deepEqual(store.getAnalysisMetadata('local-dev-user', created.id), {
+      processingLevel: 'ml',
+      sourceContentHash: 'source-hash',
+      embeddingContentHash: 'embedding-hash',
+    });
+    assert.deepEqual(store.getVisualEmbeddingMetadata('local-dev-user', created.id), {
+      contentHash: 'source-hash',
+      model: 'clip-vit-base',
+      dimensions: 2,
+    });
+    assert.deepEqual(store.listVisualEmbeddings('local-dev-user').map((entry) => entry.itemId), [created.id]);
+    store.deleteSavedItem('local-dev-user', created.id);
+    assert.deepEqual(store.listVisualEmbeddings('local-dev-user'), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('localStore skipExisting duplicate mode does not mutate existing export items', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));

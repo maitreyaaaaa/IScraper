@@ -49,18 +49,17 @@ test('worker preflight fails closed without leaking secret values', () => {
   assert.equal(serialized.includes('super-secret-openai-key'), false);
 });
 
-test('worker preflight accepts Supabase mode with app-owned text indexing', () => {
+test('worker preflight accepts Supabase mode without app-owned text indexing', () => {
   const result = checkWorkerPreflight({
     storageMode: 'supabase',
     supabaseUrl: 'https://project.supabase.co',
     supabaseServiceRoleKey: 'super-secret-service-role',
-    openAiApiKey: 'super-secret-openai-key',
   });
   const serialized = JSON.stringify(result);
 
   assert.equal(result.ok, true);
+  assert.match(serialized, /basic indexing only/);
   assert.equal(serialized.includes('super-secret-service-role'), false);
-  assert.equal(serialized.includes('super-secret-openai-key'), false);
 });
 
 test('local worker smoke pass claims one job and returns aggregate-only status', async () => {
@@ -88,8 +87,10 @@ test('local worker smoke pass claims one job and returns aggregate-only status',
 
     assert.equal(pass.scopeCount, 1);
     assert.equal(jobs[0].attempts, 1);
-    assert.equal(jobs[0].status, 'paused_missing_provider');
-    assert.equal(status.queue.paused, 1);
+    assert.equal(jobs[0].status, 'done');
+    assert.equal(status.queue.totalJobs, 1);
+    assert.equal(status.queue.queued, 0);
+    assert.equal(status.queue.paused, 0);
     assert.equal(serializedStatus.includes('Operations smoke test item'), false);
     assert.equal(serializedStatus.includes('https://example.com/ops-worker-job'), false);
   } finally {

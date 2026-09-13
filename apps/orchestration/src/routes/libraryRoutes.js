@@ -296,7 +296,10 @@ function registerLibraryRoutes(app, deps) {
     const item = await store.getItem(req.user.id, req.params.id);
     if (!item) return res.status(404).json({ error: 'Item not found.' });
     const items = await store.getItems(req.user.id);
-    const result = findItemSimilarVisuals(items, item.id, { limit: req.query.limit });
+    const visualEmbeddings = typeof store.listVisualEmbeddings === 'function'
+      ? await store.listVisualEmbeddings(req.user.id)
+      : [];
+    const result = findItemSimilarVisuals(items, item.id, { limit: req.query.limit, visualEmbeddings });
     return res.json({
       item,
       results: result.items,

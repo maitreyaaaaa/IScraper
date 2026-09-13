@@ -3,7 +3,7 @@ const test = require('node:test');
 
 const { chooseAnalysisPlan } = require('../src/services/worker');
 
-test('user provider credentials are ignored when app-owned AI is not configured', async () => {
+test('missing app-owned AI falls back to basic indexing plan', async () => {
   const store = {
     async getPreferredProviderCredential(_userId, purpose) {
       return {
@@ -16,12 +16,17 @@ test('user provider credentials are ignored when app-owned AI is not configured'
     },
   };
 
-  await assert.rejects(() => chooseAnalysisPlan({
+  const plan = await chooseAnalysisPlan({
     store,
     userId: 'user-1',
     item: { contentType: 'reel' },
     credentialEncryptionKey: 'dev-key',
-  }), /IScraper AI processing is not configured/);
+  });
+
+  assert.equal(plan.source, null);
+  assert.equal(plan.textCredential, null);
+  assert.equal(plan.mediaCredential, null);
+  assert.equal(plan.embeddingCredential, null);
 });
 
 test('app-owned analysis uses OpenAI gpt-4o when configured', async () => {
@@ -48,4 +53,27 @@ test('app-owned analysis uses OpenAI gpt-4o when configured', async () => {
   assert.equal(plan.mediaCredential.model, 'gpt-4o');
   assert.equal(plan.embeddingCredential.provider, 'openai');
   assert.equal(plan.embeddingCredential.model, 'text-embedding-3-small');
+});
+
+test('app-owned AI without paid credits falls back to basic indexing plan', async () => {
+  const store = {
+    async getCredits() {
+      return { paidCredits: 0 };
+    },
+  };
+
+  const plan = await chooseAnalysisPlan({
+    store,
+    userId: 'user-1',
+    item: { contentType: 'post' },
+    openAiApiKey: 'sk-test',
+    openAiModel: 'gpt-4o',
+    openAiMediaModel: 'gpt-4o',
+    openAiEmbeddingModel: 'text-embedding-3-small',
+  });
+
+  assert.equal(plan.source, null);
+  assert.equal(plan.textCredential, null);
+  assert.equal(plan.mediaCredential, null);
+  assert.equal(plan.embeddingCredential, null);
 });

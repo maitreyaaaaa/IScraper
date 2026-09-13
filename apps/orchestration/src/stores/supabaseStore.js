@@ -402,7 +402,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return { deletedObjects, buckets: bucketResults };
     },
     async deleteUserContentData(userId) {
-      const tables = ['search_result_feedback', 'search_events', 'processing_jobs', 'smart_collection_items', 'smart_collections', 'item_embeddings', 'item_analysis', 'item_assets', 'item_archives', 'link_health_checks', 'item_reminders', 'saved_items', 'collections', 'imports', 'lens_search_events'];
+      const tables = ['search_result_feedback', 'search_events', 'processing_jobs', 'smart_collection_items', 'smart_collections', 'item_visual_embeddings', 'item_embeddings', 'item_analysis', 'item_assets', 'item_archives', 'link_health_checks', 'item_reminders', 'saved_items', 'collections', 'imports', 'lens_search_events'];
       return deleteUserRowsFromTables(client, userId, tables);
     },
     async deleteUserAccessData(userId) {
@@ -1848,7 +1848,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       await this.refreshSmartCollections(userId);
       return item;
     },
-    async saveEmbedding(userId, itemId, { content, embedding, model }) {
+    async saveEmbedding(userId, itemId, { content, contentHash = '', embedding, model }) {
       await client
         .from('item_embeddings')
         .upsert(
@@ -1856,12 +1856,85 @@ function createSupabaseStore({ url, serviceRoleKey }) {
             item_id: itemId,
             user_id: userId,
             content,
+            content_hash: contentHash || null,
             embedding,
             embedding_model: model,
           },
           { onConflict: 'user_id,item_id' },
         )
         .throwOnError();
+    },
+    async getEmbeddingMetadata(userId, itemId) {
+      const { data, error } = await client
+        .from('item_embeddings')
+        .select('content_hash, embedding_model')
+        .eq('user_id', userId)
+        .eq('item_id', itemId)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? {
+        contentHash: data.content_hash || '',
+        model: data.embedding_model || '',
+      } : null;
+    },
+    async getAnalysisMetadata(userId, itemId) {
+      const { data, error } = await client
+        .from('item_analysis')
+        .select('processing_level, source_content_hash, embedding_content_hash')
+        .eq('user_id', userId)
+        .eq('item_id', itemId)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? {
+        processingLevel: data.processing_level || 'basic',
+        sourceContentHash: data.source_content_hash || '',
+        embeddingContentHash: data.embedding_content_hash || '',
+      } : null;
+    },
+    async saveVisualEmbedding(userId, itemId, { embedding, contentHash = '', model = 'local-ml-visual' }) {
+      await client
+        .from('item_visual_embeddings')
+        .upsert(
+          {
+            item_id: itemId,
+            user_id: userId,
+            embedding,
+            content_hash: contentHash || null,
+            embedding_model: model,
+          },
+          { onConflict: 'user_id,item_id' },
+        )
+        .throwOnError();
+    },
+    async getVisualEmbeddingMetadata(userId, itemId) {
+      const { data, error } = await client
+        .from('item_visual_embeddings')
+        .select('content_hash, embedding_model')
+        .eq('user_id', userId)
+        .eq('item_id', itemId)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? {
+        contentHash: data.content_hash || '',
+        model: data.embedding_model || '',
+      } : null;
+    },
+    async listVisualEmbeddings(userId) {
+      const rows = await selectAllRows(
+        client,
+        'item_visual_embeddings',
+        'item_id, content_hash, embedding_model, embedding, created_at, updated_at',
+        (query) => query.eq('user_id', userId),
+      );
+      return rows.map((row) => ({
+        userId,
+        itemId: row.item_id,
+        contentHash: row.content_hash || '',
+        model: row.embedding_model || '',
+        embedding: row.embedding || [],
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }));
     },
     async markItemFailed(userId, itemId, error) {
       await client.from('saved_items').update({ status: 'failed', error }).eq('user_id', userId).eq('id', itemId).throwOnError();
@@ -2621,7 +2694,7 @@ function applySavedItemListSort(query, sort) {
 async function selectUserSavedItemPage(client, userId, options) {
   let query = client
     .from('saved_items')
-    .select('*, item_analysis(*), item_assets(*)', { count: 'exact' })
+    .select(`${SEARCH_ITEM_COLUMNS},item_assets(*)`, { count: 'exact' })
     .eq('user_id', userId);
   query = applySavedItemListFilters(query, options);
   query = applySavedItemListSort(query, options.sort);
@@ -3097,6 +3170,9 @@ function toAnalysisRow(analysis) {
     topics: analysis.topics,
     tags: analysis.tags,
     why_useful: analysis.whyUseful,
+    processing_level: analysis._processingLevel || 'basic',
+    source_content_hash: analysis._sourceContentHash || null,
+    embedding_content_hash: analysis._embeddingContentHash || null,
   };
 }
 

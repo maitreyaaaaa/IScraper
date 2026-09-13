@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  createSupabaseStore,
   cleanDbText,
   getExistingSavedItemKeys,
   insertSavedItemRows,
@@ -195,11 +196,137 @@ test('selectUserSavedItemPage applies range-backed filters and returns total cou
   assert.deepEqual(page, { rows, count: 23 });
   assert.deepEqual(calls, [
     ['from', 'saved_items'],
-    ['select', '*, item_analysis(*), item_assets(*)', { count: 'exact' }],
+    ['select', 'id,user_id,import_id,url,content_type,caption,hashtags,owner_name,owner_username,saved_at_text,collections,platform,platform_key,source_id,source_title,source_author,source_description,thumbnail_url,status,error,created_at,updated_at,item_analysis(title,summary,transcript,ocr_text,visual_description,brands_mentioned,tools_mentioned,repos_mentioned,people_mentioned,topics,tags,why_useful),item_assets(*)', { count: 'exact' }],
     ['eq', 'user_id', 'user-1'],
     ['or', 'platform_key.eq.web,id.like.web-%'],
     ['order', 'updated_at', { ascending: false }],
     ['order', 'id', { ascending: true }],
     ['range', 20, 29],
+  ]);
+});
+
+test('Supabase saved item selection does not expose internal analysis processing level', async () => {
+  const calls = [];
+  const query = {
+    select(columns, options) {
+      calls.push(['select', columns, options]);
+      return this;
+    },
+    eq() {
+      return this;
+    },
+    order() {
+      return this;
+    },
+    range() {
+      return Promise.resolve({ data: [], count: 0, error: null });
+    },
+  };
+  const client = {
+    from(table) {
+      calls.push(['from', table]);
+      return query;
+    },
+  };
+
+  await selectUserSavedItemPage(client, 'user-1', {
+    limit: 1,
+    offset: 0,
+    sort: 'newest',
+    type: 'all',
+    state: 'all',
+    collection: 'all',
+    platform: 'all',
+  });
+
+  const selectCall = calls.find((call) => call[0] === 'select');
+  assert.equal(selectCall[1].includes('processing_level'), false);
+});
+
+test('Supabase analysis metadata reader maps internal hashes without public item selection', async () => {
+  const calls = [];
+  const query = {
+    select(columns) {
+      calls.push(['select', columns]);
+      return this;
+    },
+    eq(field, value) {
+      calls.push(['eq', field, value]);
+      return this;
+    },
+    maybeSingle() {
+      calls.push(['maybeSingle']);
+      return Promise.resolve({
+        data: {
+          processing_level: 'ml',
+          source_content_hash: 'source-hash',
+          embedding_content_hash: 'embedding-hash',
+        },
+        error: null,
+      });
+    },
+  };
+  const store = createSupabaseStore({
+    url: 'https://example.supabase.co',
+    serviceRoleKey: 'service-role-key',
+  });
+  store.client.from = (table) => {
+    calls.push(['from', table]);
+    return query;
+  };
+
+  const metadata = await store.getAnalysisMetadata('user-1', 'item-1');
+
+  assert.deepEqual(metadata, {
+    processingLevel: 'ml',
+    sourceContentHash: 'source-hash',
+    embeddingContentHash: 'embedding-hash',
+  });
+  assert.deepEqual(calls, [
+    ['from', 'item_analysis'],
+    ['select', 'processing_level, source_content_hash, embedding_content_hash'],
+    ['eq', 'user_id', 'user-1'],
+    ['eq', 'item_id', 'item-1'],
+    ['maybeSingle'],
+  ]);
+});
+
+test('Supabase visual embedding writer keeps vectors in derived table', async () => {
+  const calls = [];
+  const query = {
+    upsert(value, options) {
+      calls.push(['upsert', value, options]);
+      return this;
+    },
+    throwOnError() {
+      calls.push(['throwOnError']);
+      return Promise.resolve();
+    },
+  };
+  const store = createSupabaseStore({
+    url: 'https://example.supabase.co',
+    serviceRoleKey: 'service-role-key',
+  });
+  store.client.from = (table) => {
+    calls.push(['from', table]);
+    return query;
+  };
+
+  await store.saveVisualEmbedding('user-1', 'item-1', {
+    embedding: [0.1, 0.2, 0.3],
+    contentHash: 'source-hash',
+    model: 'clip-vit-base',
+  });
+
+  assert.deepEqual(calls, [
+    ['from', 'item_visual_embeddings'],
+    ['upsert', {
+      item_id: 'item-1',
+      user_id: 'user-1',
+      embedding: [0.1, 0.2, 0.3],
+      content_hash: 'source-hash',
+      embedding_model: 'clip-vit-base',
+    }, { onConflict: 'user_id,item_id' }],
+    ['throwOnError'],
   ]);
 });

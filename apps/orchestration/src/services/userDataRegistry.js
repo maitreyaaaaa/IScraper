@@ -119,6 +119,7 @@ const EXCLUDED_USER_DATA_TABLES = [
   { table: 'user_provider_credentials', reason: 'Legacy BYOK table; SaaS AI no longer exports or exposes user provider-key records.' },
   { table: 'user_ai_keys', reason: 'Legacy AI-key table; SaaS AI no longer exports or exposes user provider-key records.' },
   { table: 'item_embeddings', reason: 'Derived vector data is not useful to users and may be large.' },
+  { table: 'item_visual_embeddings', reason: 'Derived visual vector data is not useful to users and may be large.' },
   { table: 'processing_jobs', reason: 'Operational queue state is not part of user data export.' },
 ];
 
@@ -159,6 +160,7 @@ const TABLE_DATA_CLASSIFICATIONS = {
   security_audit_events: 'audit',
   public_feedback: 'public',
   item_embeddings: 'operational',
+  item_visual_embeddings: 'operational',
   processing_jobs: 'operational',
 };
 

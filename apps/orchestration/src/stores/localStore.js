@@ -77,6 +77,7 @@ function seedFromLegacyIndex(dataPath) {
     lensSearchEvents: [],
     itemAssets: [],
     itemArchives: [],
+    itemVisualEmbeddings: [],
     linkHealthChecks: [],
     itemReminders: [],
     smartCollections: [],
@@ -185,6 +186,7 @@ function normalizeState(state) {
     lensSearchEvents: state.lensSearchEvents || [],
     itemAssets: state.itemAssets || [],
     itemArchives: state.itemArchives || [],
+    itemVisualEmbeddings: state.itemVisualEmbeddings || [],
     linkHealthChecks: state.linkHealthChecks || [],
     itemReminders: state.itemReminders || [],
     smartCollections: state.smartCollections || [],
@@ -264,10 +266,30 @@ function localItemArchive(state, userId, itemId, { includeContent = false } = {}
 
 function hydrateLocalItem(state, item, { includeArchiveContent = false } = {}) {
   if (!item) return null;
+  const { analysisMetadata: _analysisMetadata, ...publicItem } = item;
   return {
-    ...item,
+    ...publicItem,
+    analysis: publicAnalysis(item.analysis),
     assets: localItemAssets(state, item.userId, item.id),
     archive: localItemArchive(state, item.userId, item.id, { includeContent: includeArchiveContent }),
+  };
+}
+
+function publicAnalysis(analysis) {
+  if (!analysis) return null;
+  return {
+    title: analysis.title,
+    summary: analysis.summary,
+    transcript: analysis.transcript,
+    ocrText: analysis.ocrText,
+    visualDescription: analysis.visualDescription,
+    brandsMentioned: analysis.brandsMentioned || [],
+    toolsMentioned: analysis.toolsMentioned || [],
+    reposMentioned: analysis.reposMentioned || [],
+    peopleMentioned: analysis.peopleMentioned || [],
+    topics: analysis.topics || [],
+    tags: analysis.tags || [],
+    whyUseful: analysis.whyUseful,
   };
 }
 
@@ -665,6 +687,7 @@ function createLocalStore({ dataPath }) {
         collections: deleteFromArrayByUser('collections', userId),
         smartCollections: deleteFromArrayByUser('smartCollections', userId),
         smartCollectionItems: deleteFromArrayByUser('smartCollectionItems', userId),
+        itemVisualEmbeddings: deleteFromArrayByUser('itemVisualEmbeddings', userId),
         linkHealthChecks: deleteFromArrayByUser('linkHealthChecks', userId),
         itemReminders: deleteFromArrayByUser('itemReminders', userId),
         imports: deleteFromArrayByUser('imports', userId),
@@ -1592,6 +1615,7 @@ function createLocalStore({ dataPath }) {
       state.searchFeedback = state.searchFeedback.filter((entry) => !(entry.userId === userId && entry.itemId === id));
       state.itemAssets = state.itemAssets.filter((asset) => !(asset.userId === userId && asset.itemId === id));
       state.itemArchives = state.itemArchives.filter((archive) => !(archive.userId === userId && archive.itemId === id));
+      state.itemVisualEmbeddings = state.itemVisualEmbeddings.filter((embedding) => !(embedding.userId === userId && embedding.itemId === id));
       state.linkHealthChecks = state.linkHealthChecks.filter((check) => !(check.userId === userId && check.itemId === id));
       state.itemReminders = state.itemReminders.filter((reminder) => !(reminder.userId === userId && reminder.itemId === id));
       state.smartCollectionItems = state.smartCollectionItems.filter((entry) => !(entry.userId === userId && entry.itemId === id));
@@ -1920,10 +1944,82 @@ function createLocalStore({ dataPath }) {
       return summarizeJobQueue(state.jobs, { maxAttempts });
     },
 
+    getAnalysisMetadata(userId, itemId) {
+      const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
+      return item?.analysisMetadata ? {
+        processingLevel: item.analysisMetadata.processingLevel || 'basic',
+        sourceContentHash: item.analysisMetadata.sourceContentHash || '',
+        embeddingContentHash: item.analysisMetadata.embeddingContentHash || '',
+      } : null;
+    },
+
+    saveVisualEmbedding(userId, itemId, { embedding, contentHash = '', model = 'local-ml-visual' }) {
+      if (!Array.isArray(embedding) || !embedding.length) return null;
+      let row = state.itemVisualEmbeddings.find((entry) => entry.userId === userId && entry.itemId === itemId);
+      if (row) {
+        Object.assign(row, {
+          embedding,
+          contentHash,
+          model,
+          updatedAt: now(),
+        });
+      } else {
+        row = {
+          userId,
+          itemId,
+          embedding,
+          contentHash,
+          model,
+          createdAt: now(),
+          updatedAt: now(),
+        };
+        state.itemVisualEmbeddings.push(row);
+      }
+      save();
+      return { ...row };
+    },
+
+    getVisualEmbeddingMetadata(userId, itemId) {
+      const row = state.itemVisualEmbeddings.find((entry) => entry.userId === userId && entry.itemId === itemId);
+      return row ? {
+        contentHash: row.contentHash || '',
+        model: row.model || '',
+        dimensions: Array.isArray(row.embedding) ? row.embedding.length : 0,
+      } : null;
+    },
+
+    listVisualEmbeddings(userId) {
+      return state.itemVisualEmbeddings
+        .filter((entry) => entry.userId === userId)
+        .map((entry) => ({ ...entry, embedding: [...(entry.embedding || [])] }));
+    },
+
     saveAnalysis(userId, itemId, analysis) {
       const item = state.items.find((entry) => entry.userId === userId && entry.id === itemId);
       if (!item) return null;
-      item.analysis = analysis;
+      const {
+        _processingLevel,
+        _sourceContentHash,
+        _embeddingContentHash,
+        _visualEmbedding,
+        _visualEmbeddingModel,
+        visualEmbedding,
+        visual_embedding,
+        imageEmbedding,
+        image_embedding,
+        visualEmbeddingModel,
+        visual_embedding_model,
+        imageEmbeddingModel,
+        image_embedding_model,
+        ...publicFields
+      } = analysis || {};
+      item.analysis = publicFields;
+      item.analysisMetadata = {
+        ...(item.analysisMetadata || {}),
+        processingLevel: _processingLevel || 'basic',
+        sourceContentHash: _sourceContentHash || '',
+        embeddingContentHash: _embeddingContentHash || '',
+      };
       item.status = 'done';
       item.updatedAt = now();
       save();
