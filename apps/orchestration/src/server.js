@@ -19,6 +19,7 @@ const { registerPrivateSearchRoutes } = require('./routes/searchPrivateRoutes');
 const { registerPublicSearchRoutes } = require('./routes/searchRoutes');
 const { registerPublicRoutes } = require('./routes/publicRoutes');
 const { registerWorkerRoutes } = require('./routes/workerRoutes');
+const { registerWorkflowRoutes } = require('./routes/workflowRoutes');
 const { createWorkflows } = require('./application');
 const {
   assertAdmin,
@@ -182,6 +183,7 @@ function createApp({ store, config = {}, observability = createObservability(con
   registerPrivateIntegrationRoutes(app, deps);
   registerImportRoutes(app, deps);
   registerPrivateSearchRoutes(app, deps);
+  registerWorkflowRoutes(app, deps);
 
   app.use(createErrorHandler({ multer, store, warnWorkflow }));
 

@@ -156,7 +156,7 @@ const STATE_FILTERS = ['all', 'searchable', 'failed'];
 
 const SORT_OPTIONS = ['newest', 'oldest'];
 
-const DASHBOARD_TABS = ['library', 'smart', 'care', 'graph', 'upload', 'settings'];
+const DASHBOARD_TABS = ['library', 'smart', 'workflows', 'care', 'graph', 'upload', 'settings'];
 
 const SEARCH_MODES = ['saved', 'web'];
 

@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   askLibraryChat,
   avatarUrlForSession,
+  Bot,
   Brain,
   BrandLogo,
   checkLibraryLinks,
@@ -112,6 +113,7 @@ import { GraphTab } from './GraphTab.jsx';
 import { DetailDrawer } from './DetailDrawer.jsx';
 import { QuickAddModal } from './QuickAddModal.jsx';
 import { AccountSettingsModal } from './AccountSettingsModal.jsx';
+import WorkflowsTab from './WorkflowsTab.jsx';
 function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [tab, setTab] = useState(() => dashboardTabFromLocation());
   const [query, setQuery] = useState('');
@@ -1227,6 +1229,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const navItems = [
     ['library', 'Saved library', Brain],
     ['smart', 'Smart Collections', Folder],
+    ['workflows', 'Workflows', Bot],
     ['upload', 'Add saves', Upload],
   ];
   const SidebarToggleIcon = sidebarExpanded ? PanelLeftClose : PanelLeftOpen;
@@ -1621,6 +1624,29 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     onOpenItem={openDetail}
                   />
                 )}
+                {authEnabled && !session && tab === 'workflows' && (
+                  <AuthRequiredPanel
+                    busy={busy}
+                    onSignIn={onOpenLogin}
+                  />
+                )}
+                {authEnabled && session && profileRequired && tab === 'workflows' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'workflows' && (
+                  <WorkflowsTab
+                    items={items}
+                    busy={busy}
+                    onError={setError}
+                    onNotice={setNotice}
+                  />
+                )}
                 {authEnabled && !session && tab === 'care' && (
                   <AuthRequiredPanel
                     busy={busy}
@@ -1854,10 +1880,11 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
           </button>
         )}
       </div>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-5 gap-2">
         {[
           ['library', 'Library'],
           ['smart', 'Smart'],
+          ['workflows', 'Flows'],
           ['upload', 'Add'],
           ['settings', 'Settings'],
         ].map(([key, label]) => (

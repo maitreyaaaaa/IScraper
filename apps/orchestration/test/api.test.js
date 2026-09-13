@@ -120,6 +120,59 @@ test('health endpoint returns aggregate runtime status only', async () => {
   }
 });
 
+test('content workflow endpoints generate drafts and block unapproved publishing', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: { openRouterApiKey: '', composioApiKey: '' } });
+  const server = app.listen(0);
+
+  try {
+    const port = server.address().port;
+    const headers = { 'Content-Type': 'application/json', 'x-user-id': 'workflow-user' };
+    const readinessResponse = await fetch(`http://127.0.0.1:${port}/api/workflows/readiness`, { headers });
+    const readinessBody = await readinessResponse.json();
+
+    assert.equal(readinessResponse.status, 200);
+    assert.equal(readinessBody.readiness.approvalRequired, true);
+    assert.equal(readinessBody.readiness.integrations.composio.configured, false);
+
+    const generateResponse = await fetch(`http://127.0.0.1:${port}/api/workflows/generate`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        brief: 'Turn two saved reels into an Instagram posting workflow for startup founders.',
+        format: 'reel',
+        platforms: ['instagram'],
+      }),
+    });
+    const generateBody = await generateResponse.json();
+
+    assert.equal(generateResponse.status, 200);
+    assert.equal(generateBody.plan.status, 'draft');
+    assert.equal(generateBody.plan.format, 'reel');
+    assert.ok(generateBody.plan.stages.some((stage) => stage.key === 'publish'));
+    assert.equal(JSON.stringify(generateBody).includes('COMPOSIO_API_KEY='), false);
+
+    const publishResponse = await fetch(`http://127.0.0.1:${port}/api/workflows/publish`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        approved: false,
+        platform: 'instagram',
+        caption: generateBody.plan.caption,
+      }),
+    });
+    const publishBody = await publishResponse.json();
+
+    assert.equal(publishResponse.status, 409);
+    assert.equal(publishBody.result.status, 'blocked');
+    assert.ok(publishBody.result.missing.includes('explicit approval'));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('API request and correlation IDs propagate through manual save jobs', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });

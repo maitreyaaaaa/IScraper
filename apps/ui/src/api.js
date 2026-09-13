@@ -598,3 +598,23 @@ export function submitSearchFeedback(payload) {
     body: JSON.stringify(payload),
   });
 }
+
+export function getWorkflowReadiness() {
+  return request('/workflows/readiness');
+}
+
+export function generateContentWorkflow(payload) {
+  return request('/workflows/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function publishContentWorkflow(payload) {
+  return request('/workflows/publish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
