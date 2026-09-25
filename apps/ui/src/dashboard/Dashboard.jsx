@@ -1669,7 +1669,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             {loading ? (
               <AppShellSkeleton />
             ) : (
-              <>
+              <div
+                key={tab === 'automations' ? `${tab}-${automationRoute.view}-${automationRoute.chatId || 'new'}` : tab}
+                className="app-view-enter"
+              >
                 {authEnabled && !session && tab === 'library' && (
                   <AuthRequiredPanel
                     busy={busy}
@@ -1966,7 +1969,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     }}
                   />
                 )}
-              </>
+              </div>
             )}
           </div>
         </div>

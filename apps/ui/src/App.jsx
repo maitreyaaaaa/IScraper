@@ -52,18 +52,20 @@ export default function App() {
     };
   }, []);
 
-  if (route === 'app') return <Dashboard onBack={() => navigate('landing')} onOpenLogin={() => navigate('login')} onOpenHowTo={() => navigate('how-to-use')} />;
-  if (route === 'login') return <LoginPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />;
-  if (route === 'pricing') return <PricingPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} onOpenHelp={() => navigate('help')} />;
-  if (route === 'how-to-use') return <HowToUsePage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />;
-  if (route === 'terms') return <LegalPage type="terms" onBack={() => navigate('landing')} />;
-  if (route === 'privacy') return <LegalPage type="privacy" onBack={() => navigate('landing')} />;
-  if (route === 'security') return <LegalPage type="security" onBack={() => navigate('landing')} />;
-  if (route === 'admin') return <AdminSupportPage onBack={() => navigate('landing')} />;
-  if (route === 'data-deletion') return <LegalPage type="dataDeletion" onBack={() => navigate('landing')} />;
-  if (route === 'cookies') return <LegalPage type="cookies" onBack={() => navigate('landing')} />;
-  if (route === 'help') return <HelpCenterPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} onOpenHowTo={() => navigate('how-to-use')} />;
-  return (
+  const enterRoute = (page) => <div key={route} className="app-route-enter">{page}</div>;
+
+  if (route === 'app') return enterRoute(<Dashboard onBack={() => navigate('landing')} onOpenLogin={() => navigate('login')} onOpenHowTo={() => navigate('how-to-use')} />);
+  if (route === 'login') return enterRoute(<LoginPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />);
+  if (route === 'pricing') return enterRoute(<PricingPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} onOpenHelp={() => navigate('help')} />);
+  if (route === 'how-to-use') return enterRoute(<HowToUsePage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} />);
+  if (route === 'terms') return enterRoute(<LegalPage type="terms" onBack={() => navigate('landing')} />);
+  if (route === 'privacy') return enterRoute(<LegalPage type="privacy" onBack={() => navigate('landing')} />);
+  if (route === 'security') return enterRoute(<LegalPage type="security" onBack={() => navigate('landing')} />);
+  if (route === 'admin') return enterRoute(<AdminSupportPage onBack={() => navigate('landing')} />);
+  if (route === 'data-deletion') return enterRoute(<LegalPage type="dataDeletion" onBack={() => navigate('landing')} />);
+  if (route === 'cookies') return enterRoute(<LegalPage type="cookies" onBack={() => navigate('landing')} />);
+  if (route === 'help') return enterRoute(<HelpCenterPage onBack={() => navigate('landing')} onOpenApp={() => navigate('app')} onOpenHowTo={() => navigate('how-to-use')} />);
+  return enterRoute(
     <Landing
       onOpenApp={() => navigate('app')}
       onOpenLogin={() => navigate('login')}

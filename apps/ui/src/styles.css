@@ -268,7 +268,63 @@
     100% { transform: translateX(280%); }
   }
 
+  .app-route-enter {
+    min-height: 100dvh;
+    animation: app-route-enter 180ms ease-out both;
+  }
+
+  .app-view-enter {
+    animation: app-view-enter 170ms ease-out both;
+  }
+
+  button:not(:disabled) {
+    touch-action: manipulation;
+  }
+
+  button:not(:disabled):active {
+    transform: scale(0.985);
+  }
+
+  dialog[open] {
+    animation: app-dialog-enter 160ms ease-out both;
+  }
+
+  dialog[open]::backdrop {
+    animation: app-dialog-backdrop-enter 160ms ease-out both;
+  }
+
+  @keyframes app-route-enter {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes app-view-enter {
+    from { opacity: 0; transform: translateY(7px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes app-dialog-enter {
+    from { opacity: 0; transform: translateY(7px) scale(0.99); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  @keyframes app-dialog-backdrop-enter {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
+    .app-route-enter,
+    .app-view-enter,
+    dialog[open],
+    dialog[open]::backdrop {
+      animation: none;
+    }
+
+    button:not(:disabled):active {
+      transform: none;
+    }
+
     .is-loading-surface,
     .is-progress-fill,
     .is-progress-fill-indeterminate {
