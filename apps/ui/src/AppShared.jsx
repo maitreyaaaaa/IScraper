@@ -156,7 +156,7 @@ const STATE_FILTERS = ['all', 'searchable', 'failed'];
 
 const SORT_OPTIONS = ['newest', 'oldest'];
 
-const DASHBOARD_TABS = ['library', 'smart', 'workflows', 'care', 'graph', 'upload', 'settings'];
+const DASHBOARD_TABS = ['library', 'smart', 'workflows', 'automations', 'care', 'graph', 'upload', 'settings'];
 
 const SEARCH_MODES = ['saved', 'web'];
 
@@ -900,6 +900,10 @@ function resetPageScroll() {
 
 function replaceAppTabUrl(tab) {
   const params = new URLSearchParams(window.location.search);
+  if (tab !== 'automations') {
+    params.delete('view');
+    params.delete('chatId');
+  }
   if (tab === 'library') {
     params.delete('tab');
   } else {

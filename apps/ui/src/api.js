@@ -618,3 +618,119 @@ export function publishContentWorkflow(payload) {
     body: JSON.stringify(payload),
   });
 }
+
+export function getAutomations(filters = {}) {
+  const params = new URLSearchParams();
+  for (const key of ['triggerType', 'status', 'sort']) {
+    if (filters[key]) params.set(key, filters[key]);
+  }
+  return request(`/automations${params.size ? `?${params.toString()}` : ''}`);
+}
+
+export function getAutomationModels() {
+  return request('/automations/models');
+}
+
+export function draftAutomation(message, model) {
+  return request('/automations/draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, model }),
+  });
+}
+
+export function reviseAutomationDraft(draft, message, model) {
+  return request('/automations/revise', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ draft, message, model }),
+  });
+}
+
+export function createAutomation(payload) {
+  return request('/automations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateAutomation(id, payload) {
+  return request(`/automations/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteAutomation(id) {
+  return request(`/automations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function runAutomation(id) {
+  return request(`/automations/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
+export function getAutomationRuns(id) {
+  return request(`/automations/${encodeURIComponent(id)}/runs`);
+}
+
+export function getAutomationRunHistory(filters = {}) {
+  const params = new URLSearchParams();
+  for (const key of ['page', 'limit', 'status', 'automationId', 'from', 'to']) {
+    if (filters[key] !== undefined && filters[key] !== '') params.set(key, String(filters[key]));
+  }
+  return request(`/automation-runs${params.size ? `?${params.toString()}` : ''}`);
+}
+
+export function getAutomationChats(limit = 10) {
+  return request(`/automation-chats?limit=${encodeURIComponent(limit)}`);
+}
+
+export function createAutomationChat(model) {
+  return request('/automation-chats', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model }),
+  });
+}
+
+export function getAutomationChat(id) {
+  return request(`/automation-chats/${encodeURIComponent(id)}`);
+}
+
+export function updateAutomationChat(id, payload) {
+  return request(`/automation-chats/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function appendAutomationChatMessage(id, payload) {
+  return request(`/automation-chats/${encodeURIComponent(id)}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteAutomationChat(id) {
+  return request(`/automation-chats/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function getGmailConnections() {
+  return request('/automations/gmail/connections');
+}
+
+export function connectGmail(chatId = '') {
+  return request('/automations/gmail/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(chatId ? { chatId } : {}),
+  });
+}

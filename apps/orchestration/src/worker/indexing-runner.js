@@ -6,6 +6,7 @@ const { createLocalStore } = require('../stores/localStore');
 const { createSupabaseStore } = require('../stores/supabaseStore');
 const { createWorkerRuntime, runWorkerLoop } = require('../runtime/workerRuntime');
 const { assertWorkerPreflight, shouldRunWorkerPreflight } = require('./preflight');
+const { createAutomations } = require('../services/automations');
 
 function createStore(config) {
   return config.storageMode === 'supabase'
@@ -28,10 +29,13 @@ async function main() {
   }
   const shutdown = createShutdownController({ observability });
   registerShutdownHandlers(shutdown);
+  const store = createStore(config);
+  const automations = createAutomations({ store, config });
   const runtime = createWorkerRuntime({
-    store: createStore(config),
+    store,
     config,
     observability,
+    processScheduledAutomations: () => automations.runDueSchedules(config.automationScheduleBatchSize),
   });
   await runWorkerLoop({
     runtime,

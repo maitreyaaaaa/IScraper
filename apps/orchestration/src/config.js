@@ -1,14 +1,26 @@
 const path = require('path');
+const os = require('node:os');
 require('dotenv').config();
 
 const DATA_PATH = path.join(__dirname, '../../../data');
 
 function getConfig() {
+  const nodeEnv = process.env.NODE_ENV || 'development';
+  const storageMode = process.env.STORAGE_MODE || (process.env.SUPABASE_URL ? 'supabase' : 'local');
+  const vercelEnv = process.env.VERCEL_ENV;
+  const automationPreviewMockMode = process.env.AUTOMATION_PREVIEW_MOCK_MODE === 'true'
+    && vercelEnv === 'preview'
+    && storageMode === 'local';
+  const defaultDataPath = automationPreviewMockMode
+    ? path.join(os.tmpdir(), 'icebreaker-preview', process.env.VERCEL_DEPLOYMENT_ID || 'preview')
+    : DATA_PATH;
   return {
+    nodeEnv,
+    vercelEnv,
     port: Number(process.env.PORT || 3001),
-    dataPath: process.env.DATA_PATH || DATA_PATH,
-    videoDir: process.env.VIDEO_DIR || path.join(process.env.DATA_PATH || DATA_PATH, 'videos'),
-    storageMode: process.env.STORAGE_MODE || (process.env.SUPABASE_URL ? 'supabase' : 'local'),
+    dataPath: process.env.DATA_PATH || defaultDataPath,
+    videoDir: process.env.VIDEO_DIR || path.join(process.env.DATA_PATH || defaultDataPath, 'videos'),
+    storageMode,
     supabaseUrl: process.env.SUPABASE_URL,
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
     openAiApiKey: process.env.OPENAI_API_KEY,
@@ -23,6 +35,13 @@ function getConfig() {
     composioInstagramIgUserId: process.env.COMPOSIO_INSTAGRAM_IG_USER_ID,
     composioLinkedInConnectedAccountId: process.env.COMPOSIO_LINKEDIN_CONNECTED_ACCOUNT_ID,
     composioBaseUrl: process.env.COMPOSIO_BASE_URL || 'https://backend.composio.dev',
+    composioGmailAuthConfigId: process.env.COMPOSIO_GMAIL_AUTH_CONFIG_ID,
+    composioCallbackVerifierConfigured: process.env.COMPOSIO_CALLBACK_VERIFIER_CONFIGURED === 'true',
+    automationConnectStateSecret: process.env.AUTOMATION_CONNECT_STATE_SECRET,
+    automationMockMode: process.env.AUTOMATION_MOCK_MODE === 'true' && nodeEnv !== 'production' && storageMode === 'local',
+    automationPreviewMockMode,
+    automationScheduleBatchSize: Number(process.env.AUTOMATION_SCHEDULE_BATCH_SIZE || 5),
+    automationMaxMessages: Number(process.env.AUTOMATION_MAX_MESSAGES || 10),
     aiSearchModel: process.env.AI_SEARCH_MODEL || process.env.OPENAI_MODEL || 'gpt-4o',
     openAiMediaModel: process.env.OPENAI_MEDIA_MODEL || process.env.OPENAI_MODEL || 'gpt-4o',
     openAiEmbeddingModel: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',

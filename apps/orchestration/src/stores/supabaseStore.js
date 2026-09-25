@@ -402,7 +402,7 @@ function createSupabaseStore({ url, serviceRoleKey }) {
       return { deletedObjects, buckets: bucketResults };
     },
     async deleteUserContentData(userId) {
-      const tables = ['search_result_feedback', 'search_events', 'processing_jobs', 'smart_collection_items', 'smart_collections', 'item_visual_embeddings', 'item_embeddings', 'item_analysis', 'item_assets', 'item_archives', 'link_health_checks', 'item_reminders', 'saved_items', 'collections', 'imports', 'lens_search_events'];
+      const tables = ['automation_chat_messages', 'automation_chats', 'automation_runs', 'automations', 'search_result_feedback', 'search_events', 'processing_jobs', 'smart_collection_items', 'smart_collections', 'item_visual_embeddings', 'item_embeddings', 'item_analysis', 'item_assets', 'item_archives', 'link_health_checks', 'item_reminders', 'saved_items', 'collections', 'imports', 'lens_search_events'];
       return deleteUserRowsFromTables(client, userId, tables);
     },
     async deleteUserAccessData(userId) {
@@ -536,12 +536,28 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     },
     async getDataExportPayload(userId) {
       const privacy = await this.getPrivacyExport(userId);
-      const [itemAssets, transactions, purchases, adjustments, exportRequests] = await Promise.all([
+      const [itemAssets, transactions, purchases, adjustments, exportRequests, automations, automationRuns, automationChats, automationChatMessages] = await Promise.all([
         selectAllUserRows(client, 'item_assets', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'credit_transactions', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'credit_purchases', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'admin_credit_adjustments', userId, '*', (query) => query.order('created_at', { ascending: false })),
         selectAllUserRows(client, 'user_data_export_requests', userId, '*', (query) => query.order('requested_at', { ascending: false })).catch((err) => {
+          if (err?.code === '42P01') return [];
+          throw err;
+        }),
+        selectAllUserRows(client, 'automations', userId, '*', (query) => query.order('created_at', { ascending: false })).catch((err) => {
+          if (err?.code === '42P01') return [];
+          throw err;
+        }),
+        selectAllUserRows(client, 'automation_runs', userId, '*', (query) => query.order('started_at', { ascending: false })).catch((err) => {
+          if (err?.code === '42P01') return [];
+          throw err;
+        }),
+        selectAllUserRows(client, 'automation_chats', userId, '*', (query) => query.order('updated_at', { ascending: false })).catch((err) => {
+          if (err?.code === '42P01') return [];
+          throw err;
+        }),
+        selectAllUserRows(client, 'automation_chat_messages', userId, '*', (query) => query.order('created_at', { ascending: true })).catch((err) => {
           if (err?.code === '42P01') return [];
           throw err;
         }),
@@ -570,6 +586,10 @@ function createSupabaseStore({ url, serviceRoleKey }) {
           adminCreditAdjustments: adjustments.map(mapAdminCreditAdjustment),
         },
         exportRequests: exportRequests.map((row) => mapDataExportRequest(row, [])),
+        automations: automations.map(mapAutomationExport),
+        automationRuns: automationRuns.map(mapAutomationRunExport),
+        automationChats,
+        automationChatMessages,
       };
     },
     async createDataExportRequest(userId, { includeFiles = false, requestId = '', correlationId = '' } = {}) {
@@ -3449,6 +3469,37 @@ function mergeSearchResults({ items, keywordResults, semanticMatches, filters = 
     })
     .filter(Boolean)
     .slice(0, filters.limit || 30);
+}
+
+function mapAutomationExport(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    prompt: row.prompt,
+    triggerType: row.trigger_type,
+    triggerConfig: row.trigger_config || {},
+    gmailQuery: row.gmail_query || '',
+    maxMessages: row.max_messages,
+    model: row.model,
+    status: row.status,
+    nextRunAt: row.next_run_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAutomationRunExport(row) {
+  return {
+    id: row.id,
+    automationId: row.automation_id,
+    triggerType: row.trigger_type,
+    status: row.status,
+    summary: row.summary || '',
+    error: row.error || '',
+    activity: Array.isArray(row.activity) ? row.activity : [],
+    startedAt: row.started_at,
+    finishedAt: row.finished_at || null,
+  };
 }
 
 module.exports = {

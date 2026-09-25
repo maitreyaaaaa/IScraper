@@ -2,10 +2,15 @@
 .env.*
 !.env.example
 
+# Local browser profiles and Codex runtime state are never deployment inputs.
+.codex-logs/
+.codex-runtime-logs/
+
 data/
 output/
 Screenshots/
 Logo/
+Proofs Created/
 mobile-home*.png
 server.*.log
 *.log

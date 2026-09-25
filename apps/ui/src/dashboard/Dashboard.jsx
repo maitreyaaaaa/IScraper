@@ -88,6 +88,7 @@ import {
   updateReviewItem,
   updateSmartCollection,
   Upload,
+  Zap,
   uploadImportFilesToStorage,
   useCallback,
   useEffect,
@@ -114,8 +115,39 @@ import { DetailDrawer } from './DetailDrawer.jsx';
 import { QuickAddModal } from './QuickAddModal.jsx';
 import { AccountSettingsModal } from './AccountSettingsModal.jsx';
 import WorkflowsTab from './WorkflowsTab.jsx';
+import AutomationWorkspace from './AutomationWorkspace.jsx';
+import { getAutomationChats } from '../api';
+import { ChevronDown, Clock3, History, MessageSquarePlus, Workflow } from 'lucide-react';
+
+const AUTOMATION_VIEW_LINKS = [
+  ['new-chat', 'New Chat', MessageSquarePlus],
+  ['my-automations', 'My Automations', Workflow],
+  ['scheduled-tasks', 'Scheduled Tasks', Clock3],
+  ['run-history', 'Run History', History],
+];
+
+function automationRouteFromLocation() {
+  const params = appParamsFromLocation();
+  const value = params.get('view');
+  const view = AUTOMATION_VIEW_LINKS.some(([key]) => key === value) ? value : 'my-automations';
+  return { view, chatId: view === 'new-chat' ? params.get('chatId') || '' : '' };
+}
+
+function automationUrl(view, chatId = '') {
+  const params = new URLSearchParams(window.location.search);
+  params.set('tab', 'automations');
+  params.set('view', view);
+  if (view === 'new-chat' && chatId) params.set('chatId', chatId);
+  else params.delete('chatId');
+  params.delete('gmailConnection');
+  return `/app?${params.toString()}`;
+}
+
 function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   const [tab, setTab] = useState(() => dashboardTabFromLocation());
+  const [automationRoute, setAutomationRoute] = useState(() => automationRouteFromLocation());
+  const [automationMenuExpanded, setAutomationMenuExpanded] = useState(() => appParamsFromLocation().get('tab') === 'automations');
+  const [automationRecentChats, setAutomationRecentChats] = useState([]);
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [stateFilter, setStateFilter] = useState('all');
@@ -512,7 +544,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   }, [authEnabled]);
 
   useEffect(() => {
-    if (loading || !canUsePrivateActions) return undefined;
+    if (loading || !canUsePrivateActions || tab === 'automations') return undefined;
     let cancelled = false;
     let firstFrame;
     let secondFrame;
@@ -531,7 +563,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       window.cancelAnimationFrame(firstFrame);
       window.cancelAnimationFrame(secondFrame);
     };
-  }, [canUsePrivateActions, loadItems, loading]);
+  }, [canUsePrivateActions, loadItems, loading, tab]);
 
   useEffect(() => {
     gsap.set([sidebarRef.current, '.dash-panel', '.dash-panel-inner'], { clearProps: 'opacity,transform' });
@@ -540,6 +572,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   useEffect(() => {
     const onDashboardLocationChange = () => {
       setTab(dashboardTabFromLocation());
+      setAutomationRoute(automationRouteFromLocation());
       if (appParamsFromLocation().get('tab') === 'gallery') {
         setLibraryLayout('gallery');
       }
@@ -554,9 +587,9 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   }, []);
 
   useEffect(() => {
-    if (!canUsePrivateActions || searchResults !== null) return;
+    if (!canUsePrivateActions || tab === 'automations' || searchResults !== null) return;
     loadLibraryPage({ reset: true });
-  }, [canUsePrivateActions, loadLibraryPage, searchResults]);
+  }, [canUsePrivateActions, loadLibraryPage, searchResults, tab]);
 
   useEffect(() => {
     if (!canUsePrivateActions || tab !== 'smart') return;
@@ -607,7 +640,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       { opacity: 0.92, y: 6 },
       { opacity: 1, y: 0, duration: 0.18, ease: 'power2.out', clearProps: 'opacity,transform' },
     );
-  }, [tab]);
+  }, [tab, automationRoute.view]);
 
   const searchActive = searchResults !== null;
   const boardItems = searchActive ? searchResults : libraryItems;
@@ -1230,10 +1263,39 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
     ['library', 'Saved library', Brain],
     ['smart', 'Smart Collections', Folder],
     ['workflows', 'Workflows', Bot],
+    ['automations', 'Automations', Zap],
     ['upload', 'Add saves', Upload],
   ];
   const SidebarToggleIcon = sidebarExpanded ? PanelLeftClose : PanelLeftOpen;
   const sidebarVisibleExpanded = sidebarExpanded || sidebarHoverExpanded;
+
+  const navigateAutomation = useCallback((view = 'my-automations', chatId = '', { replace = false } = {}) => {
+    const nextView = AUTOMATION_VIEW_LINKS.some(([key]) => key === view) ? view : 'my-automations';
+    const nextUrl = automationUrl(nextView, chatId);
+    if (replace) window.history.replaceState({}, document.title, nextUrl);
+    else window.history.pushState({}, document.title, nextUrl);
+    setTab('automations');
+    setAutomationRoute({ view: nextView, chatId: nextView === 'new-chat' ? chatId : '' });
+    setAutomationMenuExpanded(true);
+    resetPageScroll();
+  }, []);
+
+  const refreshAutomationChats = useCallback(async () => {
+    if (!canUsePrivateActions || (tab !== 'automations' && (!sidebarVisibleExpanded || !automationMenuExpanded))) return;
+    const body = await getAutomationChats(8);
+    setAutomationRecentChats(body.chats || []);
+  }, [automationMenuExpanded, canUsePrivateActions, sidebarVisibleExpanded, tab]);
+
+  useEffect(() => {
+    if (!canUsePrivateActions || (tab !== 'automations' && (!sidebarVisibleExpanded || !automationMenuExpanded))) return undefined;
+    let cancelled = false;
+    getAutomationChats(8).then((body) => {
+      if (!cancelled) setAutomationRecentChats(body.chats || []);
+    }).catch(() => {
+      if (!cancelled) setAutomationRecentChats([]);
+    });
+    return () => { cancelled = true; };
+  }, [automationMenuExpanded, canUsePrivateActions, sidebarVisibleExpanded, tab]);
 
   const selectTab = useCallback((nextTab, options = {}) => {
     if (!DASHBOARD_TABS.includes(nextTab)) return;
@@ -1243,10 +1305,15 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
       sidebarHoverTimerRef.current = null;
     }
     setSidebarHoverExpanded(false);
+    if (nextTab === 'automations') {
+      navigateAutomation('my-automations');
+      return;
+    }
     setTab(nextTab);
+    setAutomationRoute(automationRouteFromLocation());
     replaceAppTabUrl(nextTab);
     resetPageScroll();
-  }, []);
+  }, [navigateAutomation]);
 
   const handleVisualSearch = useCallback(async (file) => {
     if (!requireSignIn('search by image')) return;
@@ -1414,7 +1481,74 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
           </div>
         )}
         <nav className={`flex-1 space-y-1 p-3 ${sidebarVisibleExpanded ? '' : 'flex flex-col items-center'}`}>
-          {navItems.map(([key, title, Icon]) => (
+          {navItems.map(([key, title, Icon]) => key === 'automations' ? (
+            <div key={key} className={sidebarVisibleExpanded ? 'w-full' : 'w-11'}>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => navigateAutomation('my-automations')}
+                  title={title}
+                  aria-label={title}
+                  aria-current={tab === 'automations' ? 'page' : undefined}
+                  className={`flex min-w-0 flex-1 items-center rounded-lg text-sm transition ${
+                    tab === 'automations' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                  } ${sidebarVisibleExpanded ? 'gap-3 px-3 py-2.5' : 'h-11 w-11 justify-center'}`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {sidebarVisibleExpanded && <span className="truncate">{title}</span>}
+                </button>
+                {sidebarVisibleExpanded && (
+                  <button
+                    type="button"
+                    onClick={() => setAutomationMenuExpanded((current) => !current)}
+                    aria-label={automationMenuExpanded ? 'Collapse automation links' : 'Expand automation links'}
+                    aria-expanded={automationMenuExpanded}
+                    className="grid h-9 w-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground"
+                  >
+                    <ChevronDown className={`h-4 w-4 transition-transform ${automationMenuExpanded ? '' : '-rotate-90'}`} />
+                  </button>
+                )}
+              </div>
+              {sidebarVisibleExpanded && automationMenuExpanded && (
+                <div className="ml-3 mt-1 space-y-0.5 border-l border-white/10 pl-2" aria-label="Automation views">
+                  {AUTOMATION_VIEW_LINKS.map(([view, label, ViewIcon]) => (
+                    <button
+                      type="button"
+                      key={view}
+                      onClick={() => navigateAutomation(view)}
+                      aria-current={tab === 'automations' && automationRoute.view === view && !automationRoute.chatId ? 'page' : undefined}
+                      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition ${
+                        tab === 'automations' && automationRoute.view === view && !automationRoute.chatId
+                          ? 'bg-white/10 text-foreground'
+                          : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                      }`}
+                    >
+                      <ViewIcon className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{label}</span>
+                    </button>
+                  ))}
+                  <div className="px-2.5 pb-1 pt-3 text-[10px] font-medium uppercase text-muted-foreground">Recent chats</div>
+                  {automationRecentChats.length ? automationRecentChats.map((chat) => (
+                    <button
+                      type="button"
+                      key={chat.id}
+                      onClick={() => navigateAutomation('new-chat', chat.id)}
+                      title={chat.title}
+                      aria-current={tab === 'automations' && automationRoute.view === 'new-chat' && automationRoute.chatId === chat.id ? 'page' : undefined}
+                      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition ${
+                        tab === 'automations' && automationRoute.view === 'new-chat' && automationRoute.chatId === chat.id
+                          ? 'bg-white/10 text-foreground'
+                          : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                      }`}
+                    >
+                      <MessageSquarePlus className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{chat.title || 'Automation chat'}</span>
+                    </button>
+                  )) : <p className="px-2.5 py-2 text-xs text-muted-foreground">No chats yet</p>}
+                </div>
+              )}
+            </div>
+          ) : (
             <button
               key={key}
               onClick={() => selectTab(key)}
@@ -1487,18 +1621,20 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
             )}
           </div>
         </div>
-        <div
-          title={`${stats.total} saved items`}
-          className={`border-t border-white/5 p-4 font-mono text-[10px] uppercase tracking-widest text-muted-foreground ${
-            sidebarVisibleExpanded ? '' : 'grid place-items-center'
-          }`}
-        >
-          {sidebarVisibleExpanded ? `${stats.total} saved items` : <Database className="h-4 w-4" />}
-        </div>
+        {tab !== 'automations' && (
+          <div
+            title={`${stats.total} saved items`}
+            className={`border-t border-white/5 p-4 font-mono text-[10px] uppercase tracking-widest text-muted-foreground ${
+              sidebarVisibleExpanded ? '' : 'grid place-items-center'
+            }`}
+          >
+            {sidebarVisibleExpanded ? `${stats.total} saved items` : <Database className="h-4 w-4" />}
+          </div>
+        )}
       </aside>
 
       <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-        {canUsePrivateActions && (
+        {canUsePrivateActions && tab !== 'automations' && (
           <button
             type="button"
             onClick={() => setQuickAddOpen(true)}
@@ -1519,6 +1655,10 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
               session={session}
               profile={profile}
               onOpenAccount={() => selectTab('settings')}
+              automationView={automationRoute.view}
+              onSelectAutomationView={(view) => navigateAutomation(view)}
+              automationRecentChats={automationRecentChats}
+              onSelectAutomationChat={(chatId) => navigateAutomation('new-chat', chatId)}
             />
             {(error || notice) && (
               <div className="mx-auto max-w-6xl px-6 pt-6 md:px-12">
@@ -1645,6 +1785,26 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     busy={busy}
                     onError={setError}
                     onNotice={setNotice}
+                  />
+                )}
+                {authEnabled && !session && tab === 'automations' && (
+                  <AuthRequiredPanel busy={busy} onSignIn={onOpenLogin} />
+                )}
+                {authEnabled && session && profileRequired && tab === 'automations' && (
+                  <ProfileRequiredPanel
+                    profileForm={profileForm}
+                    setProfileForm={setProfileForm}
+                    onAvatarFile={handleAvatarFile}
+                    onSave={handleProfileSave}
+                    busy={busy}
+                  />
+                )}
+                {canUsePrivateActions && tab === 'automations' && (
+                  <AutomationWorkspace
+                    view={automationRoute.view}
+                    chatId={automationRoute.chatId}
+                    onNavigate={navigateAutomation}
+                    onChatsChanged={refreshAutomationChats}
                   />
                 )}
                 {authEnabled && !session && tab === 'care' && (
@@ -1859,7 +2019,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
   );
 }
 
-function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOpenAccount }) {
+function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOpenAccount, automationView, onSelectAutomationView, automationRecentChats, onSelectAutomationChat }) {
   const avatarUrl = avatarUrlForSession(session, profile);
   const initial = initialForSession(session, profile);
   return (
@@ -1880,11 +2040,12 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
           </button>
         )}
       </div>
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-6 gap-2">
         {[
           ['library', 'Library'],
           ['smart', 'Smart'],
           ['workflows', 'Flows'],
+          ['automations', 'Automate'],
           ['upload', 'Add'],
           ['settings', 'Settings'],
         ].map(([key, label]) => (
@@ -1898,6 +2059,38 @@ function MobileTopbar({ onBack, tab, setTab, onOpenHowTo, session, profile, onOp
           </button>
         ))}
       </div>
+      {tab === 'automations' && (
+        <>
+          <div className="mt-2 grid grid-cols-4 gap-1" aria-label="Automation views">
+            {AUTOMATION_VIEW_LINKS.map(([view, label]) => (
+              <button
+                type="button"
+                key={view}
+                onClick={() => onSelectAutomationView(view)}
+                aria-current={automationView === view ? 'page' : undefined}
+                className={`min-w-0 truncate rounded-md px-1 py-2 text-[11px] ${automationView === view ? 'bg-white/15 text-foreground' : 'border border-white/10 text-muted-foreground'}`}
+              >
+                {label === 'My Automations' ? 'My Automations' : label === 'Scheduled Tasks' ? 'Scheduled' : label === 'Run History' ? 'History' : label}
+              </button>
+            ))}
+          </div>
+          {automationRecentChats?.length > 0 && (
+            <div className="mt-2 flex gap-2 overflow-x-auto pb-1" aria-label="Recent automation chats">
+              {automationRecentChats.map((chat) => (
+                <button
+                  type="button"
+                  key={chat.id}
+                  onClick={() => onSelectAutomationChat(chat.id)}
+                  title={chat.title}
+                  className={`max-w-48 shrink-0 truncate rounded-full border px-3 py-1.5 text-xs ${automationView === 'new-chat' ? 'border-primary/40 text-foreground' : 'border-white/10 text-muted-foreground'}`}
+                >
+                  {chat.title || 'Automation chat'}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
       <button
         type="button"
         onClick={onOpenHowTo}

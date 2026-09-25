@@ -90,6 +90,11 @@ function seedFromLegacyIndex(dataPath) {
     dataExportSteps: [],
     dataExportArtifacts: [],
     securityAuditEvents: [],
+    mockGmailConnections: [],
+    automations: [],
+    automationRuns: [],
+    automationChats: [],
+    automationChatMessages: [],
     items: legacy.map((item) => ({
       ...item,
       userId: DEFAULT_USER_ID,
@@ -199,6 +204,11 @@ function normalizeState(state) {
     dataExportSteps: state.dataExportSteps || [],
     dataExportArtifacts: state.dataExportArtifacts || [],
     securityAuditEvents: state.securityAuditEvents || [],
+    mockGmailConnections: state.mockGmailConnections || [],
+    automations: state.automations || [],
+    automationRuns: state.automationRuns || [],
+    automationChats: state.automationChats || [],
+    automationChatMessages: state.automationChatMessages || [],
   };
 }
 
@@ -447,6 +457,183 @@ function createLocalStore({ dataPath }) {
     ensureUserRecord,
     assertUserNotDeleted,
 
+    connectMockGmail(userId) {
+      const existing = state.mockGmailConnections.find((entry) => entry.userId === userId);
+      if (existing) return structuredClone(existing);
+      const connection = { userId, connectedAt: now() };
+      state.mockGmailConnections.push(connection);
+      save();
+      return structuredClone(connection);
+    },
+
+    hasMockGmailConnection(userId) {
+      return state.mockGmailConnections.some((entry) => entry.userId === userId);
+    },
+
+    listAutomations(userId) {
+      return state.automations.filter((entry) => entry.userId === userId)
+        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+        .slice(0, 100)
+        .map((entry) => structuredClone(entry));
+    },
+
+    getAutomation(userId, id) {
+      const entry = state.automations.find((automation) => automation.userId === userId && automation.id === id);
+      return entry ? structuredClone(entry) : null;
+    },
+
+    saveAutomation(userId, automation) {
+      const existing = state.automations.find((entry) => entry.userId === userId && entry.id === automation.id);
+      const next = {
+        ...automation,
+        userId,
+        createdAt: existing?.createdAt || automation.createdAt || now(),
+        updatedAt: now(),
+      };
+      if (existing) Object.assign(existing, next);
+      else state.automations.push(next);
+      save();
+      return structuredClone(next);
+    },
+
+    createAutomationRun(userId, automationId, triggerType) {
+      const timestamp = now();
+      const run = {
+        id: crypto.randomUUID(), userId, automationId, triggerType, status: 'running',
+        summary: '', error: '', activity: [{ state: 'received', at: timestamp }],
+        startedAt: timestamp, finishedAt: null,
+      };
+      state.automationRuns.push(run);
+      save();
+      return structuredClone(run);
+    },
+
+    updateAutomationRun(userId, runId, patch) {
+      const run = state.automationRuns.find((entry) => entry.userId === userId && entry.id === runId);
+      if (!run) return null;
+      Object.assign(run, patch);
+      save();
+      return structuredClone(run);
+    },
+
+    listAutomationRuns(userId, automationId, limit = 25) {
+      return state.automationRuns.filter((entry) => entry.userId === userId && entry.automationId === automationId)
+        .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
+        .slice(0, Math.max(1, Math.min(50, Number(limit) || 25)))
+        .map((entry) => structuredClone(entry));
+    },
+
+    listAllAutomationRuns(userId, options = {}) {
+      const page = Math.max(1, Math.min(10000, Number(options.page) || 1));
+      const limit = Math.max(1, Math.min(50, Number(options.limit) || 25));
+      const automationNames = new Map(state.automations
+        .filter((entry) => entry.userId === userId)
+        .map((entry) => [entry.id, entry.name]));
+      let matches = state.automationRuns.filter((entry) => entry.userId === userId);
+      if (options.status) matches = matches.filter((entry) => entry.status === options.status);
+      if (options.automationId) matches = matches.filter((entry) => entry.automationId === options.automationId);
+      if (options.from) matches = matches.filter((entry) => String(entry.startedAt) >= options.from);
+      if (options.to) matches = matches.filter((entry) => String(entry.startedAt) <= options.to);
+      matches.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)) || String(b.id).localeCompare(String(a.id)));
+      const total = matches.length;
+      const start = (page - 1) * limit;
+      const runs = matches.slice(start, start + limit).map((entry) => ({
+        ...structuredClone(entry),
+        automationName: automationNames.get(entry.automationId) || 'Deleted automation',
+      }));
+      return { runs, page, limit, total, hasMore: start + runs.length < total };
+    },
+
+    listAutomationChats(userId, limit = 10) {
+      return state.automationChats.filter((entry) => entry.userId === userId)
+        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+        .slice(0, Math.max(1, Math.min(20, Number(limit) || 10)))
+        .map(({ id, title, model, automationId, createdAt, updatedAt }) => structuredClone({ id, title, model, automationId, createdAt, updatedAt }));
+    },
+
+    getAutomationChat(userId, id) {
+      const chat = state.automationChats.find((entry) => entry.userId === userId && entry.id === id);
+      if (!chat) return null;
+      const messages = state.automationChatMessages.filter((entry) => entry.userId === userId && entry.chatId === id)
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
+      return structuredClone({ ...chat, messages });
+    },
+
+    createAutomationChat(userId, chat) {
+      const timestamp = now();
+      const entry = {
+        ...chat, userId,
+        createdAt: chat.createdAt || timestamp,
+        updatedAt: timestamp,
+      };
+      state.automationChats.push(entry);
+      save();
+      return structuredClone({ ...entry, messages: [] });
+    },
+
+    updateAutomationChat(userId, id, patch) {
+      const chat = state.automationChats.find((entry) => entry.userId === userId && entry.id === id);
+      if (!chat) return null;
+      Object.assign(chat, patch, { updatedAt: now() });
+      save();
+      return structuredClone({ ...chat, messages: [] });
+    },
+
+    appendAutomationChatMessage(userId, chatId, message) {
+      const chat = state.automationChats.find((entry) => entry.userId === userId && entry.id === chatId);
+      if (!chat) return null;
+      const entry = { ...message, userId, chatId, id: crypto.randomUUID(), createdAt: now() };
+      state.automationChatMessages.push(entry);
+      chat.updatedAt = entry.createdAt;
+      save();
+      return structuredClone(entry);
+    },
+
+    deleteAutomationChat(userId, id) {
+      const before = state.automationChats.length;
+      state.automationChats = state.automationChats.filter((entry) => !(entry.userId === userId && entry.id === id));
+      if (state.automationChats.length === before) return false;
+      state.automationChatMessages = state.automationChatMessages.filter((entry) => !(entry.userId === userId && entry.chatId === id));
+      save();
+      return true;
+    },
+
+    deleteAutomation(userId, id) {
+      const before = state.automations.length;
+      state.automations = state.automations.filter((entry) => !(entry.userId === userId && entry.id === id));
+      if (state.automations.length === before) return false;
+      state.automationRuns = state.automationRuns.filter((entry) => !(entry.userId === userId && entry.automationId === id));
+      save();
+      return true;
+    },
+
+    claimDueAutomations(limit = 5) {
+      const current = Date.now();
+      const due = state.automations
+        .filter((entry) => entry.triggerType === 'schedule' && entry.status === 'active' && Date.parse(entry.nextRunAt) <= current && (!entry.scheduleLeaseUntil || Date.parse(entry.scheduleLeaseUntil) <= current))
+        .sort((a, b) => Date.parse(a.nextRunAt) - Date.parse(b.nextRunAt))
+        .slice(0, Math.max(1, Math.min(10, Number(limit) || 5)));
+      for (const automation of due) {
+        automation.scheduleLeaseUntil = new Date(current + 10 * 60_000).toISOString();
+        automation.scheduleLeaseToken = crypto.randomUUID();
+        automation.updatedAt = now();
+      }
+      if (due.length) save();
+      return due.map((entry) => structuredClone(entry));
+    },
+
+    completeAutomationSchedule(userId, id, leaseToken) {
+      const automation = state.automations.find((entry) => entry.userId === userId && entry.id === id && entry.scheduleLeaseToken === leaseToken);
+      if (!automation) return false;
+      const intervalMinutes = Math.max(60, Math.min(43200, Number(automation.triggerConfig?.everyMinutes) || 1440));
+      automation.nextRunAt = new Date(Date.now() + intervalMinutes * 60_000).toISOString();
+      automation.scheduleLeaseUntil = null;
+      automation.scheduleLeaseToken = null;
+      automation.updatedAt = now();
+      save();
+      return true;
+    },
+
     getActiveDeletionRequest(userId) {
       return mapDeletionRequest(activeDeletionRequestForUser(userId));
     },
@@ -694,6 +881,11 @@ function createLocalStore({ dataPath }) {
         lensSearchEvents: deleteFromArrayByUser('lensSearchEvents', userId),
         searchEvents: deleteFromArrayByUser('searchEvents', userId),
         searchFeedback: deleteFromArrayByUser('searchFeedback', userId),
+        automations: deleteFromArrayByUser('automations', userId),
+        automationRuns: deleteFromArrayByUser('automationRuns', userId),
+        automationChats: deleteFromArrayByUser('automationChats', userId),
+        automationChatMessages: deleteFromArrayByUser('automationChatMessages', userId),
+        mockGmailConnections: deleteFromArrayByUser('mockGmailConnections', userId),
       };
       save();
       return deleted;
@@ -839,6 +1031,10 @@ function createLocalStore({ dataPath }) {
         searchFeedback: privacy.searchFeedback,
         userActivity: privacy.userActivity,
         analysisUsage: privacy.analysisUsage,
+        automations: state.automations.filter((entry) => entry.userId === userId).map((entry) => structuredClone(entry)),
+        automationRuns: state.automationRuns.filter((entry) => entry.userId === userId).map((entry) => structuredClone(entry)),
+        automationChats: state.automationChats.filter((entry) => entry.userId === userId).map((entry) => structuredClone(entry)),
+        automationChatMessages: state.automationChatMessages.filter((entry) => entry.userId === userId).map((entry) => structuredClone(entry)),
         onboarding: privacy.onboarding,
         billing: {
           credits: privacy.credits,

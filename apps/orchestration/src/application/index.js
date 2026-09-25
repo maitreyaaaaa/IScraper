@@ -1,4 +1,6 @@
 const { createArchiveWorkflow } = require('./archiveWorkflow');
+const { createAutomations } = require('../services/automations');
+const { createAutomationChats } = require('../services/automationChats');
 const { createBillingWorkflow } = require('./billingWorkflow');
 const { createImportWorkflow } = require('./importWorkflow');
 const { createLibraryWorkflow } = require('./libraryWorkflow');
@@ -17,9 +19,12 @@ function createWorkflows({ store, config, http, observability = null }) {
   const archive = createArchiveWorkflow({ store, config });
   const library = createLibraryWorkflow({ store, config, worker });
   const imports = createImportWorkflow({ store, config, archive, library, worker });
+  const automations = createAutomations({ store, config });
 
   return {
     archive,
+    automations,
+    automationChats: createAutomationChats({ store, automations }),
     billing: createBillingWorkflow({ store, config }),
     imports,
     library,

@@ -45,6 +45,8 @@ test('user data registry covers known user-owned data tables', () => {
     'credit_transactions',
     'account_deletion_requests',
     'user_data_export_requests',
+    'automations',
+    'automation_runs',
   ].forEach((table) => {
     assert.ok(represented.has(table) || excluded.has(table), `${table} must be represented or explicitly excluded`);
     assert.ok(TABLE_DATA_CLASSIFICATIONS[table], `${table} must have a data classification`);

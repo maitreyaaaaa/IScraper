@@ -1,11 +1,12 @@
 const { processImportJobs } = require('../services/worker');
 const { processDataExportRequests } = require('../services/dataExportPipeline');
 
-function createWorkerRuntime({ store, config = {}, observability = null }) {
+function createWorkerRuntime({ store, config = {}, observability = null, processScheduledAutomations = null }) {
   return {
     store,
     config,
     observability: observability || noopObservability(),
+    processScheduledAutomations,
     worker: normalizeWorkerConfig(config),
   };
 }
@@ -139,12 +140,15 @@ async function runWorkerLoop({ runtime, sleep = defaultSleep, shouldContinue = (
   });
 
   if (worker.runOnce) {
-    return runWorkerPass({ runtime, maxJobs: worker.batchSize, scopeLimit: worker.scanLimit });
+    const result = await runWorkerPass({ runtime, maxJobs: worker.batchSize, scopeLimit: worker.scanLimit });
+    result.scheduledAutomationCount = await processScheduledAutomations(runtime);
+    return result;
   }
 
   let passCount = 0;
   while (shouldContinue()) {
     const result = await runWorkerPass({ runtime, maxJobs: worker.batchSize, scopeLimit: worker.scanLimit });
+    result.scheduledAutomationCount = await processScheduledAutomations(runtime);
     passCount += 1;
     if (!shouldContinue()) break;
     await sleep(result.processedCount > 0 ? 250 : worker.idleMs);
@@ -152,6 +156,21 @@ async function runWorkerLoop({ runtime, sleep = defaultSleep, shouldContinue = (
 
   observability.info('worker loop stopped', { passCount });
   return { stopped: true, passCount };
+}
+
+async function processScheduledAutomations(runtime) {
+  if (typeof runtime.processScheduledAutomations !== 'function') return 0;
+  try {
+    const result = await runtime.processScheduledAutomations();
+    if (result?.claimed) runtime.observability.info('scheduled automations processed', { count: result.claimed });
+    return Number(result?.claimed || 0);
+  } catch (error) {
+    runtime.observability.error('scheduled automation pass failed', {
+      errorName: error?.name || 'Error',
+      errorMessage: error?.message || 'Scheduled automation pass failed.',
+    });
+    return 0;
+  }
 }
 
 async function processIndexingScope({ runtime, userId, importId = null, maxJobs = null, download = false }) {

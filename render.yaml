@@ -39,5 +39,19 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: COMPOSIO_API_KEY
+        sync: false
+      - key: COMPOSIO_GMAIL_AUTH_CONFIG_ID
+        sync: false
+      - key: COMPOSIO_CALLBACK_VERIFIER_CONFIGURED
+        value: "false"
+      - key: AUTOMATION_CONNECT_STATE_SECRET
+        sync: false
+      - key: AUTOMATION_SCHEDULE_BATCH_SIZE
+        value: "5"
+      - key: AUTOMATION_MAX_MESSAGES
+        value: "10"
       - key: POSTHOG_PROJECT_KEY
         sync: false

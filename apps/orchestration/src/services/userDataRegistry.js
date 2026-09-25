@@ -16,6 +16,22 @@ const USER_DATA_CATEGORIES = [
     redaction: 'Exports do not include auth sessions, passwords, or internal admin credentials.',
   },
   {
+    key: 'automations',
+    label: 'Automations and run history',
+    description: 'Saved Gmail-reading automation settings and generated run summaries.',
+    purpose: 'Let users create, schedule, review, and manage their personal automations.',
+    classification: 'private_content',
+    sensitivity: 'private_content',
+    exportPath: 'automations/*.json',
+    retention: 'Kept until the user deletes an automation or deletes the account.',
+    retentionPeriod: 'Until user or account deletion.',
+    retentionDays: null,
+    minimization: 'Run history stores summaries and status metadata, not raw email message bodies.',
+    deletion: 'Automation definitions and run history are deleted during approved account deletion.',
+    tables: ['automation_chat_messages', 'automation_chats', 'automation_runs', 'automations'],
+    redaction: 'OAuth tokens and raw Gmail messages are held outside the automation database and are not exported; saved conversations retain user prompts and concise assistant summaries.',
+  },
+  {
     key: 'library',
     label: 'Saved library',
     description: 'Saved links, notes, imported saves, collections, smart collections, reminders, and page-archive metadata.',
@@ -162,6 +178,8 @@ const TABLE_DATA_CLASSIFICATIONS = {
   item_embeddings: 'operational',
   item_visual_embeddings: 'operational',
   processing_jobs: 'operational',
+  automations: 'private_content',
+  automation_runs: 'private_content',
 };
 
 const SECRET_LIFECYCLE_RULES = [

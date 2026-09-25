@@ -20,6 +20,7 @@ const { registerPublicSearchRoutes } = require('./routes/searchRoutes');
 const { registerPublicRoutes } = require('./routes/publicRoutes');
 const { registerWorkerRoutes } = require('./routes/workerRoutes');
 const { registerWorkflowRoutes } = require('./routes/workflowRoutes');
+const { registerAutomationCallbackRoutes, registerAutomationRoutes } = require('./routes/automationRoutes');
 const { createWorkflows } = require('./application');
 const {
   assertAdmin,
@@ -156,6 +157,7 @@ function createApp({ store, config = {}, observability = createObservability(con
   registerWorkerRoutes(app, deps);
   registerPublicSearchRoutes(app, deps);
   registerPublicIntegrationRoutes(app, deps);
+  registerAutomationCallbackRoutes(app, deps);
 
   app.use(asyncRoute(async (req, _res, next) => {
     const authStartedAt = process.hrtime.bigint();
@@ -184,6 +186,7 @@ function createApp({ store, config = {}, observability = createObservability(con
   registerImportRoutes(app, deps);
   registerPrivateSearchRoutes(app, deps);
   registerWorkflowRoutes(app, deps);
+  registerAutomationRoutes(app, deps);
 
   app.use(createErrorHandler({ multer, store, warnWorkflow }));
 
