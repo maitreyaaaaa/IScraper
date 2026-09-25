@@ -1505,19 +1505,26 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                     aria-expanded={automationMenuExpanded}
                     className="grid h-9 w-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground"
                   >
-                    <ChevronDown className={`h-4 w-4 transition-transform ${automationMenuExpanded ? '' : '-rotate-90'}`} />
+                    <ChevronDown className={`automation-menu-chevron h-4 w-4 ${automationMenuExpanded ? '' : '-rotate-90'}`} />
                   </button>
                 )}
               </div>
-              {sidebarVisibleExpanded && automationMenuExpanded && (
-                <div className="ml-3 mt-1 space-y-0.5 border-l border-white/10 pl-2" aria-label="Automation views">
+              {sidebarVisibleExpanded && (
+                <div
+                  className="automation-submenu"
+                  data-open={automationMenuExpanded}
+                  aria-label="Automation views"
+                  aria-hidden={!automationMenuExpanded}
+                  inert={!automationMenuExpanded}
+                >
+                  <div className="automation-submenu-inner ml-3 space-y-0.5 border-l border-white/10 pl-2 pt-1">
                   {AUTOMATION_VIEW_LINKS.map(([view, label, ViewIcon]) => (
                     <button
                       type="button"
                       key={view}
                       onClick={() => navigateAutomation(view)}
                       aria-current={tab === 'automations' && automationRoute.view === view && !automationRoute.chatId ? 'page' : undefined}
-                      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition ${
+                      className={`automation-submenu-item flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs ${
                         tab === 'automations' && automationRoute.view === view && !automationRoute.chatId
                           ? 'bg-white/10 text-foreground'
                           : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
@@ -1527,7 +1534,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                       <span className="truncate">{label}</span>
                     </button>
                   ))}
-                  <div className="px-2.5 pb-1 pt-3 text-[10px] font-medium uppercase text-muted-foreground">Recent chats</div>
+                  <div className="automation-submenu-item px-2.5 pb-1 pt-3 text-[10px] font-medium uppercase text-muted-foreground">Recent chats</div>
                   {automationRecentChats.length ? automationRecentChats.map((chat) => (
                     <button
                       type="button"
@@ -1535,7 +1542,7 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                       onClick={() => navigateAutomation('new-chat', chat.id)}
                       title={chat.title}
                       aria-current={tab === 'automations' && automationRoute.view === 'new-chat' && automationRoute.chatId === chat.id ? 'page' : undefined}
-                      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition ${
+                      className={`automation-submenu-item flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs ${
                         tab === 'automations' && automationRoute.view === 'new-chat' && automationRoute.chatId === chat.id
                           ? 'bg-white/10 text-foreground'
                           : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
@@ -1544,7 +1551,8 @@ function Dashboard({ onBack, onOpenLogin, onOpenHowTo }) {
                       <MessageSquarePlus className="h-3.5 w-3.5 shrink-0" />
                       <span className="truncate">{chat.title || 'Automation chat'}</span>
                     </button>
-                  )) : <p className="px-2.5 py-2 text-xs text-muted-foreground">No chats yet</p>}
+                  )) : <p className="automation-submenu-item px-2.5 py-2 text-xs text-muted-foreground">No chats yet</p>}
+                  </div>
                 </div>
               )}
             </div>

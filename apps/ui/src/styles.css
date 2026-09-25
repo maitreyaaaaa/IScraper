@@ -277,6 +277,49 @@
     animation: app-view-enter 170ms ease-out both;
   }
 
+  .automation-menu-chevron {
+    transition: transform 180ms ease-out;
+  }
+
+  .automation-submenu {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    pointer-events: none;
+    transition: grid-template-rows 190ms ease-out, opacity 150ms ease-out;
+  }
+
+  .automation-submenu[data-open="true"] {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .automation-submenu-inner {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .automation-submenu-item {
+    opacity: 0;
+    transform: translateY(-3px);
+    transition: opacity 120ms ease-out, transform 120ms ease-out;
+  }
+
+  .automation-submenu[data-open="true"] .automation-submenu-item {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .automation-submenu[data-open="true"] .automation-submenu-item:nth-child(1) { transition-delay: 15ms; }
+  .automation-submenu[data-open="true"] .automation-submenu-item:nth-child(2) { transition-delay: 30ms; }
+  .automation-submenu[data-open="true"] .automation-submenu-item:nth-child(3) { transition-delay: 45ms; }
+  .automation-submenu[data-open="true"] .automation-submenu-item:nth-child(4) { transition-delay: 60ms; }
+  .automation-submenu[data-open="true"] .automation-submenu-item:nth-child(5) { transition-delay: 75ms; }
+  .automation-submenu[data-open="true"] .automation-submenu-item:nth-child(6) { transition-delay: 90ms; }
+  .automation-submenu[data-open="true"] .automation-submenu-item:nth-child(7) { transition-delay: 105ms; }
+  .automation-submenu[data-open="true"] .automation-submenu-item:nth-child(8) { transition-delay: 120ms; }
+
   button:not(:disabled) {
     touch-action: manipulation;
   }
@@ -317,8 +360,17 @@
     .app-route-enter,
     .app-view-enter,
     dialog[open],
-    dialog[open]::backdrop {
+    dialog[open]::backdrop,
+    .automation-menu-chevron,
+    .automation-submenu,
+    .automation-submenu-item {
       animation: none;
+      transition: none;
+    }
+
+    .automation-submenu-item {
+      opacity: 1;
+      transform: none;
     }
 
     button:not(:disabled):active {
