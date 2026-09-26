@@ -1,5 +1,6 @@
 const { analyzeImageBufferWithCredential } = require('../services/providerClients');
 const { analyzeImageBufferWithLocalMl } = require('../services/localMlExtractors');
+const { assertMediaAnalysisBudget } = require('../services/rateBudgets');
 const { withTimeout } = require('./common');
 
 const SCREENSHOT_ANALYSIS_TIMEOUT_MS = 60 * 1000;
@@ -42,9 +43,17 @@ function createScreenshotWorkflow({ store, config }) {
     return null;
   }
 
-  async function analyzeExtensionScreenshot({ userId, item, file }) {
-    if (typeof store.saveAnalysis !== 'function' || !file?.buffer?.length) return null;
+  async function prepareScreenshotAnalysis({ userId }) {
     const plan = await chooseScreenshotAnalysisPlan({ userId });
+    if (plan?.credential) {
+      await assertMediaAnalysisBudget(store, config, userId, 'Screenshot analysis limit reached. Please try again later.');
+    }
+    return plan;
+  }
+
+  async function analyzeExtensionScreenshot({ userId, item, file, plan: suppliedPlan = null }) {
+    if (typeof store.saveAnalysis !== 'function' || !file?.buffer?.length) return null;
+    const plan = suppliedPlan || await prepareScreenshotAnalysis({ userId });
     if (!plan?.credential) return null;
 
     const { analysis, source, credential } = await runScreenshotAnalysis({ plan, item, file });
@@ -116,6 +125,7 @@ function createScreenshotWorkflow({ store, config }) {
   }
 
   return {
+    prepareScreenshotAnalysis,
     analyzeExtensionScreenshot,
     chooseScreenshotAnalysisPlan,
   };

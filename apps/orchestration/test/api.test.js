@@ -176,6 +176,44 @@ test('content workflow endpoints generate drafts and block unapproved publishing
   }
 });
 
+test('workflow generation budget returns 429 with Retry-After before the provider call', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  store.consumeRateBudget = async ({ scope }) => {
+    assert.equal(scope, 'workflow_generation');
+    return { allowed: false, exceeded: 'minute', retryAt: new Date(Date.now() + 30_000).toISOString() };
+  };
+  const app = createApp({ store, config: { openRouterApiKey: 'test-openrouter-key' } });
+  const server = app.listen(0);
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).startsWith('https://openrouter.ai/')) {
+      providerCalls += 1;
+      throw new Error('The provider must not be called after quota denial.');
+    }
+    return originalFetch(url, options);
+  };
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/workflows/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': 'workflow-budget-user' },
+      body: JSON.stringify({ brief: 'Draft a weekly Instagram content workflow.' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 429);
+    assert.ok(Number(response.headers.get('retry-after')) > 0);
+    assert.match(body.error, /Workflow generation limit/);
+    assert.equal(providerCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('approved Instagram workflow publish uses Composio tool execution payload', async () => {
   const calls = [];
   const result = await executeApprovedPublish({
@@ -425,6 +463,10 @@ test('AI search returns inline grounded answer with saved citations', async () =
       assert.deepEqual(resultIds, ['save-1']);
       assert.equal(includeAi, true);
     },
+    async consumeRateBudget({ scope }) {
+      assert.equal(scope, 'ai_search');
+      return { allowed: true, retryAt: null };
+    },
   };
   const app = createApp({
     store,
@@ -471,6 +513,130 @@ test('AI search returns inline grounded answer with saved citations', async () =
     assert.equal(body.ai.citations[0].id, 'save-1');
     assert.equal(body.ai.citations[0].url, 'https://example.com/soc2');
     assert.equal(searchEvents, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('semantic embedding budget returns 429 before creating the query vector', async () => {
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  const store = {
+    supportsSemanticSearch: true,
+    ensureUserRecord() {},
+    async search() {
+      throw new Error('Search must not continue after semantic quota denial.');
+    },
+    async consumeRateBudget({ scope }) {
+      assert.equal(scope, 'semantic_embedding');
+      return { allowed: false, exceeded: 'minute', retryAt: new Date(Date.now() + 30_000).toISOString() };
+    },
+  };
+  const app = createApp({ store, config: { openAiApiKey: 'test-openai-key' } });
+  const server = app.listen(0);
+  globalThis.fetch = async (url, options) => {
+    if (String(url).startsWith('https://openrouter.ai/')) {
+      providerCalls += 1;
+      throw new Error('The embedding provider must not be called after quota denial.');
+    }
+    return originalFetch(url, options);
+  };
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': 'semantic-budget-user' },
+      body: JSON.stringify({ query: 'design systems', filters: { semantic: true } }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 429);
+    assert.ok(Number(response.headers.get('retry-after')) > 0);
+    assert.match(body.error, /Semantic search is busy/);
+    assert.equal(providerCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('AI search budget returns 429 with Retry-After before calling the model', async () => {
+  let providerCalls = 0;
+  const store = {
+    supportsSemanticSearch: false,
+    ensureUserRecord() {},
+    async searchLean() {
+      return [{ id: 'rate-limit-save', sourceTitle: 'Research note', analysis: {} }];
+    },
+    async consumeRateBudget({ scope }) {
+      assert.equal(scope, 'ai_search');
+      return { allowed: false, exceeded: 'minute', retryAt: new Date(Date.now() + 45_000).toISOString() };
+    },
+  };
+  const app = createApp({ store, config: { openAiApiKey: 'test-openai-key' } });
+  const server = app.listen(0);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).startsWith('https://api.openai.com/')) {
+      providerCalls += 1;
+      throw new Error('The model must not be called after quota denial.');
+    }
+    return originalFetch(url, options);
+  };
+
+  try {
+    const response = await originalFetch(`http://127.0.0.1:${server.address().port}/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'budget check', includeAi: true }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 429);
+    assert.ok(Number(response.headers.get('retry-after')) > 0);
+    assert.match(body.error, /AI search is busy/);
+    assert.ok(body.retryAt);
+    assert.equal(providerCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('AI search fails closed with 503 when the shared budget store is unavailable', async () => {
+  let providerCalls = 0;
+  const store = {
+    supportsSemanticSearch: false,
+    ensureUserRecord() {},
+    async searchLean() {
+      return [{ id: 'budget-store-save', sourceTitle: 'Research note', analysis: {} }];
+    },
+    async consumeRateBudget() {
+      throw new Error('database unavailable');
+    },
+  };
+  const app = createApp({ store, config: { openAiApiKey: 'test-openai-key' } });
+  const server = app.listen(0);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).startsWith('https://api.openai.com/')) {
+      providerCalls += 1;
+      throw new Error('The model must not be called when the budget store is unavailable.');
+    }
+    return originalFetch(url, options);
+  };
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': 'budget-store-down-user' },
+      body: JSON.stringify({ query: 'budget store check', includeAi: true }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 503);
+    assert.match(body.error, /limits are temporarily unavailable/);
+    assert.equal(providerCalls, 0);
   } finally {
     globalThis.fetch = originalFetch;
     await new Promise((resolve) => server.close(resolve));
@@ -2201,6 +2367,54 @@ test('extension token can search Lens text and stops after revoke', async () => 
     assert.equal(searchBody.results[0].sourceTitle, 'SOC 2 compliance checklist');
     assert.equal(revokedResponse.status, 401);
   } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Lens image budget returns 429 before calling image AI', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  store.consumeRateBudget = async ({ scope }) => {
+    assert.equal(scope, 'media_analysis');
+    return { allowed: false, exceeded: 'day', retryAt: new Date(Date.now() + 60_000).toISOString() };
+  };
+  const app = createApp({ store, config: { openAiApiKey: 'test-openai-key' } });
+  const server = app.listen(0);
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).startsWith('https://api.openai.com/')) {
+      providerCalls += 1;
+      throw new Error('Image AI must not be called after quota denial.');
+    }
+    return originalFetch(url, options);
+  };
+
+  try {
+    const port = server.address().port;
+    const tokenResponse = await originalFetch(`http://127.0.0.1:${port}/api/extension-tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Budget test extension' }),
+    });
+    const tokenBody = await tokenResponse.json();
+    const response = await fetch(`http://127.0.0.1:${port}/api/lens/search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-IScraper-Extension-Token': tokenBody.secret,
+      },
+      body: JSON.stringify({ type: 'image', imageDataUrl: 'data:image/png;base64,aGVsbG8=' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 429);
+    assert.ok(Number(response.headers.get('retry-after')) > 0);
+    assert.match(body.error, /Image search limit/);
+    assert.equal(providerCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }

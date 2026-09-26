@@ -2,43 +2,19 @@ const crypto = require('crypto');
 const { createOpenAIEmbedding } = require('../services/embeddings');
 const { createOpenAiWebSearchAnswer, createOpenRouterLibraryChatAnswer, createOpenRouterSearchAnswer } = require('../services/aiSearch');
 const { recordRequestTiming } = require('../services/observability');
+const { assertSharedRateBudget } = require('../services/rateBudgets');
 const { cleanText, withTimeout } = require('./common');
 
 const aiSearchCache = new Map();
-const aiUsageBuckets = new Map();
-
-function currentUtcDay() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function assertAiSearchUsageAllowed(req, config, clientIp) {
-  const now = Date.now();
-  const userKey = req.user?.id || clientIp(req);
-  const minuteKey = `minute:${userKey}`;
-  const dayKey = `day:${currentUtcDay()}:${userKey}`;
-  const minuteMax = config.aiSearchRateLimitMax || 60;
-  const dayMax = config.aiSearchDailyLimit || 1000;
-  const minute = aiUsageBuckets.get(minuteKey);
-  const minuteBucket = minute && minute.resetAt > now ? minute : { count: 0, resetAt: now + 60 * 1000 };
-  const day = aiUsageBuckets.get(dayKey);
-  const dayBucket = day && day.resetAt > now ? day : { count: 0, resetAt: now + 24 * 60 * 60 * 1000 };
-
-  minuteBucket.count += 1;
-  dayBucket.count += 1;
-  aiUsageBuckets.set(minuteKey, minuteBucket);
-  aiUsageBuckets.set(dayKey, dayBucket);
-
-  if (minuteBucket.count > minuteMax || dayBucket.count > dayMax) {
-    const error = new Error('AI search is busy. Please try again later.');
-    error.statusCode = 429;
-    throw error;
-  }
-
-  if (aiUsageBuckets.size > 5000) {
-    for (const [bucketKey, value] of aiUsageBuckets.entries()) {
-      if (value.resetAt <= now) aiUsageBuckets.delete(bucketKey);
-    }
-  }
+async function assertAiSearchUsageAllowed(userId, config, store) {
+  const now = new Date();
+  await assertSharedRateBudget(store, {
+    userId,
+    scope: 'ai_search',
+    minuteLimit: config.aiSearchRateLimitMax || 60,
+    dailyLimit: config.aiSearchDailyLimit || 1000,
+    now,
+  }, 'AI search is busy. Please try again later.', now);
 }
 
 function aiSearchCacheKey({ userId, query, results, model }) {
@@ -80,8 +56,6 @@ function semanticSearchRequested(filters = {}) {
 }
 
 function createSearchWorkflow({ store, config, http }) {
-  const { clientIp } = http;
-
   function createSearchEventId() {
     return crypto.randomUUID();
   }
@@ -103,6 +77,14 @@ function createSearchWorkflow({ store, config, http }) {
       && typeof store.search === 'function';
     if (shouldTrySemantic) {
       try {
+        const now = new Date();
+        await assertSharedRateBudget(store, {
+          userId,
+          scope: 'semantic_embedding',
+          minuteLimit: config.semanticEmbeddingRateLimitPerMinute || 60,
+          dailyLimit: config.semanticEmbeddingRateLimitPerDay || 1000,
+          now,
+        }, 'Semantic search is busy. Please try again later.', now);
         const embeddingStartedAt = process.hrtime.bigint();
         queryEmbedding = await createOpenAIEmbedding({
           apiKey: config.openAiApiKey,
@@ -112,6 +94,7 @@ function createSearchWorkflow({ store, config, http }) {
         });
         recordSearchTiming(req, 'searchSemanticEmbeddingMs', embeddingStartedAt);
       } catch (error) {
+        if (error.statusCode === 429 || error.statusCode === 503) throw error;
         console.warn(`Semantic query embedding failed: ${error.message}`);
       }
     }
@@ -139,7 +122,7 @@ function createSearchWorkflow({ store, config, http }) {
     const now = Date.now();
     if (cached && cached.expiresAt > now) return { ...cached.value, cached: true };
 
-    assertAiSearchUsageAllowed(req, config, clientIp);
+    await assertAiSearchUsageAllowed(userId, config, store);
     const ai = await withTimeout(
       createOpenRouterSearchAnswer({
         apiKey: config.openAiApiKey,
@@ -227,7 +210,7 @@ function createSearchWorkflow({ store, config, http }) {
       };
     }
 
-    assertAiSearchUsageAllowed(req, config, clientIp);
+    await assertAiSearchUsageAllowed(userId, config, store);
     const model = config.aiSearchModel || config.openAiModel || 'gpt-4o';
     if (includeWeb) {
       try {

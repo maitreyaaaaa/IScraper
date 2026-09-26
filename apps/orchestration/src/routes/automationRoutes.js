@@ -22,11 +22,10 @@ function registerAutomationRoutes(app, deps) {
     if (triggerType && !['manual', 'schedule'].includes(triggerType)) return res.status(400).json({ error: 'Unsupported automation trigger filter.' });
     if (status && !['active', 'paused'].includes(status)) return res.status(400).json({ error: 'Unsupported automation status filter.' });
     if (sort && !['updatedAt', 'nextRunAt'].includes(sort)) return res.status(400).json({ error: 'Unsupported automation sort.' });
-    let automations = await automation.list(req.user.id);
-    if (triggerType) automations = automations.filter((item) => item.triggerType === triggerType);
-    if (status) automations = automations.filter((item) => item.status === status);
-    if (sort === 'nextRunAt') automations.sort((a, b) => String(a.nextRunAt || '').localeCompare(String(b.nextRunAt || '')));
-    return res.json({ automations });
+    const result = await automation.list(req.user.id, {
+      triggerType, status, sort, page: parsePage(req.query.page), limit: parseLimit(req.query.limit),
+    });
+    return res.json({ ...result, automations: result.automations.map(publicAutomation) });
   }));
 
   app.use('/api/automation-chats', asyncRoute(async (req, _res, next) => {
@@ -77,7 +76,7 @@ function registerAutomationRoutes(app, deps) {
   app.get('/api/automation-runs', asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, deps.store);
     const status = cleanQuery(req.query.status);
-    if (status && !['running', 'completed', 'needs_connection', 'failed'].includes(status)) return res.status(400).json({ error: 'Unsupported run status filter.' });
+    if (status && !['running', 'completed', 'needs_connection', 'failed', 'rate_limited'].includes(status)) return res.status(400).json({ error: 'Unsupported run status filter.' });
     const automationId = cleanQuery(req.query.automationId);
     if (automationId && !isUuid(automationId)) return res.status(400).json({ error: 'Automation ID is invalid.' });
     const from = parseDateFilter(req.query.from, false);
@@ -96,14 +95,14 @@ function registerAutomationRoutes(app, deps) {
 
   app.post('/api/automations/draft', asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, deps.store);
-    const draft = await automation.draftFromChat(req.body?.message, req.body?.model);
+    const draft = await automation.draftFromChat(req.body?.message, req.body?.model, req.user.id);
     captureWorkflow(req, 'automation draft generated', { supported: draft.supported === true });
     return res.json({ draft });
   }));
 
   app.post('/api/automations/revise', asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, deps.store);
-    const revision = await automation.reviseDraftFromChat(req.body?.draft, req.body?.message, req.body?.model);
+    const revision = await automation.reviseDraftFromChat(req.body?.draft, req.body?.message, req.body?.model, req.user.id);
     captureWorkflow(req, 'automation draft revised', { supported: revision.supported === true });
     return res.json({ revision });
   }));
@@ -112,7 +111,7 @@ function registerAutomationRoutes(app, deps) {
     await requireCompletedProfile(req, deps.store);
     const saved = await automation.create(req.user.id, req.body || {});
     captureWorkflow(req, 'automation saved', { automationId: saved.id, triggerType: saved.triggerType });
-    return res.status(201).json({ automation: saved });
+    return res.status(201).json({ automation: publicAutomation(saved) });
   }));
 
   app.get('/api/automations/gmail/connections', asyncRoute(async (req, res) => {
@@ -154,15 +153,20 @@ function registerAutomationRoutes(app, deps) {
     await requireCompletedProfile(req, deps.store);
     const run = await automation.run(req.user.id, req.params.id, 'manual');
     if (!run) return res.status(404).json({ error: 'Automation not found.' });
+    if (run.status === 'rate_limited') {
+      res.setHeader('Retry-After', String(run.retryAfterSeconds));
+      return res.status(429).json({ run, error: run.error, retryAt: run.retryAt });
+    }
     captureWorkflow(req, 'gmail automation run finished', { automationId: req.params.id, runId: run.id, status: run.status });
-    return res.status(run.status === 'completed' ? 200 : run.status === 'needs_connection' ? 409 : 502).json({ run });
+    return res.status(run.status === 'completed' ? 200 : run.status === 'needs_connection' ? 409 : 502)
+      .json({ run, ...(run.status === 'completed' ? {} : { error: run.error }) });
   }));
 
   app.patch('/api/automations/:id', asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, deps.store);
     const updated = await automation.update(req.user.id, req.params.id, req.body || {});
     if (!updated) return res.status(404).json({ error: 'Automation not found.' });
-    return res.json({ automation: updated });
+    return res.json({ automation: publicAutomation(updated) });
   }));
 
   app.delete('/api/automations/:id', asyncRoute(async (req, res) => {
@@ -234,6 +238,23 @@ function parseDateFilter(value, endOfDay) {
 
 function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+
+function publicAutomation(automation) {
+  return {
+    id: automation.id,
+    name: automation.name,
+    prompt: automation.prompt,
+    triggerType: automation.triggerType,
+    triggerConfig: automation.triggerConfig,
+    gmailQuery: automation.gmailQuery,
+    maxMessages: automation.maxMessages,
+    model: automation.model,
+    status: automation.status,
+    nextRunAt: automation.nextRunAt,
+    createdAt: automation.createdAt,
+    updatedAt: automation.updatedAt,
+  };
 }
 
 function automationReturnUrl(appUrl, chatId, connectionStatus) {

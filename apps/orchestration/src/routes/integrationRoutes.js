@@ -200,6 +200,9 @@ function registerPublicIntegrationRoutes(app, deps) {
     const captureTitle = cleanText(req.body?.title || sourceTitle || 'Screen capture', 160);
     const collection = cleanText(req.body?.collection || 'Browser captures', 80) || 'Browser captures';
     const shouldAnalyze = String(req.body?.autoAnalyze ?? 'true') !== 'false';
+    const screenshotAnalysisPlan = shouldAnalyze
+      ? await workflows.screenshots.prepareScreenshotAnalysis({ userId: user.id })
+      : null;
     const noteBody = [
       'Saved from the IScraper Chrome extension.',
       sourceTitle ? `Page: ${sourceTitle}` : '',
@@ -232,7 +235,12 @@ function registerPublicIntegrationRoutes(app, deps) {
             reason: 'extension_setting',
           });
         } else {
-          item = await analyzeExtensionScreenshot({ userId: user.id, item, file: req.file }) || item;
+          item = await analyzeExtensionScreenshot({
+            userId: user.id,
+            item,
+            file: req.file,
+            plan: screenshotAnalysisPlan,
+          }) || item;
         }
       } catch (analysisError) {
         warnWorkflow(req, 'extension screenshot analysis failed', {

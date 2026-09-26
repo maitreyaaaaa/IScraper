@@ -4,10 +4,18 @@ function createAutomationRepository({ store, now = () => new Date() }) {
   if (typeof store?.client?.from === 'function') {
     const client = store.client;
     return {
-      async list(userId) {
-        const { data, error } = await client.from('automations').select('*').eq('user_id', userId).order('updated_at', { ascending: false }).limit(100);
+      async list(userId, { triggerType = '', status = '', sort = '', page = 1, limit = 25 } = {}) {
+        let query = client.from('automations').select('*').eq('user_id', userId);
+        if (triggerType) query = query.eq('trigger_type', triggerType);
+        if (status) query = query.eq('status', status);
+        query = sort === 'nextRunAt'
+          ? query.order('next_run_at', { ascending: true, nullsFirst: false }).order('id', { ascending: false })
+          : query.order('updated_at', { ascending: false }).order('id', { ascending: false });
+        const start = (page - 1) * limit;
+        const { data, error } = await query.range(start, start + limit);
         if (error) throw error;
-        return (data || []).map(mapAutomation);
+        const rows = data || [];
+        return { automations: rows.slice(0, limit).map(mapAutomation), page, limit, hasMore: rows.length > limit };
       },
       async get(userId, id) {
         const { data, error } = await client.from('automations').select('*').eq('user_id', userId).eq('id', id).maybeSingle();
@@ -29,6 +37,20 @@ function createAutomationRepository({ store, now = () => new Date() }) {
         if (error) throw error;
         return mapRun(data);
       },
+      async createRateLimitedRun(userId, automationId, triggerType, retryAt, message) {
+        const timestamp = now().toISOString();
+        const { data, error } = await client.from('automation_runs').insert({
+          id: randomUUID(), user_id: userId, automation_id: automationId, trigger_type: triggerType,
+          status: 'rate_limited', error: message,
+          activity: [
+            { state: 'received', at: timestamp },
+            { state: 'rate_limited', at: timestamp, retryAt },
+          ],
+          started_at: timestamp, finished_at: timestamp,
+        }).select('*').single();
+        if (error) throw error;
+        return { ...mapRun(data), retryAt };
+      },
       async updateRun(userId, runId, patch) {
         const { data, error } = await client.from('automation_runs').update(toRunRow(patch, now().toISOString())).eq('user_id', userId).eq('id', runId).select('*').maybeSingle();
         if (error) throw error;
@@ -47,7 +69,7 @@ function createAutomationRepository({ store, now = () => new Date() }) {
         if (from) query = query.gte('started_at', from);
         if (to) query = query.lte('started_at', to);
         const start = (page - 1) * limit;
-        const { data, error, count } = await query.order('started_at', { ascending: false })
+        const { data, error, count } = await query.order('started_at', { ascending: false }).order('id', { ascending: false })
           .range(start, start + limit - 1);
         if (error) throw error;
         const runs = (data || []).map(mapRun);
@@ -90,20 +112,32 @@ function createAutomationRepository({ store, now = () => new Date() }) {
         if (error) throw error;
         return Boolean(data);
       },
+      async deferSchedule(userId, id, leaseToken, retryAt) {
+        const { data, error } = await client.from('automations').update({
+          next_run_at: retryAt,
+          schedule_lease_until: null,
+          schedule_lease_token: null,
+          updated_at: now().toISOString(),
+        }).eq('id', id).eq('user_id', userId).eq('schedule_lease_token', leaseToken).select('id').maybeSingle();
+        if (error) throw error;
+        return Boolean(data);
+      },
     };
   }
 
   return {
-    list: (userId) => store.listAutomations(userId),
+    list: (userId, options) => store.listAutomations(userId, options),
     get: (userId, id) => store.getAutomation(userId, id),
     save: (userId, automation) => store.saveAutomation(userId, automation),
     createRun: (userId, automationId, triggerType) => store.createAutomationRun(userId, automationId, triggerType),
+    createRateLimitedRun: (userId, automationId, triggerType, retryAt, message) => store.createRateLimitedAutomationRun(userId, automationId, triggerType, retryAt, message),
     updateRun: (userId, runId, patch) => store.updateAutomationRun(userId, runId, patch),
     listRuns: (userId, automationId, limit) => store.listAutomationRuns(userId, automationId, limit),
     listAllRuns: (userId, options) => store.listAllAutomationRuns(userId, options),
     delete: (userId, id) => store.deleteAutomation(userId, id),
     claimDue: (limit) => store.claimDueAutomations(limit),
     completeSchedule: (userId, id, leaseToken) => store.completeAutomationSchedule(userId, id, leaseToken),
+    deferSchedule: (userId, id, leaseToken, retryAt) => store.deferAutomationSchedule(userId, id, leaseToken, retryAt),
   };
 }
 

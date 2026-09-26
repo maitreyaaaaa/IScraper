@@ -5,6 +5,7 @@ const {
   selectedReferencesFromItems,
   workflowReadiness,
 } = require('../services/contentWorkflows');
+const { assertSharedRateBudget } = require('../services/rateBudgets');
 
 function registerWorkflowRoutes(app, deps) {
   const { config, http, store } = deps;
@@ -23,6 +24,16 @@ function registerWorkflowRoutes(app, deps) {
 
   app.post('/api/workflows/generate', searchRateLimit, asyncRoute(async (req, res) => {
     await requireCompletedProfile(req, store);
+    if (config.openRouterApiKey) {
+      const now = new Date();
+      await assertSharedRateBudget(store, {
+        userId: req.user.id,
+        scope: 'workflow_generation',
+        minuteLimit: config.workflowGenerationRateLimitPerMinute || 5,
+        dailyLimit: config.workflowGenerationRateLimitPerDay || 20,
+        now,
+      }, 'Workflow generation limit reached. Please try again later.', now);
+    }
     const items = typeof store.getItems === 'function' ? await store.getItems(req.user.id) : [];
     const references = selectedReferencesFromItems(items, req.body?.referenceIds);
     const manualReferences = Array.isArray(req.body?.references) ? req.body.references : [];

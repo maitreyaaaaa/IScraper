@@ -31,10 +31,14 @@ function createErrorHandler({ multer, store, warnWorkflow }) {
     } else {
       warnWorkflow(req, 'api request rejected', { statusCode, errorCategory: error.name || 'request_error' });
     }
+    if (statusCode === 429 && Number.isFinite(Number(error.retryAfterSeconds))) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil(Number(error.retryAfterSeconds)))));
+    }
     res.status(statusCode).json({
       error: error.message,
       requestId: req.context?.requestId,
       correlationId: req.context?.correlationId || req.context?.requestId,
+      ...(error.retryAt ? { retryAt: error.retryAt } : {}),
       ...(error.deletion ? { deletion: error.deletion } : {}),
     });
   };

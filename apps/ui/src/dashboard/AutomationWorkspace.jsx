@@ -96,6 +96,8 @@ function NewAutomationChat({ chatId, onNavigate, onChatsChanged }) {
         setGmailConnected(Boolean(connection));
         setGmailLabel(connection?.alias || 'Gmail connection needed');
         setMockMode(connectionsResult.value.mockMode === true || modelsResult.value?.mockMode === true);
+      } else {
+        setError(connectionsResult.reason?.message || 'Could not check the Gmail connection.');
       }
       if (chatId) {
         if (chatResult.status === 'fulfilled' && chatResult.value?.chat) {
@@ -378,31 +380,73 @@ function AutomationListView({ scheduled = false, onNavigate }) {
   const [automations, setAutomations] = useState([]);
   const [selectedId, setSelectedId] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [filter, setFilter] = useState('all');
   const [reload, setReload] = useState(0);
-
-  const refresh = useCallback(async () => {
-    const body = await getAutomations(scheduled ? { triggerType: 'schedule', sort: 'nextRunAt' } : {});
-    setAutomations(body.automations || []);
-  }, [scheduled]);
+  const listRequestRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
+    const requestId = ++listRequestRef.current;
     Promise.resolve().then(() => {
       if (cancelled) return;
       setLoading(true);
+      setLoadingMore(false);
       setError('');
-      return refresh().catch((requestError) => { if (!cancelled) setError(requestError.message || 'Could not load automations.'); })
-        .finally(() => { if (!cancelled) setLoading(false); });
+      return getAutomations({
+        ...(scheduled ? { triggerType: 'schedule', sort: 'nextRunAt' } : {}),
+        ...(filter !== 'all' ? { status: filter } : {}),
+        page: 1, limit: 25,
+      }).then((body) => {
+        if (cancelled || requestId !== listRequestRef.current) return;
+        setAutomations(body.automations || []);
+        setPage(1);
+        setHasMore(Boolean(body.hasMore));
+        setLoadError(false);
+      }).catch((requestError) => {
+        if (!cancelled && requestId === listRequestRef.current) {
+          setLoadError(true);
+          setError(requestError.message || 'Could not load automations.');
+        }
+      })
+        .finally(() => { if (!cancelled && requestId === listRequestRef.current) setLoading(false); });
     });
     return () => { cancelled = true; };
-  }, [refresh, reload]);
+  }, [scheduled, filter, reload]);
 
-  const visibleAutomations = useMemo(() => automations.filter((item) => filter === 'all' || item.status === filter), [automations, filter]);
-  const selected = visibleAutomations.find((item) => item.id === selectedId) || null;
+  const selected = automations.find((item) => item.id === selectedId) || null;
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    const requestId = listRequestRef.current;
+    setLoadingMore(true);
+    setError('');
+    try {
+      const nextPage = page + 1;
+      const body = await getAutomations({
+        ...(scheduled ? { triggerType: 'schedule', sort: 'nextRunAt' } : {}),
+        ...(filter !== 'all' ? { status: filter } : {}),
+        page: nextPage, limit: 25,
+      });
+      if (requestId !== listRequestRef.current) return;
+      setAutomations((current) => {
+        const existing = new Set(current.map((item) => item.id));
+        return [...current, ...(body.automations || []).filter((item) => !existing.has(item.id))];
+      });
+      setPage(nextPage);
+      setHasMore(Boolean(body.hasMore));
+    } catch (requestError) {
+      if (requestId === listRequestRef.current) setError(requestError.message || 'Could not load more automations.');
+    } finally {
+      if (requestId === listRequestRef.current) setLoadingMore(false);
+    }
+  }
 
   async function handleUpdate(id, patch) {
     setBusy(id);
@@ -412,6 +456,7 @@ function AutomationListView({ scheduled = false, onNavigate }) {
       const body = await updateAutomation(id, patch);
       setAutomations((current) => current.map((item) => item.id === id ? body.automation : item));
       setNotice(patch.status ? `Automation ${patch.status}.` : 'Automation updated.');
+      setReload((current) => current + 1);
     } catch (requestError) {
       setError(requestError.message || 'The automation could not be updated.');
     } finally {
@@ -427,6 +472,7 @@ function AutomationListView({ scheduled = false, onNavigate }) {
       setAutomations((current) => current.filter((item) => item.id !== id));
       setSelectedId('');
       setNotice('Automation and its run history deleted. Saved chats remain.');
+      setReload((current) => current + 1);
     } catch (requestError) {
       setError(requestError.message || 'The automation could not be deleted.');
     } finally {
@@ -456,14 +502,19 @@ function AutomationListView({ scheduled = false, onNavigate }) {
       </header>
       {(error || notice) && <InlineNotice error={error} notice={notice} onDismiss={() => { setError(''); setNotice(''); }} />}
       <div className="mb-4 flex items-center justify-between gap-3">
-        <p className="text-xs text-muted-foreground">{loading ? 'Loading…' : `${visibleAutomations.length} ${scheduled ? 'scheduled tasks' : 'automations'}`}</p>
+        <p className="text-xs text-muted-foreground">{loading ? 'Loading…' : `${automations.length}${hasMore ? '+' : ''} ${scheduled ? 'scheduled tasks' : 'automations'}`}</p>
         <div className="flex items-center gap-2">
           <label className="sr-only" htmlFor={`automation-filter-${scheduled ? 'scheduled' : 'all'}`}>Filter by status</label>
           <select id={`automation-filter-${scheduled ? 'scheduled' : 'all'}`} value={filter} onChange={(event) => setFilter(event.target.value)} className="rounded-lg border border-border bg-background px-2.5 py-2 text-xs text-foreground"><option value="all">All status</option><option value="active">Active</option><option value="paused">Paused</option></select>
           <button type="button" aria-label="Refresh automations" onClick={() => setReload((current) => current + 1)} className="grid size-9 place-items-center rounded-lg border border-border text-muted-foreground"><RefreshCw className="size-4" /></button>
         </div>
       </div>
-      {loading ? <LoadingRows /> : visibleAutomations.length === 0 ? (
+      {loading ? <LoadingRows /> : loadError && automations.length === 0 ? (
+        <div className={`${CARD_CLASS} p-6 text-center`} role="status">
+          <p className="text-sm text-muted-foreground">Automations could not be loaded.</p>
+          <button type="button" onClick={() => setReload((current) => current + 1)} className="mt-3 rounded-lg border border-border px-3 py-2 text-sm text-foreground">Try again</button>
+        </div>
+      ) : automations.length === 0 ? (
         <EmptyState
           icon={scheduled ? CalendarClock : Activity}
           title={scheduled ? 'No scheduled tasks' : 'No automations yet'}
@@ -473,12 +524,13 @@ function AutomationListView({ scheduled = false, onNavigate }) {
       ) : (
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(300px,0.75fr)]">
           <div className="space-y-2">
-            {visibleAutomations.map((item) => (
+            {automations.map((item) => (
               <button type="button" key={item.id} onClick={() => setSelectedId(item.id)} aria-current={selectedId === item.id ? 'true' : undefined} className={`w-full rounded-xl border p-4 text-left ${selectedId === item.id ? 'border-primary/50 bg-primary/5' : 'border-border bg-card hover:bg-muted/30'}`}>
                 <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-medium text-foreground">{item.name}</p><p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.prompt}</p></div><StatusPill status={item.status} /></div>
                 <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground"><span className="inline-flex items-center gap-1.5">{item.triggerType === 'schedule' ? <Clock3 className="size-3.5" /> : <Play className="size-3.5" />}{item.triggerType === 'schedule' ? `Every ${cadenceLabel(item.triggerConfig?.everyMinutes)}` : 'Manual'}</span>{scheduled && <span>Next · {item.status === 'active' ? formatDate(item.nextRunAt) : 'Paused'}</span>}</div>
               </button>
             ))}
+            {hasMore && <button type="button" onClick={loadMore} disabled={loadingMore} className="w-full rounded-lg border border-border px-4 py-2.5 text-sm text-foreground disabled:opacity-50">{loadingMore ? 'Loading…' : 'Load more'}</button>}
           </div>
           {selected && (
             <AutomationDetailPanel
@@ -597,7 +649,7 @@ function RunHistoryView({ onNavigate }) {
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <p className="text-xs text-muted-foreground">{loading ? 'Loading…' : `${total} runs`}</p>
         <div className="flex flex-wrap items-end gap-2">
-          <label className="space-y-1 text-[10px] text-muted-foreground">Status<select value={status} onChange={(event) => setStatus(event.target.value)} className="block rounded-lg border border-border bg-background px-2.5 py-2 text-xs text-foreground"><option value="">All</option><option value="running">Running</option><option value="completed">Completed</option><option value="needs_connection">Needs connection</option><option value="failed">Failed</option></select></label>
+          <label className="space-y-1 text-[10px] text-muted-foreground">Status<select value={status} onChange={(event) => setStatus(event.target.value)} className="block rounded-lg border border-border bg-background px-2.5 py-2 text-xs text-foreground"><option value="">All</option><option value="running">Running</option><option value="completed">Completed</option><option value="needs_connection">Needs connection</option><option value="rate_limited">Rate limited</option><option value="failed">Failed</option></select></label>
           <label className="space-y-1 text-[10px] text-muted-foreground">From<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} className="block rounded-lg border border-border bg-background px-2.5 py-2 text-xs text-foreground" /></label>
           <label className="space-y-1 text-[10px] text-muted-foreground">To<input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="block rounded-lg border border-border bg-background px-2.5 py-2 text-xs text-foreground" /></label>
           <button type="button" aria-label="Refresh run history" onClick={() => setReload((current) => current + 1)} className="grid size-9 place-items-center rounded-lg border border-border text-muted-foreground"><RefreshCw className="size-4" /></button>
@@ -634,7 +686,7 @@ function RunDetailPanel({ run, onClose }) {
 
 function StatusPill({ status }) {
   const completed = status === 'completed' || status === 'active';
-  const error = ['failed', 'needs_connection'].includes(status);
+  const error = ['failed', 'needs_connection', 'rate_limited'].includes(status);
   return <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${completed ? 'bg-primary/10 text-primary' : error ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground'}`}>{statusLabel(status)}</span>;
 }
 

@@ -621,7 +621,7 @@ export function publishContentWorkflow(payload) {
 
 export function getAutomations(filters = {}) {
   const params = new URLSearchParams();
-  for (const key of ['triggerType', 'status', 'sort']) {
+  for (const key of ['triggerType', 'status', 'sort', 'page', 'limit']) {
     if (filters[key]) params.set(key, filters[key]);
   }
   return request(`/automations${params.size ? `?${params.toString()}` : ''}`);

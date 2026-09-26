@@ -330,3 +330,53 @@ test('Supabase visual embedding writer keeps vectors in derived table', async ()
     ['throwOnError'],
   ]);
 });
+
+test('Supabase paid analysis usage delegates the idempotent debit to one database RPC', async () => {
+  const calls = [];
+  const store = createSupabaseStore({
+    url: 'https://example.supabase.co',
+    serviceRoleKey: 'service-role-key',
+  });
+  store.client.rpc = async (name, args) => {
+    calls.push({ name, args });
+    return {
+      data: [{ recorded: true, already_recorded: false, paid_credits: 0 }],
+      error: null,
+    };
+  };
+
+  const result = await store.recordUsage({
+    userId: 'user-1',
+    itemId: 'item-1',
+    source: 'paid',
+    provider: 'openai',
+    model: 'gpt-4o',
+  });
+
+  assert.deepEqual(result, { recorded: true, already_recorded: false, paid_credits: 0 });
+  assert.deepEqual(calls, [{
+    name: 'record_paid_analysis_usage',
+    args: {
+      p_user_id: 'user-1',
+      p_item_id: 'item-1',
+      p_provider: 'openai',
+      p_model: 'gpt-4o',
+    },
+  }]);
+});
+
+test('Supabase paid analysis usage rejects when the atomic debit has no available credit', async () => {
+  const store = createSupabaseStore({
+    url: 'https://example.supabase.co',
+    serviceRoleKey: 'service-role-key',
+  });
+  store.client.rpc = async () => ({
+    data: [{ recorded: false, already_recorded: false, paid_credits: 0 }],
+    error: null,
+  });
+
+  await assert.rejects(
+    () => store.recordUsage({ userId: 'user-1', itemId: 'item-1', source: 'paid' }),
+    /Not enough paid credits/,
+  );
+});

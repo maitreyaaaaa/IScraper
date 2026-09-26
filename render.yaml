@@ -51,7 +51,5 @@ services:
         sync: false
       - key: AUTOMATION_SCHEDULE_BATCH_SIZE
         value: "5"
-      - key: AUTOMATION_MAX_MESSAGES
-        value: "10"
       - key: POSTHOG_PROJECT_KEY
         sync: false

@@ -30,6 +30,7 @@ const { publicArchive } = require('../services/pageArchive');
 const { publicLinkHealth, publicReminder } = require('../services/libraryCare');
 const { sanitizeAuditMetadata } = require('../services/auditLog');
 const { createdAtForImportedItem } = require('../services/sourceDates');
+const { consumeRateBudgetInMemory } = require('../services/rateBudgets');
 
 const DEFAULT_USER_ID = 'local-dev-user';
 
@@ -352,6 +353,7 @@ function publicCaptureConnection(row) {
 function createLocalStore({ dataPath }) {
   const file = path.join(dataPath, 'brain.local.json');
   let state = normalizeState(readJson(file, null) || seedFromLegacyIndex(dataPath));
+  const rateBudgetBuckets = new Map();
 
   function save() {
     writeJson(file, state);
@@ -457,6 +459,10 @@ function createLocalStore({ dataPath }) {
     ensureUserRecord,
     assertUserNotDeleted,
 
+    async consumeRateBudget(request) {
+      return consumeRateBudgetInMemory(rateBudgetBuckets, request);
+    },
+
     connectMockGmail(userId) {
       const existing = state.mockGmailConnections.find((entry) => entry.userId === userId);
       if (existing) return structuredClone(existing);
@@ -470,11 +476,18 @@ function createLocalStore({ dataPath }) {
       return state.mockGmailConnections.some((entry) => entry.userId === userId);
     },
 
-    listAutomations(userId) {
-      return state.automations.filter((entry) => entry.userId === userId)
-        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
-        .slice(0, 100)
-        .map((entry) => structuredClone(entry));
+    listAutomations(userId, { triggerType = '', status = '', sort = '', page = 1, limit = 25 } = {}) {
+      const matches = state.automations.filter((entry) => entry.userId === userId
+        && (!triggerType || entry.triggerType === triggerType)
+        && (!status || entry.status === status))
+        .sort((a, b) => sort === 'nextRunAt'
+          ? String(a.nextRunAt || '9999').localeCompare(String(b.nextRunAt || '9999')) || String(b.id).localeCompare(String(a.id))
+          : String(b.updatedAt).localeCompare(String(a.updatedAt)) || String(b.id).localeCompare(String(a.id)));
+      const start = (page - 1) * limit;
+      return {
+        automations: matches.slice(start, start + limit).map((entry) => structuredClone(entry)),
+        page, limit, hasMore: start + limit < matches.length,
+      };
     },
 
     getAutomation(userId, id) {
@@ -506,6 +519,22 @@ function createLocalStore({ dataPath }) {
       state.automationRuns.push(run);
       save();
       return structuredClone(run);
+    },
+
+    createRateLimitedAutomationRun(userId, automationId, triggerType, retryAt, message) {
+      const timestamp = now();
+      const run = {
+        id: crypto.randomUUID(), userId, automationId, triggerType, status: 'rate_limited',
+        summary: '', error: message,
+        activity: [
+          { state: 'received', at: timestamp },
+          { state: 'rate_limited', at: timestamp, retryAt },
+        ],
+        startedAt: timestamp, finishedAt: timestamp,
+      };
+      state.automationRuns.push(run);
+      save();
+      return structuredClone({ ...run, retryAt });
     },
 
     updateAutomationRun(userId, runId, patch) {
@@ -603,6 +632,9 @@ function createLocalStore({ dataPath }) {
       state.automations = state.automations.filter((entry) => !(entry.userId === userId && entry.id === id));
       if (state.automations.length === before) return false;
       state.automationRuns = state.automationRuns.filter((entry) => !(entry.userId === userId && entry.automationId === id));
+      for (const chat of state.automationChats) {
+        if (chat.userId === userId && chat.automationId === id) chat.automationId = null;
+      }
       save();
       return true;
     },
@@ -627,6 +659,17 @@ function createLocalStore({ dataPath }) {
       if (!automation) return false;
       const intervalMinutes = Math.max(60, Math.min(43200, Number(automation.triggerConfig?.everyMinutes) || 1440));
       automation.nextRunAt = new Date(Date.now() + intervalMinutes * 60_000).toISOString();
+      automation.scheduleLeaseUntil = null;
+      automation.scheduleLeaseToken = null;
+      automation.updatedAt = now();
+      save();
+      return true;
+    },
+
+    deferAutomationSchedule(userId, id, leaseToken, retryAt) {
+      const automation = state.automations.find((entry) => entry.userId === userId && entry.id === id && entry.scheduleLeaseToken === leaseToken);
+      if (!automation || !Number.isFinite(Date.parse(retryAt))) return false;
+      automation.nextRunAt = new Date(retryAt).toISOString();
       automation.scheduleLeaseUntil = null;
       automation.scheduleLeaseToken = null;
       automation.updatedAt = now();

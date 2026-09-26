@@ -3,6 +3,7 @@ const test = require('node:test');
 const { mkdtempSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
+const { getConfig } = require('../src/config');
 const { createApp } = require('../src/server');
 const { createLocalStore } = require('../src/stores/localStore');
 const {
@@ -26,6 +27,21 @@ test('automation validation supports only bounded manual and interval schedule t
   assert.throws(() => validateAutomationInput({ triggerType: 'app_event' }), /manual and scheduled/);
   assert.throws(() => validateAutomationInput({ triggerType: 'schedule', triggerConfig: { everyMinutes: 5 } }), /between 60 minutes/);
   assert.throws(() => validateAutomationInput({ maxMessages: 11 }), /between 1 and 10/);
+});
+
+test('automation provider configuration never substitutes an OpenAI credential for OpenRouter', () => {
+  const priorOpenAi = process.env.OPENAI_API_KEY;
+  const priorOpenRouter = process.env.OPENROUTER_API_KEY;
+  try {
+    process.env.OPENAI_API_KEY = 'test-openai-only-key';
+    delete process.env.OPENROUTER_API_KEY;
+    assert.equal(getConfig().openRouterApiKey, undefined);
+  } finally {
+    if (priorOpenAi === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = priorOpenAi;
+    if (priorOpenRouter === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = priorOpenRouter;
+  }
 });
 
 test('Gmail tool arguments map only to known schema fields and cap message count', () => {
@@ -105,7 +121,7 @@ test('automation agent can execute only one scoped Gmail read and sends only its
 test('live chat revision calls only the configured LLM and returns an unsaved validated draft', async () => {
   const calls = [];
   const api = createAutomations({
-    store: {},
+    store: { async consumeRateBudget() { return { allowed: true, retryAt: null }; } },
     config: { openRouterApiKey: 'server-only-test-key' },
     fetchImpl: async (url, options = {}) => {
       calls.push({ url, options });
@@ -120,7 +136,7 @@ test('live chat revision calls only the configured LLM and returns an unsaved va
     name: 'Read unread Gmail', prompt: 'Summarize recent mail', triggerType: 'manual',
     gmailQuery: '', maxMessages: 3, model: 'openai/gpt-4o-mini', status: 'active',
   });
-  const revision = await api.reviseDraftFromChat({ ...current, id: null, status: 'draft' }, 'Make it weekly and unread only.');
+  const revision = await api.reviseDraftFromChat({ ...current, id: null, status: 'draft' }, 'Make it weekly and unread only.', undefined, 'user-a');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(revision.supported, true);
@@ -129,6 +145,84 @@ test('live chat revision calls only the configured LLM and returns an unsaved va
   assert.equal(revision.automation.triggerConfig.everyMinutes, 10080);
   assert.equal(revision.automation.gmailQuery, 'is:unread');
   assert.equal(revision.automation.maxMessages, 3);
+});
+
+test('automation generation budget blocks provider calls and returns a retry time', async () => {
+  let providerCalls = 0;
+  const api = createAutomations({
+    store: {
+      async consumeRateBudget() {
+        return { allowed: false, exceeded: 'day', retryAt: '2026-09-27T00:00:00.000Z' };
+      },
+    },
+    config: { openRouterApiKey: 'server-only-test-key' },
+    fetchImpl: async () => { providerCalls += 1; throw new Error('Provider must not run after quota denial.'); },
+  });
+
+  await assert.rejects(
+    () => api.draftFromChat('Read my recent Gmail.', 'openai/gpt-4o-mini', 'user-a'),
+    (error) => error.statusCode === 429 && error.retryAt === '2026-09-27T00:00:00.000Z',
+  );
+  assert.equal(providerCalls, 0);
+});
+
+test('manual automation run limit blocks Gmail access before creating a run record', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'icebreaker-run-budget-'));
+  const store = createLocalStore({ dataPath: dir });
+  let providerCalls = 0;
+  store.consumeRateBudget = async () => ({ allowed: false, exceeded: 'minute', retryAt: new Date(Date.now() + 30_000).toISOString() });
+  const automation = validateAutomationInput({
+    id: 'automation-rate-limited-manual', name: 'Read Gmail', prompt: 'Summarize mail',
+    triggerType: 'manual', maxMessages: 3, model: 'openai/gpt-4o-mini', status: 'active',
+  });
+  store.saveAutomation('user-a', automation);
+  const api = createAutomations({
+    store,
+    config: { storageMode: 'local', nodeEnv: 'production' },
+    fetchImpl: async () => { providerCalls += 1; throw new Error('Provider must not run after quota denial.'); },
+  });
+
+  try {
+    await assert.rejects(() => api.run('user-a', automation.id, 'manual'), (error) => error.statusCode === 429);
+    assert.equal((await store.listAutomationRuns('user-a', automation.id, 10)).length, 0);
+    assert.equal(providerCalls, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scheduled automation rate limit is recorded and deferred until the shared window resets', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'icebreaker-scheduled-budget-'));
+  const store = createLocalStore({ dataPath: dir });
+  const retryAt = new Date(Date.now() + 60_000).toISOString();
+  let providerCalls = 0;
+  store.consumeRateBudget = async () => ({ allowed: false, exceeded: 'day', retryAt });
+  const automation = validateAutomationInput({
+    id: 'automation-rate-limited-schedule', name: 'Daily Gmail summary', prompt: 'Summarize recent mail',
+    triggerType: 'schedule', triggerConfig: { everyMinutes: 1440 }, maxMessages: 3,
+    model: 'openai/gpt-4o-mini', status: 'active', nextRunAt: new Date(Date.now() - 1000).toISOString(),
+  });
+  store.saveAutomation('user-a', automation);
+  const api = createAutomations({
+    store,
+    config: { storageMode: 'local', nodeEnv: 'production' },
+    fetchImpl: async () => { providerCalls += 1; throw new Error('Provider must not run after quota denial.'); },
+  });
+
+  try {
+    const result = await api.runDueSchedules();
+    assert.equal(result.claimed, 1);
+    assert.equal(result.results[0].status, 'rate_limited');
+    assert.equal(providerCalls, 0);
+    const saved = await store.getAutomation('user-a', automation.id);
+    assert.equal(saved.nextRunAt, retryAt);
+    assert.equal(saved.scheduleLeaseToken, null);
+    const runs = await store.listAutomationRuns('user-a', automation.id, 10);
+    assert.equal(runs[0].status, 'rate_limited');
+    assert.equal(runs[0].activity[1].retryAt, retryAt);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('connection state is signed, expires, and cannot be changed', () => {
@@ -149,10 +243,9 @@ test('scheduled automations are leased once and requeued after completion', asyn
     const automation = await api.create('user-a', {
       name: 'Daily Gmail summary',
       prompt: 'Summarize recent messages',
-      triggerType: 'schedule',
-      triggerConfig: { everyMinutes: 60 },
+      triggerType: 'manual',
     });
-    const internal = store.getAutomation('user-a', automation.id);
+    const internal = validateAutomationInput({ ...automation, triggerType: 'schedule', triggerConfig: { everyMinutes: 60 } });
     internal.nextRunAt = new Date(Date.now() - 60_000).toISOString();
     store.saveAutomation('user-a', internal);
 
@@ -168,6 +261,85 @@ test('scheduled automations are leased once and requeued after completion', asyn
   }
 });
 
+test('schedule activation requires Gmail and server-owned timing survives edits during a lease', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'icebreaker-schedule-boundary-'));
+  const store = createLocalStore({ dataPath: dir });
+  const api = createAutomations({
+    store,
+    config: { automationMockMode: true, nodeEnv: 'development', storageMode: 'local' },
+    fetchImpl: async () => { throw new Error('Mock mode must not call providers.'); },
+  });
+  try {
+    const schedule = { name: 'Daily read', triggerType: 'schedule', triggerConfig: { everyMinutes: 60 } };
+    await assert.rejects(() => api.create('user-a', schedule), /Connect Gmail before activating/);
+    await api.startGmailConnection({ userId: 'user-a' });
+    const automation = await api.create('user-a', {
+      ...schedule,
+      id: 'client-controlled-id',
+      nextRunAt: '2000-01-01T00:00:00.000Z',
+    });
+    assert.notEqual(automation.id, 'client-controlled-id');
+    assert.ok(Date.parse(automation.nextRunAt) > Date.now());
+
+    const due = store.getAutomation('user-a', automation.id);
+    due.nextRunAt = new Date(Date.now() - 60_000).toISOString();
+    store.saveAutomation('user-a', due);
+    const [claimed] = store.claimDueAutomations(1);
+    const edited = await api.update('user-a', automation.id, {
+      name: 'Renamed read', nextRunAt: '2000-01-01T00:00:00.000Z',
+    });
+    assert.equal(edited.scheduleLeaseToken, claimed.scheduleLeaseToken);
+    assert.equal(edited.nextRunAt, claimed.nextRunAt);
+    assert.equal(store.claimDueAutomations(1).length, 0);
+    assert.equal(store.completeAutomationSchedule('user-a', automation.id, claimed.scheduleLeaseToken), true);
+
+    const paused = await api.update('user-a', automation.id, { status: 'paused' });
+    assert.equal(paused.nextRunAt, null);
+    const resumed = await api.update('user-a', automation.id, {
+      status: 'active', nextRunAt: '2000-01-01T00:00:00.000Z',
+    });
+    assert.ok(Date.parse(resumed.nextRunAt) > Date.now());
+    const changed = await api.update('user-a', automation.id, { triggerConfig: { everyMinutes: 120 } });
+    assert.ok(Date.parse(changed.nextRunAt) > Date.now() + 119 * 60_000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('automation filters run before the list cap', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'icebreaker-list-filter-'));
+  const store = createLocalStore({ dataPath: dir });
+  const app = createApp({ store, config: {} });
+  const server = app.listen(0);
+  try {
+    const schedule = validateAutomationInput({ name: 'Older schedule', triggerType: 'schedule', triggerConfig: { everyMinutes: 60 } });
+    store.saveAutomation('user-a', schedule);
+    for (let index = 0; index < 101; index += 1) {
+      store.saveAutomation('user-a', validateAutomationInput({ name: `Manual ${index}`, triggerType: 'manual' }));
+    }
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/automations?triggerType=schedule`, {
+      headers: { 'x-user-id': 'user-a' },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).automations.map((item) => item.name), ['Older schedule']);
+    const firstPageResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/automations?page=1&limit=25`, {
+      headers: { 'x-user-id': 'user-a' },
+    });
+    const firstPage = await firstPageResponse.json();
+    assert.equal(firstPage.automations.length, 25);
+    assert.equal(firstPage.hasMore, true);
+    const lastPageResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/automations?page=5&limit=25`, {
+      headers: { 'x-user-id': 'user-a' },
+    });
+    const lastPage = await lastPageResponse.json();
+    assert.equal(lastPage.automations.length, 2);
+    assert.equal(lastPage.hasMore, false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('automation REST routes isolate definitions and retain manual run history without Gmail credentials', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'icebreaker-automation-api-'));
   const store = createLocalStore({ dataPath: dir });
@@ -177,23 +349,35 @@ test('automation REST routes isolate definitions and retain manual run history w
     const base = `http://127.0.0.1:${server.address().port}`;
     const create = await fetch(`${base}/api/automations`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-user-id': 'user-a' },
-      body: JSON.stringify({ name: 'Daily read', triggerType: 'schedule', triggerConfig: { everyMinutes: 1440 } }),
+      body: JSON.stringify({ name: 'Daily read', triggerType: 'manual' }),
     });
     assert.equal(create.status, 201);
     const { automation } = await create.json();
+    assert.equal(Object.hasOwn(automation, 'scheduleLeaseToken'), false);
+    assert.equal(Object.hasOwn(automation, 'scheduleLeaseUntil'), false);
+    assert.equal(Object.hasOwn(automation, 'userId'), false);
 
+    const listAutomations = store.listAutomations;
+    store.listAutomations = async (...args) => {
+      const page = await listAutomations(...args);
+      return { ...page, automations: page.automations.map((entry) => ({ ...entry, internalCredential: 'must not leak' })) };
+    };
     const own = await fetch(`${base}/api/automations`, { headers: { 'x-user-id': 'user-a' } });
+    const ownBody = await own.json();
+    assert.equal(ownBody.automations.length, 1);
+    assert.equal(Object.hasOwn(ownBody.automations[0], 'internalCredential'), false);
     const other = await fetch(`${base}/api/automations`, { headers: { 'x-user-id': 'user-b' } });
-    assert.equal((await own.json()).automations.length, 1);
     assert.equal((await other.json()).automations.length, 0);
 
     const runResponse = await fetch(`${base}/api/automations/${automation.id}/run`, {
       method: 'POST', headers: { 'x-user-id': 'user-a' },
     });
     assert.equal(runResponse.status, 502);
-    const run = (await runResponse.json()).run;
+    const failedRunBody = await runResponse.json();
+    const run = failedRunBody.run;
     assert.equal(run.status, 'failed');
     assert.match(run.error, /AI is not configured/);
+    assert.equal(failedRunBody.error, run.error);
 
     const otherRuns = await fetch(`${base}/api/automations/${automation.id}/runs`, { headers: { 'x-user-id': 'user-b' } });
     assert.equal(otherRuns.status, 404);
@@ -229,23 +413,6 @@ test('automation chats and account-wide run history are scoped, paginated, and i
 
     const firstAutomation = await createAutomation('user-a', 'First Gmail read');
     const secondAutomation = await createAutomation('user-a', 'Second Gmail read');
-    const scheduledResponse = await fetch(`${base}/api/automations`, {
-      method: 'POST', headers: headersFor('user-a'),
-      body: JSON.stringify({ name: 'Daily Gmail read', prompt: 'Summarize recent messages', triggerType: 'schedule', triggerConfig: { everyMinutes: 1440 } }),
-    });
-    const scheduledAutomation = (await scheduledResponse.json()).automation;
-    const pause = await fetch(`${base}/api/automations/${scheduledAutomation.id}`, {
-      method: 'PATCH', headers: headersFor('user-a'), body: JSON.stringify({ status: 'paused' }),
-    });
-    const pausedAutomation = (await pause.json()).automation;
-    assert.equal(pausedAutomation.status, 'paused');
-    assert.equal(pausedAutomation.nextRunAt, null);
-    const resume = await fetch(`${base}/api/automations/${scheduledAutomation.id}`, {
-      method: 'PATCH', headers: headersFor('user-a'), body: JSON.stringify({ status: 'active', nextRunAt: null }),
-    });
-    const resumedAutomation = (await resume.json()).automation;
-    assert.equal(resumedAutomation.status, 'active');
-    assert.ok(Date.parse(resumedAutomation.nextRunAt) > Date.now());
     const firstRun = await runAutomation('user-a', firstAutomation.id);
     const secondRun = await runAutomation('user-a', secondAutomation.id);
     assert.equal(firstRun.status, 'failed');
@@ -303,14 +470,21 @@ test('automation chats and account-wide run history are scoped, paginated, and i
     const afterDateHistory = await fetch(`${base}/api/automation-runs?from=2099-01-01`, { headers: headersFor('user-a') });
     assert.equal((await afterDateHistory.json()).total, 0);
 
+    const deleteLinkedAutomation = await fetch(`${base}/api/automations/${firstAutomation.id}`, {
+      method: 'DELETE', headers: headersFor('user-a'),
+    });
+    assert.equal(deleteLinkedAutomation.status, 200);
+    const unlinkedChat = await fetch(`${base}/api/automation-chats/${chat.id}`, { headers: headersFor('user-a') });
+    assert.equal((await unlinkedChat.json()).chat.automationId, null);
+
     const deleteChat = await fetch(`${base}/api/automation-chats/${chat.id}`, { method: 'DELETE', headers: headersFor('user-a') });
     assert.deepEqual(await deleteChat.json(), { deleted: true });
     const missingChat = await fetch(`${base}/api/automation-chats/${chat.id}`, { headers: headersFor('user-a') });
     assert.equal(missingChat.status, 404);
     const automationsRemain = await fetch(`${base}/api/automations`, { headers: headersFor('user-a') });
-    assert.equal((await automationsRemain.json()).automations.length, 3);
+    assert.equal((await automationsRemain.json()).automations.length, 1);
     const runsRemain = await fetch(`${base}/api/automation-runs`, { headers: headersFor('user-a') });
-    assert.equal((await runsRemain.json()).total, 2);
+    assert.equal((await runsRemain.json()).total, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -351,7 +525,7 @@ test('local mock mode completes the chat-to-run flow and scheduled runs without 
     assert.equal(refused.automation, undefined);
     assert.equal(revision.automation.maxMessages, 5);
 
-    const saved = await api.create('user-a', draft.automation);
+    const saved = await api.create('user-a', { ...draft.automation, triggerType: 'manual' });
     assert.equal((await api.run('user-a', saved.id)).status, 'needs_connection');
     await api.startGmailConnection({ userId: 'user-a' });
     assert.equal((await api.listGmailConnections({ userId: 'user-a' }))[0].alias, 'Demo Gmail (mock)');
@@ -452,7 +626,7 @@ test('local mock API clearly labels simulation and persists a successful run', a
       method: 'POST', headers, body: JSON.stringify({ draft: revision.automation, message: 'Send a reply to every unread sender.' }),
     });
     assert.equal((await refusal.json()).revision.supported, false);
-    const createResponse = await fetch(`${base}/api/automations`, { method: 'POST', headers, body: JSON.stringify(draft.automation) });
+    const createResponse = await fetch(`${base}/api/automations`, { method: 'POST', headers, body: JSON.stringify({ ...draft.automation, triggerType: 'manual' }) });
     const { automation } = await createResponse.json();
     const runResponse = await fetch(`${base}/api/automations/${automation.id}/run`, { method: 'POST', headers, body: '{}' });
     assert.equal(runResponse.status, 200);

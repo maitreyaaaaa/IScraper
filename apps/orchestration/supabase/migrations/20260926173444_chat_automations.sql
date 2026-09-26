@@ -41,18 +41,12 @@ create table if not exists public.automation_runs (
 
 alter table public.automations enable row level security;
 alter table public.automation_runs enable row level security;
+revoke all on public.automations from anon, authenticated;
+revoke all on public.automation_runs from anon, authenticated;
 
 drop policy if exists "Users own automations" on public.automations;
-create policy "Users own automations" on public.automations
-  for all to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
 
 drop policy if exists "Users own automation runs" on public.automation_runs;
-create policy "Users own automation runs" on public.automation_runs
-  for all to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
 
 create index if not exists automations_user_updated_idx
   on public.automations(user_id, updated_at desc);

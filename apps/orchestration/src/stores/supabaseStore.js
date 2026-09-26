@@ -23,6 +23,7 @@ const { publicArchive } = require('../services/pageArchive');
 const { publicLinkHealth, publicReminder } = require('../services/libraryCare');
 const { sanitizeAuditMetadata } = require('../services/auditLog');
 const { createdAtForImportedItem } = require('../services/sourceDates');
+const { normalizeRateBudgetRequest } = require('../services/rateBudgets');
 
 const EXISTING_ITEM_LOOKUP_BATCH_SIZE = 100;
 const IMPORT_INSERT_BATCH_SIZE = 500;
@@ -66,6 +67,26 @@ function createSupabaseStore({ url, serviceRoleKey }) {
     client,
     requiresAuth: true,
     supportsSemanticSearch: true,
+    async consumeRateBudget(request) {
+      const normalized = normalizeRateBudgetRequest(request);
+      const { data, error } = await client.rpc('consume_request_rate_budget', {
+        p_user_id: normalized.userId,
+        p_scope: normalized.scope,
+        p_minute_limit: normalized.minuteLimit,
+        p_daily_limit: normalized.dailyLimit,
+        p_now: new Date(normalized.nowMs).toISOString(),
+      });
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row || typeof row.allowed !== 'boolean') throw new Error('The rate budget RPC returned an invalid result.');
+      return {
+        allowed: row.allowed,
+        retryAt: row.retry_at || null,
+        exceeded: row.exceeded || null,
+        minuteCount: Number(row.minute_count) || 0,
+        dailyCount: Number(row.daily_count) || 0,
+      };
+    },
     async getUserFromToken(token) {
       const { data, error } = await client.auth.getUser(token);
       if (error || !data.user) {
@@ -2053,6 +2074,22 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         .throwOnError();
     },
     async recordUsage({ userId, itemId, source, provider, model }) {
+      if (source === 'paid') {
+        const { data, error } = await client.rpc('record_paid_analysis_usage', {
+          p_user_id: userId,
+          p_item_id: itemId,
+          p_provider: provider || null,
+          p_model: model || null,
+        });
+        if (error) throw error;
+        const row = Array.isArray(data) ? data[0] : data;
+        if (!row || typeof row.recorded !== 'boolean' || typeof row.already_recorded !== 'boolean') {
+          throw new Error('The paid analysis usage RPC returned an invalid result.');
+        }
+        if (!row.recorded && !row.already_recorded) throw new Error('Not enough paid credits.');
+        return row;
+      }
+
       const { data: existing, error: existingError } = await client
         .from('analysis_usage_events')
         .select('id')
@@ -2072,9 +2109,6 @@ function createSupabaseStore({ url, serviceRoleKey }) {
         eventType: 'analysis_used',
         metadata: { itemId, source, provider, model },
       });
-      if (source === 'paid') {
-        await this.addCreditTransaction({ userId, amount: -1, reason: 'item_analysis', itemId });
-      }
     },
     async recordUserActivity({ userId, eventType, metadata = {} }) {
       const { data, error } = await client

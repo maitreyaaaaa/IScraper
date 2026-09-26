@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const { createAutomationRepository } = require('../repositories/automationRepository');
+const { assertSharedRateBudget, consumeSharedRateBudget, rateLimitError } = require('./rateBudgets');
 
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models?supported_parameters=tools';
 const MAX_AGENT_TURNS = 3;
@@ -22,8 +23,8 @@ function createAutomations({ store, config = {}, fetchImpl = fetch, now = () => 
   const mockMode = isLocalAutomationMockEnabled(config);
   const mockConnectedUsers = new Set();
 
-  async function list(userId) {
-    return repository.list(userId);
+  async function list(userId, options = {}) {
+    return repository.list(userId, options);
   }
 
   async function get(userId, id) {
@@ -31,15 +32,26 @@ function createAutomations({ store, config = {}, fetchImpl = fetch, now = () => 
   }
 
   async function create(userId, input) {
-    const automation = validateAutomationInput({ ...input, status: 'active' }, now());
+    const automation = validateAutomationInput({ ...input, id: undefined, createdAt: undefined, nextRunAt: null, status: 'active' }, now());
+    if (automation.triggerType === 'schedule') await assertScheduleConnection(userId);
     return repository.save(userId, automation);
   }
 
-  async function draftFromChat(description, model = 'openai/gpt-4o-mini') {
+  async function assertScheduleConnection(userId) {
+    const connections = mockMode
+      ? (hasMockGmailConnection(userId) ? [{ status: 'connected' }] : [])
+      : await listGmailConnections({ userId, config, fetchImpl });
+    if (!connections.some((connection) => ['active', 'connected'].includes(connection.status))) {
+      throw httpError('Connect Gmail before activating a schedule.', 409);
+    }
+  }
+
+  async function draftFromChat(description, model = 'openai/gpt-4o-mini', userId) {
     if (mockMode) return draftMockAutomation(description, model, now());
     if (!config.openRouterApiKey) throw httpError('Automation AI is not configured yet.', 503);
     const userDescription = clean(description, 2000);
     if (!userDescription) throw httpError('Describe what you want the Gmail automation to do.', 400);
+    await assertAutomationBudget(userId, 'automation_generation', config, store, now);
     const response = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -68,7 +80,7 @@ function createAutomations({ store, config = {}, fetchImpl = fetch, now = () => 
     return { supported: true, automation: { ...draft, id: null, status: 'draft', nextRunAt: null } };
   }
 
-  async function reviseDraftFromChat(currentDraft, message, model) {
+  async function reviseDraftFromChat(currentDraft, message, model, userId) {
     const userMessage = clean(message, 1000);
     if (!userMessage) throw httpError('Tell me what you want to change in this draft.', 400);
     if (!currentDraft || typeof currentDraft !== 'object' || currentDraft.id) {
@@ -77,6 +89,7 @@ function createAutomations({ store, config = {}, fetchImpl = fetch, now = () => 
     const current = validateAutomationInput({ ...currentDraft, status: 'active' }, now());
     if (mockMode) return reviseMockDraft(current, userMessage, model || current.model, now());
     if (!config.openRouterApiKey) throw httpError('Automation AI is not configured yet.', 503);
+    await assertAutomationBudget(userId, 'automation_generation', config, store, now);
 
     const response = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
@@ -126,7 +139,21 @@ function createAutomations({ store, config = {}, fetchImpl = fetch, now = () => 
   async function update(userId, id, input) {
     const existing = await repository.get(userId, id);
     if (!existing) return null;
-    const next = validateAutomationInput({ ...existing, ...input, id: existing.id, createdAt: existing.createdAt }, now());
+    const scheduleChanged = input.triggerType !== undefined && input.triggerType !== existing.triggerType
+      || input.triggerConfig !== undefined && Number(input.triggerConfig?.everyMinutes) !== Number(existing.triggerConfig?.everyMinutes)
+      || input.status !== undefined && input.status !== existing.status;
+    const next = validateAutomationInput({
+      ...existing, ...input, id: existing.id, createdAt: existing.createdAt,
+      nextRunAt: scheduleChanged ? null : existing.nextRunAt,
+    }, now());
+    if (next.triggerType === 'schedule' && next.status === 'active'
+      && (existing.triggerType !== 'schedule' || existing.status !== 'active')) {
+      await assertScheduleConnection(userId);
+    }
+    if (next.triggerType === 'schedule' && next.status === 'active') {
+      next.scheduleLeaseUntil = existing.scheduleLeaseUntil;
+      next.scheduleLeaseToken = existing.scheduleLeaseToken;
+    }
     return repository.save(userId, next);
   }
 
@@ -148,6 +175,21 @@ function createAutomations({ store, config = {}, fetchImpl = fetch, now = () => 
     if (!automation) return null;
     if (automation.status !== 'active') throw httpError('Activate this automation before running it.', 409);
     if (triggerType !== 'manual' && triggerType !== 'schedule') throw httpError('Unsupported automation trigger.', 400);
+    if (!mockMode) {
+      const budget = await consumeSharedRateBudget(store, {
+        userId,
+        scope: 'automation_run',
+        minuteLimit: config.automationRunRateLimitPerMinute || 5,
+        dailyLimit: config.automationRunRateLimitPerDay || 20,
+        now: now(),
+      });
+      if (!budget.allowed) {
+        const limitError = rateLimitError(budget, 'Automation run limit reached. Please try again later.', now());
+        if (triggerType === 'manual') throw limitError;
+        const saved = await repository.createRateLimitedRun(userId, id, triggerType, limitError.retryAt, limitError.message);
+        return { ...saved, retryAt: limitError.retryAt, retryAfterSeconds: limitError.retryAfterSeconds };
+      }
+    }
     const runRecord = await repository.createRun(userId, id, triggerType);
     const activity = [{ state: 'received', at: now().toISOString() }];
     try {
@@ -183,7 +225,11 @@ function createAutomations({ store, config = {}, fetchImpl = fetch, now = () => 
     for (const automation of due) {
       const result = await run(automation.userId, automation.id, 'schedule');
       results.push(result);
-      await repository.completeSchedule(automation.userId, automation.id, automation.scheduleLeaseToken);
+      if (result?.status === 'rate_limited') {
+        await repository.deferSchedule(automation.userId, automation.id, automation.scheduleLeaseToken, result.retryAt);
+      } else {
+        await repository.completeSchedule(automation.userId, automation.id, automation.scheduleLeaseToken);
+      }
     }
     return { claimed: due.length, results };
   }
@@ -228,6 +274,17 @@ function createAutomations({ store, config = {}, fetchImpl = fetch, now = () => 
     if (typeof store?.hasMockGmailConnection === 'function') return store.hasMockGmailConnection(userId);
     return mockConnectedUsers.has(userId);
   }
+}
+
+async function assertAutomationBudget(userId, scope, config, store, now) {
+  const timestamp = now();
+  await assertSharedRateBudget(store, {
+    userId,
+    scope,
+    minuteLimit: config.automationGenerationRateLimitPerMinute || 5,
+    dailyLimit: config.automationGenerationRateLimitPerDay || 20,
+    now: timestamp,
+  }, 'Automation draft limit reached. Please try again later.', timestamp);
 }
 
 function isLocalAutomationMockEnabled(config = {}) {

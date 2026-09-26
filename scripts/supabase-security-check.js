@@ -9,6 +9,11 @@ const SERVER_ONLY_POLICYLESS_TABLES = new Set([
   'security_audit_events',
   'user_admin_states',
   'user_activity_events',
+  'automations',
+  'automation_runs',
+  'automation_chats',
+  'automation_chat_messages',
+  'request_rate_budgets',
 ]);
 
 const INTENTIONAL_ANON_TABLES = new Set([
@@ -79,8 +84,8 @@ function tableHasColumnInSql(sql, table, body, column) {
 }
 
 function hasUserForeignKey(sql, table, body) {
-  return new RegExp(`\\buser_id\\b[^,]*references\\s+public\\.users\\s*\\(\\s*id\\s*\\)`, 'i').test(body)
-    || new RegExp(`alter\\s+table\\s+public\\.${escapeRegExp(table)}[^;]*foreign\\s+key\\s*\\(\\s*user_id\\s*\\)[^;]*references\\s+public\\.users\\s*\\(\\s*id\\s*\\)`, 'i').test(sql);
+  return new RegExp(`\\buser_id\\b[^,]*references\\s+(?:public|auth)\\.users\\s*\\(\\s*id\\s*\\)`, 'i').test(body)
+    || new RegExp(`alter\\s+table\\s+public\\.${escapeRegExp(table)}[^;]*foreign\\s+key\\s*\\(\\s*user_id\\s*\\)[^;]*references\\s+(?:public|auth)\\.users\\s*\\(\\s*id\\s*\\)`, 'i').test(sql);
 }
 
 function hasUserIndex(sql, table, body) {
@@ -103,8 +108,9 @@ function securityDefinerFindings(files) {
     let index = 0;
     while ((index = text.toLowerCase().indexOf('security definer', index)) >= 0) {
       const window = text.slice(index, index + 220).toLowerCase();
-      if (!window.includes('set search_path = public')) {
-        findings.push(`${file.file}: security definer function is missing "set search_path = public".`);
+      const pinnedSearchPath = /set\s+search_path\s*=\s*(?:public(?:\s*,\s*pg_temp)?|pg_catalog\s*,\s*public(?:\s*,\s*pg_temp)?|''|"")/i.test(window);
+      if (!pinnedSearchPath) {
+        findings.push(`${file.file}: security definer function is missing a pinned or empty search_path.`);
       }
       index += 'security definer'.length;
     }
@@ -151,7 +157,7 @@ function analyzeSupabaseSecurity({ migrationsDir = defaultMigrationsDir } = {}) 
     const body = definitions.get(table) || '';
     if (tableHasColumnInSql(sql, table, body, 'user_id')) {
       if (!hasUserForeignKey(sql, table, body)) {
-        findings.push(`public.${table} has user_id without a foreign key to public.users(id).`);
+        findings.push(`public.${table} has user_id without a foreign key to public.users(id) or auth.users(id).`);
       }
       if (!hasUserIndex(sql, table, body)) {
         findings.push(`public.${table} has user_id without a primary key, unique key, or index beginning with user_id.`);

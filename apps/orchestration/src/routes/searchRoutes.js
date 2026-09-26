@@ -1,5 +1,6 @@
 const { isDeletionBlockingStatus, publicDeletionRequest } = require('../services/accountDeletion');
 const { cleanLensText, describeLensCrop, parseLensCrop } = require('../services/lensSearch');
+const { assertMediaAnalysisBudget } = require('../services/rateBudgets');
 
 function registerPublicSearchRoutes(app, deps) {
   const { config, http, store, workflows } = deps;
@@ -32,6 +33,7 @@ function registerPublicSearchRoutes(app, deps) {
       if (!config.openAiApiKey) {
         return res.status(428).json({ error: 'IScraper image AI is not configured yet.' });
       }
+      await assertMediaAnalysisBudget(store, config, user.id, 'Image search limit reached. Please try again later.');
       const mediaCredential = {
         id: 'app-openai-lens-search',
         provider: 'openai',

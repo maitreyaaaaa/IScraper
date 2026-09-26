@@ -24,18 +24,12 @@ create table if not exists public.automation_chat_messages (
 
 alter table public.automation_chats enable row level security;
 alter table public.automation_chat_messages enable row level security;
+revoke all on public.automation_chats from anon, authenticated;
+revoke all on public.automation_chat_messages from anon, authenticated;
 
 drop policy if exists "Users own automation chats" on public.automation_chats;
-create policy "Users own automation chats" on public.automation_chats
-  for all to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
 
 drop policy if exists "Users own automation chat messages" on public.automation_chat_messages;
-create policy "Users own automation chat messages" on public.automation_chat_messages
-  for all to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
 
 create index if not exists automation_chats_user_updated_idx
   on public.automation_chats(user_id, updated_at desc);

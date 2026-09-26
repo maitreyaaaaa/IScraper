@@ -1,7 +1,7 @@
 const { contextForRequest } = require('../services/observability');
 
 function clientIp(req) {
-  return String(req.headers['x-forwarded-for'] || req.ip || req.socket?.remoteAddress || 'unknown')
+  return String(req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown')
     .split(',')[0]
     .trim();
 }

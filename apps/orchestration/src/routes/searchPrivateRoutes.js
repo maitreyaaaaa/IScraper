@@ -5,6 +5,7 @@ const {
   publicVisualSearchAnalysis,
 } = require('../services/visualSimilarity');
 const { recordSupportEvent } = require('../services/auditLog');
+const { assertMediaAnalysisBudget } = require('../services/rateBudgets');
 
 function registerPrivateSearchRoutes(app, deps) {
   const { config, http, store, workflows } = deps;
@@ -52,7 +53,7 @@ function registerPrivateSearchRoutes(app, deps) {
       try {
         ai = await runAiSearchAnswer({ req, userId: req.user.id, query, results });
       } catch (error) {
-        if (error.statusCode === 429) throw error;
+        if (error.statusCode === 429 || error.statusCode === 503) throw error;
         console.warn(`AI search answer failed: ${error.message}`);
         await recordSupportEvent(store, {
           userId: req.user.id,
@@ -130,6 +131,7 @@ function registerPrivateSearchRoutes(app, deps) {
       if (!config.openAiApiKey) {
         return res.status(428).json({ error: 'IScraper image AI is not configured yet.' });
       }
+      await assertMediaAnalysisBudget(store, config, req.user.id, 'Image search limit reached. Please try again later.');
       const mediaCredential = {
         id: 'app-openai-visual-search',
         provider: 'openai',

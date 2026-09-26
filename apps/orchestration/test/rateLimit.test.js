@@ -67,12 +67,35 @@ test('rate limiter accepts a replaceable store boundary for future distributed l
     store,
   });
 
-  await runLimiter(limiter, { headers: { 'x-forwarded-for': '198.51.100.20, 10.0.0.1' } });
-  await runLimiter(limiter, { headers: { 'x-forwarded-for': '198.51.100.20, 10.0.0.1' } });
-  const limited = await runLimiter(limiter, { headers: { 'x-forwarded-for': '198.51.100.20, 10.0.0.1' } });
+  await runLimiter(limiter, { ip: undefined, headers: { 'x-forwarded-for': '198.51.100.20, 10.0.0.1' } });
+  await runLimiter(limiter, { ip: undefined, headers: { 'x-forwarded-for': '198.51.100.20, 10.0.0.1' } });
+  const limited = await runLimiter(limiter, { ip: undefined, headers: { 'x-forwarded-for': '198.51.100.20, 10.0.0.1' } });
 
   assert.equal(limited.statusCode, 429);
   assert.equal(hits.length, 3);
   assert.equal(hits[0].key, 'adapter:search:198.51.100.20');
   assert.equal(hits[0].windowMs, 30_000);
+});
+
+test('rate limiter trusts the framework-resolved client IP over a supplied forwarding header', async () => {
+  let key;
+  const limiter = createRateLimiter({
+    windowMs: 30_000,
+    max: 2,
+    name: 'spoof-check',
+    namespace: 'adapter',
+    store: {
+      hit(bucketKey, _windowMs, now) {
+        key = bucketKey;
+        return { count: 1, resetAt: now + 30_000 };
+      },
+    },
+  });
+
+  await runLimiter(limiter, {
+    ip: '203.0.113.77',
+    headers: { 'x-forwarded-for': '198.51.100.44, 10.0.0.1' },
+  });
+
+  assert.equal(key, 'adapter:spoof-check:203.0.113.77');
 });

@@ -7,6 +7,38 @@ const path = require('node:path');
 const { createScreenshotWorkflow } = require('../src/application/screenshotWorkflow');
 const { createLocalStore } = require('../src/stores/localStore');
 
+test('screenshot analysis budget blocks before provider work begins', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
+  const store = createLocalStore({ dataPath: dir });
+  let providerCalls = 0;
+  store.consumeRateBudget = async ({ scope }) => {
+    assert.equal(scope, 'media_analysis');
+    return { allowed: false, exceeded: 'day', retryAt: new Date(Date.now() + 60_000).toISOString() };
+  };
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    providerCalls += 1;
+    throw new Error('No provider call should follow quota denial.');
+  };
+
+  try {
+    store.ensureUser('screenshot-budget-user', 'screenshot@example.com');
+    const workflow = createScreenshotWorkflow({
+      store,
+      config: { localMlEndpoint: 'http://127.0.0.1:7777', openAiApiKey: 'app-openai-key' },
+    });
+
+    await assert.rejects(
+      () => workflow.prepareScreenshotAnalysis({ userId: 'screenshot-budget-user' }),
+      (error) => error.statusCode === 429 && error.retryAfterSeconds > 0,
+    );
+    assert.equal(providerCalls, 0);
+  } finally {
+    global.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('screenshot workflow prefers local ML extraction before paid image analysis', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'insta-brain-'));
   const store = createLocalStore({ dataPath: dir });
